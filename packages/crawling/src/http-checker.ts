@@ -1,0 +1,3 @@
+import type {WebsiteChecker,WebsiteResult} from '@moncha/domain';
+export class BasicHttpWebsiteChecker implements WebsiteChecker {async check(url:string):Promise<WebsiteResult>{const target=url.includes('://')?url:`https://${url}`;try{const res=await fetch(target,{redirect:'follow',signal:AbortSignal.timeout(10000),headers:{'user-agent':'MonChaLeadEngine/1.0'}});const text=await res.text();const title=text.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.replace(/\s+/g,' ').trim();return {reachable:res.ok,finalUrl:res.url,httpStatus:res.status,title};}catch{return {reachable:false};}}}
+export * from './http-checker';

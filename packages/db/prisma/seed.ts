@@ -1,0 +1,2 @@
+import {prisma} from '../src/client';
+async function main(){const tenant=await prisma.tenant.create({data:{name:'MonCha Internal'}});await prisma.user.create({data:{tenantId:tenant.id,email:'operator@moncha.local',name:'Operator',role:'admin'}});const c=await prisma.company.create({data:{tenantId:tenant.id,name:'Demo Dental Clinic',domain:'example.com',country:'Singapore',city:'Singapore'}});await prisma.lead.create({data:{tenantId:tenant.id,companyId:c.id,status:'discovered'}});console.log({tenantId:tenant.id});} main().finally(()=>prisma.$disconnect());

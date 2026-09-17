@@ -1,0 +1,1 @@
+export default function Import(){return <main><h1>Import CSV</h1><div className="card"><p>CSV is a secondary fallback in Phase 1. The API/job contract is reserved here; parsing and bulk execution can be wired to the same normalization/dedupe path.</p><input type="file" accept=".csv"/></div></main>}

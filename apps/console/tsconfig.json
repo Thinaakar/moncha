@@ -1,0 +1,1 @@
+{"extends":"@moncha/config/tsconfig","compilerOptions":{"jsx":"preserve","plugins":[{"name":"next"}],"incremental":true,"allowJs":true},"include":["next-env.d.ts","**/*.ts","**/*.tsx",".next/types/**/*.ts"],"exclude":["node_modules"]}

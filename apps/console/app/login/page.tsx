@@ -1,0 +1,1 @@
+export default function Login(){return <main className="card"><h1>Internal login</h1><p>Authentication provider wiring is intentionally left as the Phase 1 integration point.</p><input placeholder="Email"/><br/><br/><button>Continue</button></main>}
