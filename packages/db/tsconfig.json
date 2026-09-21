@@ -1,1 +1,9 @@
-{"extends":"@moncha/config/tsconfig","compilerOptions":{"outDir":"dist","rootDir":"."},"include":["src/**/*.ts","prisma/**/*.ts"]}
+{
+  "extends": "@moncha/config/tsconfig",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "."
+  },
+  "include": ["src/**/*.ts", "prisma/**/*.ts"],
+  "exclude": ["src/**/*.test.ts", "dist"]
+}

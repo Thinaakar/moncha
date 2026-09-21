@@ -1,3 +1,36 @@
-import {canonicalDomain,normalizeCompanyName} from '../entities/company';
-import type {CompanyRepo,LeadRepo} from '../ports';
-export async function createManualLead(deps:{companies:CompanyRepo;leads:LeadRepo},input:{tenantId:string;name:string;domain?:string;country?:string;city?:string;phone?:string;address?:string}){const domain=canonicalDomain(input.domain);if(domain){const existing=await deps.companies.findByDomain(input.tenantId,domain);if(existing)return {company:existing,duplicate:true};}const company=await deps.companies.create({...input,name:normalizeCompanyName(input.name),domain});if(deps.companies.addSource) await deps.companies.addSource({tenantId:input.tenantId,companyId:company.id,source:'manual'});const lead=await deps.leads.create({tenantId:input.tenantId,companyId:company.id,status:'discovered'});return {company,lead,duplicate:false};}
+import type { CompanyRepo, LeadRepo, Logger } from '../ports';
+import { ingestDiscoveredRecord } from './ingestDiscoveredRecord';
+
+export type ManualLeadInput = {
+  tenantId: string;
+  name: string;
+  domain?: string;
+  country?: string;
+  city?: string;
+  phone?: string;
+  address?: string;
+};
+
+export async function createManualLead(
+  deps: { companies: CompanyRepo; leads: LeadRepo; logger?: Logger },
+  input: ManualLeadInput,
+) {
+  const result = await ingestDiscoveredRecord(
+    deps,
+    {
+      ...input,
+      source: 'manual',
+    },
+    { requireDomain: false },
+  );
+
+  if (result.skipped) {
+    throw new Error(result.reason === 'missing_name' ? 'Company name is required' : 'Unable to create lead');
+  }
+
+  return {
+    company: result.company,
+    lead: result.lead,
+    duplicate: result.duplicate,
+  };
+}

@@ -1,2 +1,24 @@
 {
-  "name":"moncha-lead-engine","private":true,"packageManager":"pnpm@10.15.0","scripts":{"dev":"turbo dev","build":"turbo build","lint":"turbo lint","typecheck":"turbo typecheck","db:generate":"pnpm --filter @moncha/db prisma generate","db:push":"pnpm --filter @moncha/db prisma db push","db:seed":"pnpm --filter @moncha/db db:seed"},"devDependencies":{"turbo":"^2.5.6","typescript":"^5.9.2"}}
+  "name": "moncha-lead-engine",
+  "private": true,
+  "packageManager": "pnpm@10.15.0",
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "typecheck": "turbo typecheck",
+    "test": "turbo test",
+    "db:generate": "pnpm --filter @moncha/db exec prisma generate",
+    "db:push": "pnpm --filter @moncha/db exec prisma db push",
+    "db:validate": "pnpm --filter @moncha/db db:validate",
+    "db:seed": "pnpm --filter @moncha/db db:seed"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.6",
+    "typescript": "^5.9.2"
+  },
+  "dependencies": {
+    "@neon/config": "^1.7.2",
+    "@neon/env": "^1.4.3"
+  }
+}

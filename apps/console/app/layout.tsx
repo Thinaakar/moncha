@@ -1,1 +1,24 @@
-import './globals.css';import Link from 'next/link';export default function Layout({children}:{children:React.ReactNode}){return <html><body><div className="shell"><nav className="nav"><b>MonCha Lead Engine</b><Link href="/">Home</Link><Link href="/leads">Leads</Link><Link href="/discover">Discover</Link><Link href="/add-lead">Add lead</Link><Link href="/import">Import</Link><Link href="/jobs">Jobs</Link></nav>{children}</div></body></html>}
+import './globals.css';
+import Link from 'next/link';
+
+export default function Layout({ children }: { children: React.ReactNode }) {
+  return (
+    <html>
+      <body>
+        <div className="shell">
+          <nav className="nav">
+            <b>MonCha Lead Engine</b>
+            <Link href="/">Home</Link>
+            <Link href="/leads">Leads</Link>
+            <Link href="/discover">Discover</Link>
+            <Link href="/add-lead">Add lead</Link>
+            <Link href="/import">Import</Link>
+            <Link href="/jobs">Jobs</Link>
+            <Link href="/login">Login</Link>
+          </nav>
+          {children}
+        </div>
+      </body>
+    </html>
+  );
+}

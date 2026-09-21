@@ -19,9 +19,12 @@ The plan explicitly makes Google Places auto discovery the main path, with CSV/m
 2. Copy `.env.example` to `.env` and set `DATABASE_URL` and `GOOGLE_PLACES_API_KEY`.
 3. `pnpm db:generate`
 4. `pnpm db:push`
-5. `pnpm dev`
+5. `pnpm db:seed`
+6. `pnpm dev`
 
-The worker jobs are structured for Trigger.dev; deployment requires the Trigger project credentials/configuration.
+Login with `operator@moncha.local` (seeded). Local APIs can also use `DEFAULT_TENANT_ID=tenant_moncha_internal`.
+
+If `TRIGGER_SECRET_KEY` is unset, discovery/website/CSV jobs run in-process after the API returns. With Trigger.dev configured, the same jobs run in `apps/worker`.
 
 ## Phase 1 exit gates
 A: sign in and view leads from Neon.

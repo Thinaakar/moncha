@@ -1,2 +1,20 @@
-import {task} from '@trigger.dev/sdk/v3';import {prisma} from '@moncha/db';import {BasicHttpWebsiteChecker} from '@moncha/crawling';
-export const websiteCheck=task({id:'website-check',run:async(payload:{jobId:string;tenantId:string;companyId:string;url:string})=>{await prisma.jobRun.update({where:{id:payload.jobId},data:{status:'running',startedAt:new Date()}});try{const result=await new BasicHttpWebsiteChecker().check(payload.url);await prisma.website.upsert({where:{companyId:payload.companyId},create:{companyId:payload.companyId,url:payload.url,...result,lastCheckedAt:new Date()},update:{url:payload.url,...result,lastCheckedAt:new Date()}});await prisma.jobRun.update({where:{id:payload.jobId},data:{status:'done',finishedAt:new Date()}});return result}catch(e){await prisma.jobRun.update({where:{id:payload.jobId},data:{status:'failed',error:e instanceof Error?e.message:String(e),finishedAt:new Date()}});throw e;}}});
+import { task } from '@trigger.dev/sdk/v3';
+import { prisma, PrismaJobRunRepository, PrismaWebsiteRepository } from '@moncha/db';
+import { createConsoleLogger, runWebsiteCheckJob } from '@moncha/domain';
+import { BasicHttpWebsiteChecker } from '@moncha/crawling';
+
+export const websiteCheck = task({
+  id: 'website-check',
+  run: async (payload: { jobId: string; tenantId: string; companyId: string; url: string }) => {
+    const logger = createConsoleLogger();
+    return runWebsiteCheckJob(
+      {
+        jobs: new PrismaJobRunRepository(prisma),
+        websites: new PrismaWebsiteRepository(prisma),
+        checker: new BasicHttpWebsiteChecker(),
+        logger,
+      },
+      payload,
+    );
+  },
+});

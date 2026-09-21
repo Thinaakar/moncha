@@ -1,92 +1,143 @@
-generator client { provider = "prisma-client-js" }
-datasource db { provider = "postgresql" url = env("DATABASE_URL") }
+generator client {
+  provider = "prisma-client-js"
+}
 
-enum UserRole { admin operator viewer }
-enum LeadStatus { discovered review rejected }
-enum JobStatus { pending running done failed }
-enum JobType { places_discovery csv_import manual website_check }
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  admin
+  operator
+  viewer
+}
+
+enum LeadStatus {
+  discovered
+  review
+  rejected
+}
+
+enum JobStatus {
+  pending
+  running
+  done
+  failed
+}
+
+enum JobType {
+  places_discovery
+  csv_import
+  manual
+  website_check
+}
 
 model Tenant {
-  id String @id @default(cuid())
-  name String
-  createdAt DateTime @default(now())
-  users User[]
-  companies Company[]
-  leads Lead[]
-  jobs JobRun[]
-}
-model User {
-  id String @id @default(cuid())
-  tenantId String
-  email String
-  name String?
-  role UserRole @default(operator)
-  createdAt DateTime @default(now())
-  tenant Tenant @relation(fields:[tenantId], references:[id], onDelete:Cascade)
-  @@unique([tenantId,email])
-}
-model Company {
-  id String @id @default(cuid())
-  tenantId String
-  name String
-  domain String?
-  country String?
-  city String?
-  phone String?
-  address String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  tenant Tenant @relation(fields:[tenantId], references:[id], onDelete:Cascade)
-  leads Lead[]
+  id         String         @id @default(cuid())
+  name       String
+  createdAt  DateTime       @default(now())
+  users      User[]
+  companies  Company[]
+  leads      Lead[]
+  jobs       JobRun[]
+  websites   Website[]
   sourceRecords SourceRecord[]
-  website Website?
-  @@unique([tenantId,domain])
-  @@index([tenantId,name])
 }
+
+model User {
+  id        String   @id @default(cuid())
+  tenantId  String
+  email     String
+  name      String?
+  role      UserRole @default(operator)
+  createdAt DateTime @default(now())
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, email])
+}
+
+model Company {
+  id            String         @id @default(cuid())
+  tenantId      String
+  name          String
+  domain        String?
+  country       String?
+  city          String?
+  phone         String?
+  address       String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  leads         Lead[]
+  sourceRecords SourceRecord[]
+  website       Website?
+
+  @@unique([tenantId, domain])
+  @@index([tenantId, name])
+  @@index([tenantId, country])
+  @@index([tenantId, city])
+  @@index([tenantId, createdAt])
+}
+
 model Lead {
-  id String @id @default(cuid())
-  tenantId String
+  id        String     @id @default(cuid())
+  tenantId  String
   companyId String
-  status LeadStatus @default(discovered)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  tenant Tenant @relation(fields:[tenantId], references:[id], onDelete:Cascade)
-  company Company @relation(fields:[companyId], references:[id], onDelete:Cascade)
-  @@index([tenantId,status])
+  status    LeadStatus @default(discovered)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  company   Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, companyId])
+  @@index([tenantId, status])
+  @@index([tenantId, createdAt])
 }
+
 model SourceRecord {
-  id String @id @default(cuid())
-  tenantId String
-  companyId String
-  source String
+  id         String   @id @default(cuid())
+  tenantId   String
+  companyId  String
+  source     String
   externalId String?
-  rawJson Json?
-  createdAt DateTime @default(now())
-  tenant Tenant @relation(fields:[tenantId], references:[id], onDelete:Cascade)
-  company Company @relation(fields:[companyId], references:[id], onDelete:Cascade)
-  @@unique([tenantId,source,externalId])
+  rawJson    Json?
+  createdAt  DateTime @default(now())
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  company    Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, source, externalId])
 }
+
 model Website {
-  id String @id @default(cuid())
-  companyId String @unique
-  url String
-  reachable Boolean?
-  finalUrl String?
-  httpStatus Int?
-  title String?
+  id            String    @id @default(cuid())
+  tenantId      String
+  companyId     String    @unique
+  url           String
+  reachable     Boolean?
+  finalUrl      String?
+  httpStatus    Int?
+  title         String?
   lastCheckedAt DateTime?
-  company Company @relation(fields:[companyId], references:[id], onDelete:Cascade)
+  tenant        Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  company       Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
 }
+
 model JobRun {
-  id String @id @default(cuid())
-  tenantId String
-  type JobType
-  status JobStatus @default(pending)
-  inputJson Json?
-  error String?
-  startedAt DateTime?
+  id         String    @id @default(cuid())
+  tenantId   String
+  type       JobType
+  status     JobStatus @default(pending)
+  inputJson  Json?
+  resultJson Json?
+  error      String?
+  startedAt  DateTime?
   finishedAt DateTime?
-  createdAt DateTime @default(now())
-  tenant Tenant @relation(fields:[tenantId], references:[id], onDelete:Cascade)
-  @@index([tenantId,createdAt])
+  createdAt  DateTime  @default(now())
+  tenant     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, status])
 }

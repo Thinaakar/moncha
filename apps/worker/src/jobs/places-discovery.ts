@@ -1,5 +1,32 @@
-import {task} from '@trigger.dev/sdk/v3';
-import {prisma,PrismaCompanyRepository,PrismaLeadRepository,PrismaJobRunRepository} from '@moncha/db';
-import {discoverCompanies} from '@moncha/domain';
-import {GooglePlacesDiscoverySource} from '@moncha/integrations';
-export const placesDiscovery=task({id:'places-discovery',run:async(payload:{jobId:string;tenantId:string;country:string;city:string;keyword:string})=>{const jobs=new PrismaJobRunRepository(prisma);await jobs.update(payload.jobId,{status:'running',startedAt:new Date()});try{const result=await discoverCompanies({source:new GooglePlacesDiscoverySource(process.env.GOOGLE_PLACES_API_KEY||''),companies:new PrismaCompanyRepository(prisma),leads:new PrismaLeadRepository(prisma)},payload);await jobs.update(payload.jobId,{status:'done',finishedAt:new Date()});return result}catch(e){await jobs.update(payload.jobId,{status:'failed',error:e instanceof Error?e.message:String(e),finishedAt:new Date()});throw e;}}});
+import { task } from '@trigger.dev/sdk/v3';
+import { prisma, PrismaCompanyRepository, PrismaJobRunRepository, PrismaLeadRepository, PrismaWebsiteRepository } from '@moncha/db';
+import { createConsoleLogger, runPlacesDiscoveryJob } from '@moncha/domain';
+import { createLiveDiscoverySource, type LiveDiscoverySourceName } from '@moncha/integrations';
+import { BasicHttpWebsiteChecker } from '@moncha/crawling';
+
+export const placesDiscovery = task({
+  id: 'places-discovery',
+  run: async (payload: {
+    jobId: string;
+    tenantId: string;
+    country: string;
+    city: string;
+    keyword: string;
+    source?: LiveDiscoverySourceName;
+  }) => {
+    const logger = createConsoleLogger();
+    const sourceName = payload.source ?? 'google_places';
+    return runPlacesDiscoveryJob(
+      {
+        jobs: new PrismaJobRunRepository(prisma),
+        source: createLiveDiscoverySource(sourceName, process.env, logger),
+        companies: new PrismaCompanyRepository(prisma),
+        leads: new PrismaLeadRepository(prisma),
+        websites: new PrismaWebsiteRepository(prisma),
+        checker: new BasicHttpWebsiteChecker(),
+        logger,
+      },
+      payload,
+    );
+  },
+});

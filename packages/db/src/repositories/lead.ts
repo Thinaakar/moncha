@@ -1,11 +1,50 @@
 import type { PrismaClient } from '@prisma/client';
-export class PrismaLeadRepository {
+import type { LeadListQuery, LeadRepo, LeadStatus } from '@moncha/domain';
+import { leadListPagination, leadListWhere } from '../lead-query';
+
+const leadInclude = {
+  company: {
+    include: {
+      website: true,
+      sourceRecords: true,
+    },
+  },
+} as const;
+
+export class PrismaLeadRepository implements LeadRepo {
   constructor(private db: PrismaClient) {}
-  async create(data:{tenantId:string,companyId:string,status:'discovered'|'review'|'rejected'}){return this.db.lead.create({data});}
-  async list(tenantId:string, opts:{search?:string;status?:'discovered'|'review'|'rejected';country?:string;skip:number;take:number}){
-    const where={tenantId,status:opts.status,company: {country:opts.country, ...(opts.search?{OR:[{name:{contains:opts.search,mode:'insensitive'}},{domain:{contains:opts.search,mode:'insensitive'}}]}:{})}};
-    const [items,total]=await Promise.all([this.db.lead.findMany({where,include:{company:{include:{website:true,sourceRecords:true}}},skip:opts.skip,take:opts.take,orderBy:{createdAt:'desc'}}),this.db.lead.count({where})]);
-    return {items,total};
+
+  create(data: { tenantId: string; companyId: string; status: LeadStatus }) {
+    return this.db.lead.create({ data });
   }
-  async get(tenantId:string,id:string){return this.db.lead.findFirst({where:{id,tenantId},include:{company:{include:{website:true,sourceRecords:true}}}})}
+
+  findByCompany(tenantId: string, companyId: string) {
+    return this.db.lead.findUnique({ where: { tenantId_companyId: { tenantId, companyId } } });
+  }
+
+  get(tenantId: string, id: string) {
+    return this.db.lead.findFirst({ where: { id, tenantId }, include: leadInclude });
+  }
+
+  async list(tenantId: string, query: LeadListQuery) {
+    const where = leadListWhere(tenantId, query);
+    const { page, pageSize, skip, take } = leadListPagination(query);
+    const [items, total] = await Promise.all([
+      this.db.lead.findMany({
+        where,
+        include: leadInclude,
+        skip,
+        take,
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.db.lead.count({ where }),
+    ]);
+    return {
+      items,
+      total,
+      page,
+      pageSize,
+      totalPages: total === 0 ? 0 : Math.ceil(total / pageSize),
+    };
+  }
 }
