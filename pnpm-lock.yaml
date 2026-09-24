@@ -39,6 +39,9 @@ importers:
       '@moncha/integrations':
         specifier: workspace:*
         version: link:../../packages/integrations
+      '@prisma/client':
+        specifier: 6.19.3
+        version: 6.19.3(prisma@6.19.3(typescript@5.9.3))(typescript@5.9.3)
       '@trigger.dev/sdk':
         specifier: ^4.0.4
         version: 4.6.3(react@19.3.0)(zod@4.6.5)
@@ -1013,6 +1016,7 @@ packages:
   '@trigger.dev/sdk@4.6.3':
     resolution: {integrity: sha512-+h7zkG3amrj3tBPldxwWvUnUGYTBB7SKVO0hDRmFOd3VWe0rnGkEeOmtH//cSilhqFLz1qXtwXPY+iUYiML5hw==}
     engines: {node: '>=18.20.0'}
+    deprecated: 'This version can delay warm starts by approximately five minutes when using npm with Zod 3 pinned in package.json. Upgrade to 4.6.4 or later and redeploy your tasks. Details: https://trigger.dev/changelog/v4-6-4'
     peerDependencies:
       '@ai-sdk/otel': '>=1.0.0-0 <2'
       ai: ^5.0.0 || ^6.0.0 || >=7.0.0-canary <8

@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
     "lint": "node -e \"process.exit(0)\"",
@@ -16,6 +16,7 @@
     "@moncha/db": "workspace:*",
     "@moncha/domain": "workspace:*",
     "@moncha/integrations": "workspace:*",
+    "@prisma/client": "6.19.3",
     "@trigger.dev/sdk": "^4.0.4",
     "next": "^15.5.3",
     "react": "^19.1.1",

@@ -1,12 +1,12 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, type FormEvent } from 'react';
 
 export default function Login() {
   const [msg, setMsg] = useState('');
   const [busy, setBusy] = useState(false);
 
-  async function submit(e: React.FormEvent<HTMLFormElement>) {
+  async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setBusy(true);
     setMsg('');

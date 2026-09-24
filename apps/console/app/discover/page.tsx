@@ -1,7 +1,6 @@
 'use client';
 
-import Link from 'next/link';
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type FormEvent } from 'react';
 
 type JobResult = {
   found?: number;
@@ -22,7 +21,7 @@ export default function Discover() {
     return 'notice';
   }, [tone]);
 
-  async function submit(e: React.FormEvent<HTMLFormElement>) {
+  async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const f = new FormData(e.currentTarget);
     setBusy(true);
@@ -119,9 +118,9 @@ export default function Discover() {
           </label>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
             <button disabled={busy}>{busy ? 'Discovering…' : 'Start Google Places discovery'}</button>
-            <Link href="/leads" className="btn btn-secondary">
+            <a href="/leads" className="btn btn-secondary">
               Open leads
-            </Link>
+            </a>
           </div>
         </form>
 
