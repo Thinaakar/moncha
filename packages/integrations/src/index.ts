@@ -1,4 +1,8 @@
-export { GooglePlacesDiscoverySource, mapPlaceToDiscoveredCompany } from './google-places';
+export {
+  GooglePlacesDiscoverySource,
+  mapNewPlaceToDiscoveredCompany,
+  mapPlaceToDiscoveredCompany,
+} from './google-places';
 export { YelpDiscoverySource, mapYelpBusiness } from './yelp';
 export { FoursquareDiscoverySource, mapFoursquarePlace } from './foursquare';
 export {

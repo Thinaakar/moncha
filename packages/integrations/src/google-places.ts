@@ -2,36 +2,31 @@ import { z } from 'zod';
 import type { DiscoveredCompany, DiscoverySource, Logger } from '@moncha/domain';
 import { canonicalDomain } from '@moncha/domain';
 
-const textSearchResponseSchema = z.object({
-  status: z.string(),
-  error_message: z.string().optional(),
-  next_page_token: z.string().optional(),
-  results: z
-    .array(
-      z
-        .object({
-          place_id: z.string().optional(),
-          name: z.string().optional(),
-          formatted_address: z.string().optional(),
-        })
-        .passthrough(),
-    )
-    .optional(),
-});
+const placeSchema = z
+  .object({
+    id: z.string().optional(),
+    displayName: z
+      .object({
+        text: z.string().optional(),
+      })
+      .passthrough()
+      .optional(),
+    formattedAddress: z.string().optional(),
+    websiteUri: z.string().optional(),
+    nationalPhoneNumber: z.string().optional(),
+    internationalPhoneNumber: z.string().optional(),
+  })
+  .passthrough();
 
-const placeDetailsResponseSchema = z.object({
-  status: z.string(),
-  error_message: z.string().optional(),
-  result: z
+const textSearchResponseSchema = z.object({
+  places: z.array(placeSchema).optional(),
+  nextPageToken: z.string().optional(),
+  error: z
     .object({
-      place_id: z.string().optional(),
-      name: z.string().optional(),
-      formatted_address: z.string().optional(),
-      website: z.string().optional(),
-      formatted_phone_number: z.string().optional(),
-      international_phone_number: z.string().optional(),
+      code: z.number().optional(),
+      message: z.string().optional(),
+      status: z.string().optional(),
     })
-    .passthrough()
     .optional(),
 });
 
@@ -52,6 +47,15 @@ export type GooglePlacesDetails = {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const FIELD_MASK = [
+  'places.id',
+  'places.displayName',
+  'places.formattedAddress',
+  'places.websiteUri',
+  'places.nationalPhoneNumber',
+  'places.internationalPhoneNumber',
+].join(',');
+
 export function mapPlaceToDiscoveredCompany(
   place: GooglePlacesTextResult,
   details: GooglePlacesDetails | undefined,
@@ -67,11 +71,38 @@ export function mapPlaceToDiscoveredCompany(
     address: details?.formatted_address || place.formatted_address,
     phone: details?.international_phone_number || details?.formatted_phone_number,
     source: 'google_places',
-    externalId: details?.place_id || place.place_id,
+    externalId: normalizePlaceId(details?.place_id || place.place_id),
     raw: { place, details },
     country: input.country,
     city: input.city,
   };
+}
+
+function normalizePlaceId(value?: string): string | undefined {
+  if (!value) return undefined;
+  return value.startsWith('places/') ? value.slice('places/'.length) : value;
+}
+
+export function mapNewPlaceToDiscoveredCompany(
+  place: z.infer<typeof placeSchema>,
+  input: { country: string; city: string },
+): DiscoveredCompany | null {
+  return mapPlaceToDiscoveredCompany(
+    {
+      place_id: place.id,
+      name: place.displayName?.text,
+      formatted_address: place.formattedAddress,
+    },
+    {
+      place_id: place.id,
+      name: place.displayName?.text,
+      formatted_address: place.formattedAddress,
+      website: place.websiteUri,
+      formatted_phone_number: place.nationalPhoneNumber,
+      international_phone_number: place.internationalPhoneNumber,
+    },
+    input,
+  );
 }
 
 export class GooglePlacesDiscoverySource implements DiscoverySource {
@@ -86,81 +117,74 @@ export class GooglePlacesDiscoverySource implements DiscoverySource {
   async discover(input: { country: string; city: string; keyword: string }): Promise<DiscoveredCompany[]> {
     const query = `${input.keyword} in ${input.city}, ${input.country}`;
     this.logger?.info('discovery_provider_request', { provider: 'google_places', query });
-    const search = await this.googleGet(
-      `https://maps.googleapis.com/maps/api/place/textsearch/json?query=${encodeURIComponent(query)}&key=${this.apiKey}`,
-      textSearchResponseSchema,
-    );
 
-    if (search.status === 'ZERO_RESULTS') {
-      this.logger?.info('discovery_provider_results', { provider: 'google_places', found: 0 });
-      return [];
-    }
-    if (search.status !== 'OK') {
-      throw new Error(providerError(search.status, search.error_message));
-    }
-    if (search.next_page_token) {
+    const search = await this.searchText(query);
+    if (search.nextPageToken) {
       this.logger?.info('discovery_provider_pagination_ignored', {
         provider: 'google_places',
         hasNextPage: true,
       });
     }
 
-    const places = search.results ?? [];
+    const places = search.places ?? [];
     const discovered: DiscoveredCompany[] = [];
     for (const place of places) {
-      if (!place.place_id || !place.name) {
+      const mapped = mapNewPlaceToDiscoveredCompany(place, input);
+      if (!mapped) {
         this.logger?.info('normalized_record_skipped', { reason: 'malformed_provider_row' });
         continue;
       }
-      const details = await this.fetchDetails(place.place_id);
-      const mapped = mapPlaceToDiscoveredCompany(place, details, input);
-      if (mapped) discovered.push(mapped);
+      discovered.push(mapped);
     }
 
     this.logger?.info('discovery_provider_results', { provider: 'google_places', found: discovered.length });
     return discovered;
   }
 
-  private async fetchDetails(placeId: string): Promise<GooglePlacesDetails | undefined> {
-    const fields = 'website,formatted_phone_number,international_phone_number,name,formatted_address,place_id';
-    const details = await this.googleGet(
-      `https://maps.googleapis.com/maps/api/place/details/json?place_id=${encodeURIComponent(placeId)}&fields=${fields}&key=${this.apiKey}`,
-      placeDetailsResponseSchema,
-    );
-    if (details.status === 'ZERO_RESULTS' || details.status === 'NOT_FOUND') return undefined;
-    if (details.status !== 'OK') {
-      throw new Error(providerError(details.status, details.error_message));
-    }
-    return details.result;
-  }
+  private async searchText(textQuery: string) {
+    let lastError = 'UNKNOWN_ERROR';
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const response = await this.fetchImpl('https://places.googleapis.com/v1/places:searchText', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'X-Goog-Api-Key': this.apiKey,
+          'X-Goog-FieldMask': FIELD_MASK,
+        },
+        body: JSON.stringify({ textQuery, pageSize: 20 }),
+      });
 
-  private async googleGet<T>(url: string, schema: z.ZodType<T>, attempts = 3): Promise<T> {
-    let lastStatus = 'UNKNOWN_ERROR';
-    for (let attempt = 0; attempt < attempts; attempt += 1) {
-      const response = await this.fetchImpl(url);
-      if (!response.ok) {
-        throw new Error(`Google Places HTTP ${response.status}`);
-      }
-      const json: unknown = await response.json();
-      const parsed = schema.safeParse(json);
+      const json: unknown = await response.json().catch(() => ({}));
+      const parsed = textSearchResponseSchema.safeParse(json);
       if (!parsed.success) {
+        if (!response.ok) {
+          throw new Error(`Google Places HTTP ${response.status}`);
+        }
         throw new Error('Google Places returned a malformed response');
       }
-      const status = (parsed.data as { status: string }).status;
-      lastStatus = status;
-      if (status === 'OVER_QUERY_LIMIT' || status === 'UNKNOWN_ERROR') {
-        await sleep(400 * 2 ** attempt);
-        continue;
+
+      if (!response.ok) {
+        const status = parsed.data.error?.status || `HTTP_${response.status}`;
+        const message = parsed.data.error?.message;
+        lastError = status;
+        if (response.status === 429 || status === 'RESOURCE_EXHAUSTED') {
+          await sleep(400 * 2 ** attempt);
+          continue;
+        }
+        throw new Error(providerError(status, message));
       }
+
       return parsed.data;
     }
-    throw new Error(providerError(lastStatus));
+    throw new Error(providerError(lastError));
   }
 }
 
 function providerError(status: string, message?: string): string {
-  if (status === 'OVER_QUERY_LIMIT') return 'Google Places rate limited';
-  if (status === 'REQUEST_DENIED') return 'Google Places request denied';
-  if (status === 'INVALID_REQUEST') return 'Google Places invalid request';
-  return message ? `Google Places ${status}` : `Google Places ${status}`;
+  if (status === 'OVER_QUERY_LIMIT' || status === 'RESOURCE_EXHAUSTED') return 'Google Places rate limited';
+  if (status === 'REQUEST_DENIED' || status === 'PERMISSION_DENIED') {
+    return message ? `Google Places request denied: ${message}` : 'Google Places request denied';
+  }
+  if (status === 'INVALID_REQUEST' || status === 'INVALID_ARGUMENT') return 'Google Places invalid request';
+  return message ? `Google Places ${status}: ${message}` : `Google Places ${status}`;
 }
