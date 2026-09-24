@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { leadListQuerySchema, manualLeadSchema, sourceImportSchema } from './index';
+import {
+  isLeadQualified,
+  leadListQuerySchema,
+  llmAssistantOutputSchema,
+  manualLeadSchema,
+  resolveReviewSchema,
+  sourceImportSchema,
+} from './index';
 
 describe('API validation', () => {
   it('accepts a google places discovery request', () => {
@@ -45,11 +52,50 @@ describe('API validation', () => {
     expect(manualLeadSchema.safeParse({ name: '' }).success).toBe(false);
   });
 
-  it('caps pagination and supports filters', () => {
-    expect(leadListQuerySchema.parse({}).pageSize).toBe(25);
+  it('defaults lead list queue to QUALIFIED', () => {
+    expect(leadListQuerySchema.parse({}).queue).toBe('QUALIFIED');
     expect(leadListQuerySchema.safeParse({ pageSize: 1000 }).success).toBe(false);
     expect(
-      leadListQuerySchema.parse({ page: '2', pageSize: '10', search: 'dental', country: 'Singapore', status: 'discovered' }),
-    ).toMatchObject({ page: 2, pageSize: 10, search: 'dental', country: 'Singapore', status: 'discovered' });
+      leadListQuerySchema.parse({
+        page: '2',
+        pageSize: '10',
+        search: 'dental',
+        country: 'Singapore',
+        queue: 'NEEDS_REVIEW',
+        vendor: 'Intercom',
+        method: 'llm',
+      }),
+    ).toMatchObject({
+      page: 2,
+      pageSize: 10,
+      search: 'dental',
+      country: 'Singapore',
+      queue: 'NEEDS_REVIEW',
+      vendor: 'Intercom',
+      method: 'llm',
+    });
+  });
+
+  it('derives qualified from queue only', () => {
+    expect(isLeadQualified('QUALIFIED')).toBe(true);
+    expect(isLeadQualified('NEEDS_REVIEW')).toBe(false);
+    expect(isLeadQualified('PENDING_AUDIT')).toBe(false);
+  });
+
+  it('validates review resolution and llm output', () => {
+    expect(
+      resolveReviewSchema.safeParse({ action: 'confirm_no_assistant', note: 'Looks clear' }).success,
+    ).toBe(true);
+    expect(resolveReviewSchema.safeParse({ action: 'confirm_no_assistant', note: '' }).success).toBe(false);
+    expect(
+      llmAssistantOutputSchema.safeParse({
+        hasConversationalAssistant: 'yes',
+        kind: 'AI_CHATBOT',
+        vendor: 'Intercom',
+        confidence: 0.9,
+        reasons: ['launcher'],
+        evidenceRefs: ['e1'],
+      }).success,
+    ).toBe(true);
   });
 });

@@ -1,4 +1,5 @@
-import type { CompanyRecord, CompanyRepo, LeadRepo, Logger } from '../ports';
+import type { CompanyRecord, CompanyRepo, JobRepo, LeadRepo, Logger, WebsiteRepo } from '../ports';
+import type { AuditConfig } from '../config/audit';
 import { ingestDiscoveredRecord } from './ingestDiscoveredRecord';
 
 export type CsvRecordInput = {
@@ -16,6 +17,8 @@ export type ImportCsvResult = {
   created: number;
   duplicates: number;
   skipped: number;
+  auditsEnqueued: number;
+  noWebsite: number;
   companies: CompanyRecord[];
 };
 
@@ -96,12 +99,21 @@ function splitCsv(text: string): string[][] {
 }
 
 export async function importCsvRecords(
-  deps: { companies: CompanyRepo; leads: LeadRepo; logger?: Logger },
+  deps: {
+    companies: CompanyRepo;
+    leads: LeadRepo;
+    websites?: WebsiteRepo;
+    jobs?: JobRepo;
+    logger?: Logger;
+    config?: AuditConfig;
+  },
   input: { tenantId: string; records: CsvRecordInput[] },
 ): Promise<ImportCsvResult> {
   let created = 0;
   let duplicates = 0;
   let skipped = 0;
+  let auditsEnqueued = 0;
+  let noWebsite = 0;
   const companies: CompanyRecord[] = [];
 
   for (const record of input.records) {
@@ -127,7 +139,9 @@ export async function importCsvRecords(
     companies.push(result.company);
     if (result.created) created += 1;
     if (result.duplicate) duplicates += 1;
+    if (result.auditEnqueued) auditsEnqueued += 1;
+    if (result.lead.queue === 'NO_WEBSITE') noWebsite += 1;
   }
 
-  return { found: input.records.length, created, duplicates, skipped, companies };
+  return { found: input.records.length, created, duplicates, skipped, auditsEnqueued, noWebsite, companies };
 }

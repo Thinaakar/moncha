@@ -13,10 +13,37 @@ enum UserRole {
   viewer
 }
 
-enum LeadStatus {
-  discovered
-  review
-  rejected
+enum WebsiteStatus {
+  /// Default until the first audit finishes.
+  UNCHECKED
+  ACTIVE
+  INACTIVE
+  PARKED
+  INACCESSIBLE
+  MISSING
+}
+
+enum AssistantVerdict {
+  NO_ASSISTANT
+  HAS_ASSISTANT
+  UNCERTAIN
+  NOT_APPLICABLE
+}
+
+enum AssistantKind {
+  AI_CHATBOT
+  LIVE_CHAT
+  MESSAGING_LINK
+  NONE
+}
+
+enum LeadQueue {
+  PENDING_AUDIT
+  QUALIFIED
+  HAS_ASSISTANT
+  NO_WEBSITE
+  NEEDS_REVIEW
+  INACTIVE
 }
 
 enum JobStatus {
@@ -29,20 +56,57 @@ enum JobStatus {
 enum JobType {
   places_discovery
   csv_import
-  manual
-  website_check
+  website_audit
+}
+
+enum AuditMethod {
+  html
+  render
+  llm
+}
+
+enum EvidenceType {
+  script_src
+  iframe_src
+  dom_selector
+  network_request
+  window_global
+  screenshot
+  page_excerpt
+  llm_reason
+}
+
+enum ChannelType {
+  whatsapp
+  contact_form
+  booking_link
+  tel
+  email
+}
+
+enum ReviewTaskStatus {
+  open
+  resolved
 }
 
 model Tenant {
-  id         String         @id @default(cuid())
-  name       String
-  createdAt  DateTime       @default(now())
-  users      User[]
-  companies  Company[]
-  leads      Lead[]
-  jobs       JobRun[]
-  websites   Website[]
-  sourceRecords SourceRecord[]
+  id               String            @id @default(cuid())
+  name             String
+  createdAt        DateTime          @default(now())
+  users            User[]
+  companies        Company[]
+  leads            Lead[]
+  jobs             JobRun[]
+  websites         Website[]
+  sourceRecords    SourceRecord[]
+  websiteAudits    WebsiteAudit[]
+  evidenceItems    EvidenceItem[]
+  detectedChannels DetectedChannel[]
+  reviewTasks      ReviewTask[]
+  auditLogs        AuditLog[]
+  hostAuditCaches  HostAuditCache[]
+  llmResultCaches  LlmResultCache[]
+  llmUsages        LlmUsage[]
 }
 
 model User {
@@ -81,17 +145,30 @@ model Company {
 }
 
 model Lead {
-  id        String     @id @default(cuid())
-  tenantId  String
-  companyId String
-  status    LeadStatus @default(discovered)
-  createdAt DateTime   @default(now())
-  updatedAt DateTime   @updatedAt
-  tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  company   Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  id                  String            @id @default(cuid())
+  tenantId            String
+  companyId           String
+  queue               LeadQueue         @default(PENDING_AUDIT)
+  /// Null until the first audit finishes (no PENDING enum — absence means unaudited).
+  assistantVerdict    AssistantVerdict?
+  assistantVendor     String?
+  qualificationReason String?
+  /// Lead-facing pointer to the audit that last set queue/verdict. Written in the same
+  /// transaction as Website.latestAuditId (same audit id). See Website.latestAuditId.
+  latestAuditId       String?
+  version             Int               @default(1)
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+  tenant              Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  company             Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  websiteAudits       WebsiteAudit[]
+  reviewTasks         ReviewTask[]
+  auditLogs           AuditLog[]
 
   @@unique([tenantId, companyId])
-  @@index([tenantId, status])
+  @@index([tenantId, queue])
+  @@index([tenantId, assistantVerdict])
+  @@index([tenantId, assistantVendor])
   @@index([tenantId, createdAt])
 }
 
@@ -110,34 +187,212 @@ model SourceRecord {
 }
 
 model Website {
-  id            String    @id @default(cuid())
+  id            String        @id @default(cuid())
   tenantId      String
-  companyId     String    @unique
+  companyId     String        @unique
   url           String
-  reachable     Boolean?
+  canonicalUrl  String?
+  status        WebsiteStatus @default(UNCHECKED)
+  language      String?
   finalUrl      String?
   httpStatus    Int?
   title         String?
+  /// Source of truth for "latest audit of this website URL". Lead.latestAuditId is the
+  /// lead-facing pointer and must be set to the same audit id in the same transaction.
+  latestAuditId String?
   lastCheckedAt DateTime?
-  tenant        Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  company       Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  tenant        Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  company       Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  audits        WebsiteAudit[]
 
-  @@index([tenantId])
+  @@index([tenantId, status])
+}
+
+/// Immutable insert-only. Migration adds a trigger blocking UPDATE and DELETE.
+/// Repositories expose create and read only.
+model WebsiteAudit {
+  id                  String            @id @default(cuid())
+  tenantId            String
+  websiteId           String
+  leadId              String
+  /// Highest-signal pass that produced the stored verdict (html | render | llm).
+  method              AuditMethod
+  /// True when the Playwright render pass actually ran (even if verdict came from html/llm).
+  renderRan           Boolean           @default(false)
+  /// True when the OpenRouter Pass 3 call actually ran.
+  llmRan              Boolean           @default(false)
+  verdict             AssistantVerdict
+  kind                AssistantKind     @default(NONE)
+  vendor              String?
+  confidence          Float
+  classifierVersion   String
+  contentHash         String?
+  failureReason       String?
+  httpStatus          Int?
+  finalUrl            String?
+  llmModel            String?
+  llmPromptVersion    String?
+  llmResult           Json?
+  llmPromptTokens     Int?
+  llmCompletionTokens Int?
+  auditedAt           DateTime          @default(now())
+  tenant              Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  website             Website           @relation(fields: [websiteId], references: [id], onDelete: Cascade)
+  lead                Lead              @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  evidenceItems       EvidenceItem[]
+  detectedChannels    DetectedChannel[]
+  reviewTasks         ReviewTask[]
+
+  @@index([tenantId, leadId, auditedAt])
+  @@index([tenantId, websiteId, auditedAt])
+  @@index([tenantId, method])
+  @@index([tenantId, vendor])
+}
+
+/// Immutable insert-only. Migration adds a trigger blocking UPDATE and DELETE.
+model EvidenceItem {
+  id          String       @id @default(cuid())
+  tenantId    String
+  auditId     String
+  type        EvidenceType
+  url         String?
+  selector    String?
+  excerpt     String?
+  vendor      String?
+  sourcePage  String?
+  objectUri   String?
+  contentHash String?
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  audit       WebsiteAudit @relation(fields: [auditId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, auditId])
+}
+
+model DetectedChannel {
+  id         String       @id @default(cuid())
+  tenantId   String
+  auditId    String
+  type       ChannelType
+  url        String
+  selector   String?
+  sourcePage String?
+  tenant     Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  audit      WebsiteAudit @relation(fields: [auditId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, auditId])
+}
+
+model ReviewTask {
+  id             String           @id @default(cuid())
+  tenantId       String
+  leadId         String
+  auditId        String
+  reason         String
+  status         ReviewTaskStatus @default(open)
+  resolvedBy     String?
+  resolutionNote String?
+  resolvedAt     DateTime?
+  createdAt      DateTime         @default(now())
+  tenant         Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lead           Lead             @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  audit          WebsiteAudit     @relation(fields: [auditId], references: [id], onDelete: Cascade)
+
+  /// Migration adds partial unique: one open task per lead
+  /// CREATE UNIQUE INDEX review_task_one_open_per_lead ON "ReviewTask" ("tenantId", "leadId") WHERE status = 'open';
+  @@index([tenantId, status])
+  @@index([tenantId, leadId])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  tenantId   String
+  leadId     String?
+  entityType String
+  entityId   String
+  action     String
+  actorId    String?
+  note       String?
+  before     Json?
+  after      Json?
+  createdAt  DateTime @default(now())
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lead       Lead?    @relation(fields: [leadId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, leadId])
 }
 
 model JobRun {
-  id         String    @id @default(cuid())
-  tenantId   String
-  type       JobType
-  status     JobStatus @default(pending)
-  inputJson  Json?
-  resultJson Json?
-  error      String?
-  startedAt  DateTime?
-  finishedAt DateTime?
-  createdAt  DateTime  @default(now())
-  tenant     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id          String    @id @default(cuid())
+  tenantId    String
+  type        JobType
+  status      JobStatus @default(pending)
+  payload     Json?
+  result      Json?
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(3)
+  runAfter    DateTime  @default(now())
+  lockedAt    DateTime?
+  lockedBy    String?
+  lastError   String?
+  /// Set only when dedupe is wanted (e.g. website-audit). NULL allowed many times per tenant.
+  dedupeKey   String?
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
+  @@unique([tenantId, dedupeKey])
+  @@index([status, runAfter])
   @@index([tenantId, createdAt])
   @@index([tenantId, status])
+  @@index([status, lockedAt])
+}
+
+/// Intentionally not tenant-scoped: one row per worker process for liveness only.
+model WorkerHeartbeat {
+  workerId  String   @id
+  hostname  String?
+  updatedAt DateTime @updatedAt
+}
+
+/// Host-level audit cache. Key includes tenant + host + classifierVersion.
+model HostAuditCache {
+  id                String   @id @default(cuid())
+  tenantId          String
+  host              String
+  classifierVersion String
+  resultJson        Json
+  auditedAt         DateTime @default(now())
+  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, host, classifierVersion])
+  @@index([tenantId, auditedAt])
+}
+
+/// Pass-3 LLM response cache.
+model LlmResultCache {
+  id            String   @id @default(cuid())
+  tenantId      String
+  bundleHash    String
+  model         String
+  promptVersion String
+  resultJson    Json
+  createdAt     DateTime @default(now())
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, bundleHash, model, promptVersion])
+}
+
+/// Source of truth for LLM_MAX_CALLS_PER_DAY. Failed and timed-out calls count.
+model LlmUsage {
+  id          String   @id @default(cuid())
+  tenantId    String
+  /// UTC calendar day as YYYY-MM-DD.
+  day         String
+  calls       Int      @default(0)
+  failedCalls Int      @default(0)
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, day])
 }

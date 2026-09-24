@@ -26,7 +26,15 @@ function repos() {
   };
   const leadRepo: LeadRepo = {
     async create(data) {
-      const record = { id: `l${leads.length + 1}`, ...data };
+      const record = {
+        id: `l${leads.length + 1}`,
+        version: 1,
+        assistantVerdict: data.assistantVerdict ?? null,
+        assistantVendor: null,
+        qualificationReason: data.qualificationReason ?? null,
+        latestAuditId: null,
+        ...data,
+      };
       leads.push(record);
       return record;
     },
@@ -38,6 +46,20 @@ function repos() {
     },
     async list() {
       return { items: [], total: 0, page: 1, pageSize: 25, totalPages: 0 };
+    },
+    async applyQualification() {
+      return null;
+    },
+    async queueCounts() {
+      return {
+        PENDING_AUDIT: 0,
+        QUALIFIED: 0,
+        HAS_ASSISTANT: 0,
+        NO_WEBSITE: 0,
+        NEEDS_REVIEW: 0,
+        INACTIVE: 0,
+        openReviewTasks: 0,
+      };
     },
   };
   return { companies, leads, companyRepo, leadRepo };

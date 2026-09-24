@@ -5,7 +5,17 @@ import {
   normalizeCountry,
   normalizeWebsiteUrl,
 } from '../entities/company';
-import type { CompanyRecord, CompanyRepo, LeadRecord, LeadRepo, Logger } from '../ports';
+import { DEFAULT_AUDIT_CONFIG, type AuditConfig } from '../config/audit';
+import type {
+  CompanyRecord,
+  CompanyRepo,
+  JobRepo,
+  LeadRecord,
+  LeadRepo,
+  Logger,
+  WebsiteRepo,
+} from '../ports';
+import { websiteAuditDedupeKey } from '../ports';
 
 export type IngestInput = {
   tenantId: string;
@@ -29,6 +39,7 @@ export type IngestResult =
       lead?: undefined;
       created: false;
       duplicate: false;
+      auditEnqueued: false;
     }
   | {
       skipped: false;
@@ -37,21 +48,28 @@ export type IngestResult =
       lead: LeadRecord;
       created: boolean;
       duplicate: boolean;
+      auditEnqueued: boolean;
     };
 
 export type IngestDeps = {
   companies: CompanyRepo;
   leads: LeadRepo;
+  websites?: WebsiteRepo;
+  jobs?: JobRepo;
   logger?: Logger;
+  config?: AuditConfig;
 };
 
-function fillBlanks(existing: CompanyRecord, incoming: {
-  name: string;
-  country?: string;
-  city?: string;
-  phone?: string;
-  address?: string;
-}) {
+function fillBlanks(
+  existing: CompanyRecord,
+  incoming: {
+    name: string;
+    country?: string;
+    city?: string;
+    phone?: string;
+    address?: string;
+  },
+) {
   return {
     name: existing.name || incoming.name,
     country: existing.country || incoming.country || undefined,
@@ -61,13 +79,24 @@ function fillBlanks(existing: CompanyRecord, incoming: {
   };
 }
 
-async function ensureLead(leads: LeadRepo, tenantId: string, companyId: string): Promise<LeadRecord> {
-  const existing = await leads.findByCompany(tenantId, companyId);
+async function ensureLead(
+  deps: IngestDeps,
+  tenantId: string,
+  companyId: string,
+  hasWebsite: boolean,
+): Promise<LeadRecord> {
+  const existing = await deps.leads.findByCompany(tenantId, companyId);
   if (existing) return existing;
   try {
-    return await leads.create({ tenantId, companyId, status: 'discovered' });
+    return await deps.leads.create({
+      tenantId,
+      companyId,
+      queue: hasWebsite ? 'PENDING_AUDIT' : 'NO_WEBSITE',
+      assistantVerdict: hasWebsite ? null : 'NOT_APPLICABLE',
+      qualificationReason: hasWebsite ? 'pending_audit' : 'no_website',
+    });
   } catch {
-    const raced = await leads.findByCompany(tenantId, companyId);
+    const raced = await deps.leads.findByCompany(tenantId, companyId);
     if (raced) return raced;
     throw new Error('Failed to create lead');
   }
@@ -99,6 +128,37 @@ async function attachSource(
   }
 }
 
+async function ensureWebsiteAndEnqueue(
+  deps: IngestDeps,
+  tenantId: string,
+  companyId: string,
+  leadId: string,
+  websiteUrl: string,
+): Promise<boolean> {
+  if (deps.websites) {
+    await deps.websites.upsert({
+      tenantId,
+      companyId,
+      url: websiteUrl,
+      status: 'UNCHECKED',
+    });
+  }
+  if (!deps.jobs) return false;
+  const config = deps.config ?? DEFAULT_AUDIT_CONFIG;
+  try {
+    await deps.jobs.create({
+      tenantId,
+      type: 'website_audit',
+      payload: { leadId, companyId, url: websiteUrl },
+      dedupeKey: websiteAuditDedupeKey(leadId, config.classifierVersion),
+    });
+    return true;
+  } catch {
+    // Unique dedupe conflict — already enqueued today.
+    return false;
+  }
+}
+
 export async function ingestDiscoveredRecord(
   deps: IngestDeps,
   input: IngestInput,
@@ -108,7 +168,7 @@ export async function ingestDiscoveredRecord(
   const name = normalizeCompanyName(input.name || '');
   if (!name) {
     deps.logger?.info('normalized_record_skipped', { reason: 'missing_name', source: input.source });
-    return { skipped: true, reason: 'missing_name', created: false, duplicate: false };
+    return { skipped: true, reason: 'missing_name', created: false, duplicate: false, auditEnqueued: false };
   }
 
   const domain = canonicalDomain(input.domain ?? input.websiteUrl);
@@ -117,6 +177,7 @@ export async function ingestDiscoveredRecord(
   const websiteUrl = normalizeWebsiteUrl(input.websiteUrl ?? input.domain);
   const phone = input.phone?.trim() || undefined;
   const address = input.address?.trim() || undefined;
+  const hasWebsite = Boolean(websiteUrl);
 
   deps.logger?.info('normalized_record', {
     name,
@@ -130,7 +191,7 @@ export async function ingestDiscoveredRecord(
 
   if (requireDomain && !domain) {
     deps.logger?.info('duplicate_or_skipped_record', { reason: 'missing_domain', name, source: input.source });
-    return { skipped: true, reason: 'missing_domain', created: false, duplicate: false };
+    return { skipped: true, reason: 'missing_domain', created: false, duplicate: false, auditEnqueued: false };
   }
 
   if (domain) {
@@ -140,14 +201,18 @@ export async function ingestDiscoveredRecord(
       const updated =
         (await deps.companies.update(input.tenantId, existing.id, patch)) ?? { ...existing, ...patch };
       await attachSource(deps.companies, input, updated.id, false);
-      const lead = await ensureLead(deps.leads, input.tenantId, updated.id);
+      const lead = await ensureLead(deps, input.tenantId, updated.id, hasWebsite);
+      let auditEnqueued = false;
+      if (hasWebsite && websiteUrl && lead.queue === 'PENDING_AUDIT') {
+        auditEnqueued = await ensureWebsiteAndEnqueue(deps, input.tenantId, updated.id, lead.id, websiteUrl);
+      }
       deps.logger?.info('duplicate_record', {
         tenantId: input.tenantId,
         companyId: updated.id,
         domain,
         source: input.source,
       });
-      return { skipped: false, company: updated, lead, created: false, duplicate: true };
+      return { skipped: false, company: updated, lead, created: false, duplicate: true, auditEnqueued };
     }
   }
 
@@ -167,16 +232,30 @@ export async function ingestDiscoveredRecord(
       const raced = await deps.companies.findByDomain(input.tenantId, domain);
       if (raced) {
         await attachSource(deps.companies, input, raced.id, false);
-        const lead = await ensureLead(deps.leads, input.tenantId, raced.id);
-        return { skipped: false, company: raced, lead, created: false, duplicate: true };
+        const lead = await ensureLead(deps, input.tenantId, raced.id, hasWebsite);
+        let auditEnqueued = false;
+        if (hasWebsite && websiteUrl && lead.queue === 'PENDING_AUDIT') {
+          auditEnqueued = await ensureWebsiteAndEnqueue(deps, input.tenantId, raced.id, lead.id, websiteUrl);
+        }
+        return { skipped: false, company: raced, lead, created: false, duplicate: true, auditEnqueued };
       }
     }
     throw error;
   }
 
   await attachSource(deps.companies, input, company.id, true);
-  const lead = await ensureLead(deps.leads, input.tenantId, company.id);
+  const lead = await ensureLead(deps, input.tenantId, company.id, hasWebsite);
+  let auditEnqueued = false;
+  if (hasWebsite && websiteUrl) {
+    auditEnqueued = await ensureWebsiteAndEnqueue(deps, input.tenantId, company.id, lead.id, websiteUrl);
+  }
+
   deps.logger?.info('company_created', { tenantId: input.tenantId, companyId: company.id, domain, name });
-  deps.logger?.info('lead_created', { tenantId: input.tenantId, leadId: lead.id, companyId: company.id });
-  return { skipped: false, company, lead, created: true, duplicate: false };
+  deps.logger?.info('lead_created', {
+    tenantId: input.tenantId,
+    leadId: lead.id,
+    companyId: company.id,
+    queue: lead.queue,
+  });
+  return { skipped: false, company, lead, created: true, duplicate: false, auditEnqueued };
 }

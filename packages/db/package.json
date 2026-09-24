@@ -9,7 +9,10 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "node -e \"process.exit(0)\"",
     "test": "vitest run",
-    "db:seed": "tsx prisma/seed.ts",
+    "db:seed": "node ./scripts/guarded.cjs tsx prisma/seed.ts",
+    "db:reset": "node ./scripts/guarded.cjs prisma migrate reset --force",
+    "db:migrate": "node ./scripts/guarded.cjs prisma migrate deploy",
+    "db:generate": "prisma generate",
     "db:validate": "node ./scripts/validate.mjs"
   },
   "dependencies": {
@@ -17,12 +20,12 @@
     "@prisma/client": "^6.15.0"
   },
   "devDependencies": {
+    "@moncha/config": "workspace:*",
+    "@types/node": "^24.3.0",
     "prisma": "^6.15.0",
     "tsx": "^4.20.5",
     "typescript": "^5.9.2",
-    "vitest": "^3.2.4",
-    "@moncha/config": "workspace:*",
-    "@types/node": "^24.3.0"
+    "vitest": "^3.2.4"
   },
   "prisma": {
     "schema": "prisma/schema.prisma",

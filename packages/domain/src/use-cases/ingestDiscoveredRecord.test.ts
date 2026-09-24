@@ -7,6 +7,8 @@ import type {
   LeadRecord,
   LeadRepo,
   SourceRecord,
+  WebsiteRecord,
+  WebsiteRepo,
 } from '../ports';
 import { canTransitionJob, createSilentLogger } from '../index';
 import { ingestDiscoveredRecord } from './ingestDiscoveredRecord';
@@ -18,10 +20,12 @@ function memory() {
   const companies: CompanyRecord[] = [];
   const leads: LeadRecord[] = [];
   const sources: SourceRecord[] = [];
+  const websites: WebsiteRecord[] = [];
   let companySeq = 1;
   let leadSeq = 1;
   let sourceSeq = 1;
   let jobSeq = 1;
+  let websiteSeq = 1;
   const jobs: JobRunRecord[] = [];
 
   const companyRepo: CompanyRepo = {
@@ -72,7 +76,15 @@ function memory() {
         (item) => item.tenantId === data.tenantId && item.companyId === data.companyId,
       );
       if (existing) throw new Error('duplicate lead');
-      const record: LeadRecord = { id: `l${leadSeq++}`, ...data };
+      const record: LeadRecord = {
+        id: `l${leadSeq++}`,
+        version: 1,
+        assistantVerdict: data.assistantVerdict ?? null,
+        assistantVendor: null,
+        qualificationReason: data.qualificationReason ?? null,
+        latestAuditId: null,
+        ...data,
+      };
       leads.push(record);
       return record;
     },
@@ -88,7 +100,7 @@ function memory() {
     async list(tenantId, query) {
       const items = leads
         .filter((item) => item.tenantId === tenantId)
-        .filter((item) => !query.status || item.status === query.status)
+        .filter((item) => !query.queue || item.queue === query.queue)
         .map((lead) => {
           const company = companies.find((item) => item.id === lead.companyId)!;
           return { ...lead, company };
@@ -102,16 +114,80 @@ function memory() {
         );
       return { items, total: items.length, page: 1, pageSize: items.length || 25, totalPages: 1 };
     },
+    async applyQualification(tenantId, leadId, data) {
+      const lead = leads.find((item) => item.id === leadId && item.tenantId === tenantId);
+      if (!lead || lead.version !== data.expectedVersion) return null;
+      lead.queue = data.queue;
+      lead.assistantVerdict = data.assistantVerdict;
+      lead.assistantVendor = data.assistantVendor ?? null;
+      lead.qualificationReason = data.qualificationReason;
+      if (data.latestAuditId !== undefined) lead.latestAuditId = data.latestAuditId;
+      lead.version += 1;
+      return lead;
+    },
+    async queueCounts(tenantId) {
+      const counts = {
+        PENDING_AUDIT: 0,
+        QUALIFIED: 0,
+        HAS_ASSISTANT: 0,
+        NO_WEBSITE: 0,
+        NEEDS_REVIEW: 0,
+        INACTIVE: 0,
+        openReviewTasks: 0,
+      };
+      for (const lead of leads.filter((item) => item.tenantId === tenantId)) {
+        counts[lead.queue] += 1;
+      }
+      return counts;
+    },
+  };
+
+  const websiteRepo: WebsiteRepo = {
+    async upsert(data) {
+      const existing = websites.find(
+        (item) => item.tenantId === data.tenantId && item.companyId === data.companyId,
+      );
+      if (existing) {
+        Object.assign(existing, data);
+        return existing;
+      }
+      const record: WebsiteRecord = {
+        id: `w${websiteSeq++}`,
+        status: data.status ?? 'UNCHECKED',
+        ...data,
+      };
+      websites.push(record);
+      return record;
+    },
+    async getByCompany(tenantId, companyId) {
+      return websites.find((item) => item.tenantId === tenantId && item.companyId === companyId) ?? null;
+    },
+    async applyAuditPointers(tenantId, websiteId, data) {
+      const existing = websites.find((item) => item.id === websiteId && item.tenantId === tenantId);
+      if (!existing) return null;
+      Object.assign(existing, data);
+      return existing;
+    },
   };
 
   const jobRepo: JobRepo = {
-    async create(tenantId, type, input) {
+    async create(data) {
+      if (data.dedupeKey) {
+        const dup = jobs.find(
+          (item) => item.tenantId === data.tenantId && item.dedupeKey === data.dedupeKey,
+        );
+        if (dup) throw new Error('duplicate dedupeKey');
+      }
       const record: JobRunRecord = {
         id: `j${jobSeq++}`,
-        tenantId,
-        type,
+        tenantId: data.tenantId,
+        type: data.type,
         status: 'pending',
-        inputJson: input,
+        payload: data.payload,
+        attempts: 0,
+        maxAttempts: data.maxAttempts ?? 3,
+        runAfter: data.runAfter ?? new Date(),
+        dedupeKey: data.dedupeKey ?? null,
       };
       jobs.push(record);
       return record;
@@ -127,7 +203,7 @@ function memory() {
     },
   };
 
-  return { companies, leads, sources, jobs, companyRepo, leadRepo, jobRepo };
+  return { companies, leads, sources, jobs, websites, companyRepo, leadRepo, jobRepo, websiteRepo };
 }
 
 describe('ingest and discovery', () => {
@@ -144,6 +220,7 @@ describe('ingest and discovery', () => {
       },
     );
     expect(result.created).toBe(true);
+    expect(result.lead.queue).toBe('PENDING_AUDIT');
     expect(companies).toHaveLength(1);
     expect(leads).toHaveLength(1);
     expect(sources).toHaveLength(1);
@@ -225,8 +302,31 @@ describe('ingest and discovery', () => {
       { companies: companyRepo, leads: leadRepo },
       { tenantId: 't1', name: 'Manual Co', domain: 'manual.example' },
     );
-    expect(result.lead.status).toBe('discovered');
+    expect(result.lead.queue).toBe('PENDING_AUDIT');
     expect(leads).toHaveLength(1);
+  });
+
+  it('enqueues website_audit when websites and jobs are provided', async () => {
+    const { companyRepo, leadRepo, websiteRepo, jobRepo, jobs } = memory();
+    const result = await ingestDiscoveredRecord(
+      {
+        companies: companyRepo,
+        leads: leadRepo,
+        websites: websiteRepo,
+        jobs: jobRepo,
+        logger: createSilentLogger(),
+      },
+      {
+        tenantId: 't1',
+        name: 'Clinic',
+        domain: 'clinic.example',
+        source: 'google_places',
+        externalId: 'p1',
+      },
+    );
+    expect(result.auditEnqueued).toBe(true);
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]?.type).toBe('website_audit');
   });
 
   it('does not create duplicate companies or leads when retrying discovery', async () => {
@@ -235,7 +335,12 @@ describe('ingest and discovery', () => {
       async discover() {
         return [
           { name: 'Clinic', domain: 'clinic.example', source: 'google_places', externalId: 'p1' },
-          { name: 'Clinic WWW', websiteUrl: 'https://www.clinic.example/', source: 'google_places', externalId: 'p1' },
+          {
+            name: 'Clinic WWW',
+            websiteUrl: 'https://www.clinic.example/',
+            source: 'google_places',
+            externalId: 'p1',
+          },
         ];
       },
     };
@@ -268,7 +373,7 @@ describe('ingest and discovery', () => {
     expect((await companyRepo.findByDomain('t1', 'clinic.example'))?.tenantId).toBe('t1');
   });
 
-  it('filters leads by tenant, country, status, and search', async () => {
+  it('filters leads by tenant, country, queue, and search', async () => {
     const { companyRepo, leadRepo } = memory();
     await ingestDiscoveredRecord(
       { companies: companyRepo, leads: leadRepo },
@@ -285,7 +390,11 @@ describe('ingest and discovery', () => {
       { tenantId: 't2', name: 'Other', domain: 'sg.example', country: 'Singapore', source: 'manual' },
       { requireDomain: true },
     );
-    const filtered = await leadRepo.list('t1', { country: 'Singapore', status: 'discovered', search: 'Dental' });
+    const filtered = await leadRepo.list('t1', {
+      country: 'Singapore',
+      queue: 'PENDING_AUDIT',
+      search: 'Dental',
+    });
     expect(filtered.items).toHaveLength(1);
     expect(filtered.items[0]?.company.name).toBe('Dental SG');
   });
@@ -299,8 +408,12 @@ describe('ingest and discovery', () => {
   });
 
   it('does not double-ingest a done discovery job', async () => {
-    const { companyRepo, leadRepo, jobRepo, companies } = memory();
-    const job = await jobRepo.create('t1', 'places_discovery', {});
+    const { companyRepo, leadRepo, jobRepo, websiteRepo, companies } = memory();
+    const job = await jobRepo.create({
+      tenantId: 't1',
+      type: 'places_discovery',
+      payload: {},
+    });
     const source = {
       async discover() {
         return [{ name: 'Clinic', domain: 'clinic.example', source: 'google_places', externalId: 'p1' }];
@@ -311,16 +424,7 @@ describe('ingest and discovery', () => {
       source,
       companies: companyRepo,
       leads: leadRepo,
-      websites: {
-        async upsert(data: { companyId: string; tenantId: string; url: string }) {
-          return { id: 'w1', ...data };
-        },
-      },
-      checker: {
-        async check() {
-          return { reachable: true, httpStatus: 200, finalUrl: 'https://clinic.example', title: 'Clinic' };
-        },
-      },
+      websites: websiteRepo,
       logger: createSilentLogger(),
     };
     await runPlacesDiscoveryJob(deps, {

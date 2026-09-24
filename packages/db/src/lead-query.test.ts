@@ -6,10 +6,10 @@ describe('lead query tenant isolation and pagination', () => {
     const where = leadListWhere('tenant-a', {
       search: 'dental',
       country: 'Singapore',
-      status: 'discovered',
+      queue: 'QUALIFIED',
     });
     expect(where.tenantId).toBe('tenant-a');
-    expect(where.status).toBe('discovered');
+    expect(where.queue).toBe('QUALIFIED');
   });
 
   it('does not leak another tenant id into filters', () => {
