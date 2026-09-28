@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { DiscoveredCompany, DiscoverySource, Logger } from '@moncha/domain';
-import { canonicalDomain } from '@moncha/domain';
+import { firstPartyDomain, firstPartyWebsite } from './http';
 
 const placeSchema = z
   .object({
@@ -63,11 +63,12 @@ export function mapPlaceToDiscoveredCompany(
 ): DiscoveredCompany | null {
   const name = (details?.name || place.name || '').trim();
   if (!name) return null;
-  const website = details?.website;
+  // Places often lists a Facebook/Instagram page as the "website" — not a company domain.
+  const website = firstPartyWebsite(details?.website);
   return {
     name,
     websiteUrl: website,
-    domain: canonicalDomain(website),
+    domain: firstPartyDomain(details?.website),
     address: details?.formatted_address || place.formatted_address,
     phone: details?.international_phone_number || details?.formatted_phone_number,
     source: 'google_places',

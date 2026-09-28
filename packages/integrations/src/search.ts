@@ -52,13 +52,24 @@ const dataForSeoSchema = z.object({
     .optional(),
 });
 
+/** Page titles look like "Smile Dental | Best Dentist in Singapore" — keep the business part. */
+export function cleanSearchTitle(title: string): string {
+  const trimmed = title.trim();
+  const first = trimmed.split(/\s+[|–—-]\s+|\s*:\s+/)[0]?.trim();
+  return first && first.length >= 2 ? first : trimmed;
+}
+
 export function mapSearchResult(
   item: { title?: string; link?: string; url?: string; domain?: string; phone?: string; address?: string; cid?: string },
   input: { country: string; city: string },
 ): DiscoveredCompany | null {
-  const name = (item.title || '').trim();
+  const isMapsListing = Boolean(item.cid);
+  const rawTitle = (item.title || '').trim();
+  const name = isMapsListing ? rawTitle : cleanSearchTitle(rawTitle);
   const website = firstPartyWebsite(item.url || item.link || item.domain);
   if (!name) return null;
+  // Web results that point at directories/social pages ("Top 10 dentists…") are not companies.
+  if (!isMapsListing && !website) return null;
   return {
     name,
     websiteUrl: website,

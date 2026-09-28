@@ -67,7 +67,7 @@ export default async function Jobs() {
                     </td>
                     <td>{job.createdAt.toLocaleString()}</td>
                     <td>{job.finishedAt?.toLocaleString() || '—'}</td>
-                    <td>{job.error || '—'}</td>
+                    <td>{job.lastError || '—'}</td>
                   </tr>
                 ))}
               </tbody>

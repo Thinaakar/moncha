@@ -5,6 +5,7 @@ export * from './repositories/lead';
 export * from './repositories/job-run';
 export * from './repositories/website';
 export * from './repositories/website-audit';
+export * from './repositories/host-audit-cache';
 export * from './repositories/review-task';
 export * from './repositories/audit-log';
 export * from './repositories/llm-usage';

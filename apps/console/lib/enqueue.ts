@@ -1,9 +1,13 @@
 import { after } from 'next/server';
-import { tasks } from '@trigger.dev/sdk/v3';
-import { prisma, PrismaCompanyRepository, PrismaJobRunRepository, PrismaLeadRepository, PrismaWebsiteRepository } from '@moncha/db';
-import { createConsoleLogger, runCsvImportJob, runPlacesDiscoveryJob, runWebsiteCheckJob } from '@moncha/domain';
+import {
+  prisma,
+  PrismaCompanyRepository,
+  PrismaJobRunRepository,
+  PrismaLeadRepository,
+  PrismaWebsiteRepository,
+} from '@moncha/db';
+import { createConsoleLogger, runCsvImportJob, runPlacesDiscoveryJob } from '@moncha/domain';
 import { createLiveDiscoverySource, type LiveDiscoverySourceName } from '@moncha/integrations';
-import { BasicHttpWebsiteChecker } from '@moncha/crawling';
 
 function persistDeps() {
   const logger = createConsoleLogger();
@@ -12,8 +16,21 @@ function persistDeps() {
     companies: new PrismaCompanyRepository(prisma),
     leads: new PrismaLeadRepository(prisma),
     websites: new PrismaWebsiteRepository(prisma),
-    checker: new BasicHttpWebsiteChecker(),
     logger,
+  };
+}
+
+/** Next/Turbopack does not expose a full `process.env` object when passed through;
+ *  each key must be read as a static `process.env.X` access. */
+function discoveryEnv(): Record<string, string | undefined> {
+  return {
+    GOOGLE_PLACES_API_KEY: process.env.GOOGLE_PLACES_API_KEY,
+    YELP_API_KEY: process.env.YELP_API_KEY,
+    FOURSQUARE_API_KEY: process.env.FOURSQUARE_API_KEY,
+    SEARCH_API_KEY: process.env.SEARCH_API_KEY,
+    SEARCH_ENGINE_ID: process.env.SEARCH_ENGINE_ID,
+    DATAFORSEO_LOGIN: process.env.DATAFORSEO_LOGIN,
+    DATAFORSEO_PASSWORD: process.env.DATAFORSEO_PASSWORD,
   };
 }
 
@@ -21,18 +38,19 @@ function discoveryDeps(source: LiveDiscoverySourceName) {
   const base = persistDeps();
   return {
     ...base,
-    source: createLiveDiscoverySource(source, process.env, base.logger),
+    source: createLiveDiscoverySource(source, discoveryEnv(), base.logger),
   };
 }
 
 async function markFailed(tenantId: string, jobId: string, error: unknown) {
   await new PrismaJobRunRepository(prisma).update(tenantId, jobId, {
     status: 'failed',
-    error: error instanceof Error ? error.message : String(error),
+    lastError: error instanceof Error ? error.message : String(error),
     finishedAt: new Date(),
   });
 }
 
+/** Console runs Places discovery in-process via Next `after()`. Worker only claims website_audit. */
 export async function enqueuePlacesDiscovery(payload: {
   jobId: string;
   tenantId: string;
@@ -42,10 +60,6 @@ export async function enqueuePlacesDiscovery(payload: {
   source?: LiveDiscoverySourceName;
 }) {
   const source = payload.source ?? 'google_places';
-  if (process.env.TRIGGER_SECRET_KEY) {
-    await tasks.trigger('places-discovery', { ...payload, source }, { idempotencyKey: payload.jobId });
-    return;
-  }
   after(async () => {
     try {
       await runPlacesDiscoveryJob(discoveryDeps(source), payload);
@@ -55,25 +69,7 @@ export async function enqueuePlacesDiscovery(payload: {
   });
 }
 
-export async function enqueueWebsiteCheck(payload: {
-  jobId: string;
-  tenantId: string;
-  companyId: string;
-  url: string;
-}) {
-  if (process.env.TRIGGER_SECRET_KEY) {
-    await tasks.trigger('website-check', payload, { idempotencyKey: payload.jobId });
-    return;
-  }
-  after(async () => {
-    try {
-      await runWebsiteCheckJob(persistDeps(), payload);
-    } catch (error) {
-      await markFailed(payload.tenantId, payload.jobId, error);
-    }
-  });
-}
-
+/** Console runs CSV import in-process via Next `after()`. Worker only claims website_audit. */
 export async function enqueueCsvImport(payload: {
   jobId: string;
   tenantId: string;
@@ -88,10 +84,6 @@ export async function enqueueCsvImport(payload: {
     address?: string;
   }>;
 }) {
-  if (process.env.TRIGGER_SECRET_KEY) {
-    await tasks.trigger('csv-import', payload, { idempotencyKey: payload.jobId });
-    return;
-  }
   after(async () => {
     try {
       await runCsvImportJob(persistDeps(), payload);

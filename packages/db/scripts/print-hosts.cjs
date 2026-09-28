@@ -1,5 +1,5 @@
 const fs = require('node:fs');
-const { parseHost, assertDevDatabase } = require('./packages/db/scripts/assert-dev-db.cjs');
+const { parseHost, assertDevDatabase } = require('./assert-dev-db.cjs');
 
 const env = {};
 for (const line of fs.readFileSync('.env', 'utf8').split(/\r?\n/)) {

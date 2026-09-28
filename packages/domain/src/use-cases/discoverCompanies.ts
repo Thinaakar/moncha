@@ -77,7 +77,7 @@ export async function discoverCompanies(
         externalId: item.externalId,
         raw: item.raw,
       },
-      { requireDomain: true },
+      { requireDomain: false },
     );
 
     if (result.skipped) {

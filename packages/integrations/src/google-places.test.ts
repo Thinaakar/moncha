@@ -46,6 +46,17 @@ describe('Google Places mapping', () => {
     });
   });
 
+  it('does not use a Facebook/Instagram page as the company website', () => {
+    for (const website of ['https://www.facebook.com/smileclinic', 'https://instagram.com/smile', 'https://m.facebook.com/x']) {
+      const mapped = mapNewPlaceToDiscoveredCompany(
+        { id: 'p2', displayName: { text: 'Smile' }, websiteUri: website },
+        { country: 'Singapore', city: 'Singapore' },
+      );
+      expect(mapped?.domain).toBeUndefined();
+      expect(mapped?.websiteUrl).toBeUndefined();
+    }
+  });
+
   it('skips malformed rows without a name', () => {
     expect(
       mapPlaceToDiscoveredCompany({ place_id: 'abc' }, undefined, {

@@ -1,26 +1,66 @@
 import { canonicalDomain } from '@moncha/domain';
 
-const DIRECTORY_DOMAINS = new Set([
-  'yelp.com',
-  'foursquare.com',
-  'facebook.com',
-  'instagram.com',
-  'twitter.com',
-  'x.com',
-  'linkedin.com',
-  'tripadvisor.com',
-  'google.com',
-  'maps.google.com',
-  'goo.gl',
-  'bing.com',
-  'apple.com',
+/** Registrable-domain labels of directories, social networks and maps — never a company's own site. */
+const DIRECTORY_BRANDS = new Set([
+  'yelp',
+  'foursquare',
+  'facebook',
+  'fb',
+  'instagram',
+  'twitter',
+  'x',
+  'linkedin',
+  'tiktok',
+  'youtube',
+  'pinterest',
+  'tripadvisor',
+  'google',
+  'bing',
+  'apple',
+  'yellowpages',
+  'practo',
+  'healthgrades',
+  'zocdoc',
+  'booking',
+  'agoda',
+  'expedia',
+  'grab',
+  'foodpanda',
+  'burpple',
+  'hungrygowhere',
+  'streetdirectory',
+  'linktr',
+  'whatsapp',
+  'telegram',
 ]);
+
+/** Exact hosts that are link shorteners / maps / messaging, regardless of label. */
+const DIRECTORY_HOSTS = new Set(['goo.gl', 'maps.app.goo.gl', 'g.page', 'm.me', 't.me', 'wa.me', 'lin.ee', 'bit.ly']);
+
+/** Second-level labels used under country TLDs, e.g. clinic.com.sg / shop.co.uk. */
+const SECOND_LEVEL = new Set(['com', 'co', 'net', 'org', 'gov', 'edu', 'ac', 'or', 'ne', 'go', 'biz', 'info']);
+
+/** Best-effort registrable domain without a public-suffix list: handles `x.com.sg`, `x.co.uk`. */
+export function registrableDomain(host: string): string {
+  const parts = host.toLowerCase().replace(/\.$/, '').split('.').filter(Boolean);
+  if (parts.length <= 2) return parts.join('.');
+  const tld = parts[parts.length - 1]!;
+  const sld = parts[parts.length - 2]!;
+  if (tld.length === 2 && SECOND_LEVEL.has(sld)) return parts.slice(-3).join('.');
+  return parts.slice(-2).join('.');
+}
+
+export function isDirectoryDomain(domain: string): boolean {
+  const host = domain.toLowerCase();
+  if (DIRECTORY_HOSTS.has(host)) return true;
+  const label = registrableDomain(host).split('.')[0] ?? '';
+  return DIRECTORY_BRANDS.has(label);
+}
 
 export function firstPartyWebsite(value?: string): string | undefined {
   const domain = canonicalDomain(value);
   if (!domain) return undefined;
-  const root = domain.split('.').slice(-2).join('.');
-  if (DIRECTORY_DOMAINS.has(domain) || DIRECTORY_DOMAINS.has(root)) return undefined;
+  if (isDirectoryDomain(domain)) return undefined;
   return value;
 }
 

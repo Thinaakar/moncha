@@ -23,4 +23,14 @@ describe('lead query tenant isolation and pagination', () => {
     expect(leadListPagination({ pageSize: 10 }).pageSize).toBe(10);
     expect(leadListPagination({ page: 2, pageSize: 25 }).skip).toBe(25);
   });
+
+  it('omits HAS_ASSISTANT when omitChatbotSites is true', () => {
+    const where = leadListWhere('tenant-a', { omitChatbotSites: true });
+    expect(where.queue).toEqual({ not: 'HAS_ASSISTANT' });
+  });
+
+  it('keeps explicit HAS_ASSISTANT queue even when omit flag is on', () => {
+    const where = leadListWhere('tenant-a', { queue: 'HAS_ASSISTANT', omitChatbotSites: true });
+    expect(where.queue).toBe('HAS_ASSISTANT');
+  });
 });

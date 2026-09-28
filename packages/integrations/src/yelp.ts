@@ -39,6 +39,8 @@ export function mapYelpBusiness(
 ): DiscoveredCompany | null {
   const name = (business.name || '').trim();
   if (!name) return null;
+  // Yelp Fusion does not expose the business's own website: `url` is the yelp.com listing,
+  // which firstPartyWebsite drops. Yelp rows contribute name/phone/address; website comes from other sources.
   const website = firstPartyWebsite(business.url);
   return {
     name,

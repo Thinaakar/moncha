@@ -55,6 +55,27 @@ describe('combineLlmVerdict', () => {
     expect(out.failureReason).toBe('llm_invalid');
   });
 
+  it('never treats a WhatsApp / Messenger-only "yes" as HAS_ASSISTANT', () => {
+    for (const llm of [
+      { kind: 'MESSAGING_LINK' as const, vendor: 'WhatsApp' },
+      { kind: 'LIVE_CHAT' as const, vendor: 'Facebook Messenger' },
+      { kind: 'AI_CHATBOT' as const, vendor: 'Telegram' },
+    ]) {
+      const out = combineLlmVerdict({
+        llm: {
+          hasConversationalAssistant: 'yes',
+          ...llm,
+          confidence: 0.95,
+          reasons: ['floating button'],
+          evidenceRefs: ['e1'],
+        },
+        validEvidenceRefs: refs,
+      });
+      expect(out.verdict).not.toBe('HAS_ASSISTANT');
+      expect(out.kind).toBe('NONE');
+    }
+  });
+
   it('maps unsure to UNCERTAIN', () => {
     const out = combineLlmVerdict({
       llm: {

@@ -1,4 +1,5 @@
-import type { CompanyRepo, LeadRepo, Logger } from '../ports';
+import type { CompanyRepo, JobRepo, LeadRepo, Logger, WebsiteRepo } from '../ports';
+import type { AuditConfig } from '../config/audit';
 import { ingestDiscoveredRecord } from './ingestDiscoveredRecord';
 
 export type ManualLeadInput = {
@@ -12,13 +13,21 @@ export type ManualLeadInput = {
 };
 
 export async function createManualLead(
-  deps: { companies: CompanyRepo; leads: LeadRepo; logger?: Logger },
+  deps: {
+    companies: CompanyRepo;
+    leads: LeadRepo;
+    websites?: WebsiteRepo;
+    jobs?: JobRepo;
+    logger?: Logger;
+    config?: AuditConfig;
+  },
   input: ManualLeadInput,
 ) {
   const result = await ingestDiscoveredRecord(
     deps,
     {
       ...input,
+      websiteUrl: input.domain,
       source: 'manual',
     },
     { requireDomain: false },
@@ -32,5 +41,6 @@ export async function createManualLead(
     company: result.company,
     lead: result.lead,
     duplicate: result.duplicate,
+    auditEnqueued: result.auditEnqueued,
   };
 }

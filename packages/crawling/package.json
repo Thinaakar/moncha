@@ -10,7 +10,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@moncha/domain": "workspace:*"
+    "@moncha/domain": "workspace:*",
+    "playwright": "^1.63.0"
   },
   "devDependencies": {
     "@moncha/config": "workspace:*",

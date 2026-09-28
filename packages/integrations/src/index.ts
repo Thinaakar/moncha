@@ -9,12 +9,15 @@ export {
   createSearchDiscoverySource,
   DataForSeoDiscoverySource,
   GoogleCseDiscoverySource,
+  cleanSearchTitle,
   mapSearchResult,
 } from './search';
-export { CompositeDiscoverySource } from './composite';
+export { CompositeDiscoverySource, linkWebsitesAcrossSources } from './composite';
+export { firstPartyDomain, firstPartyWebsite, isDirectoryDomain, registrableDomain } from './http';
 export {
   LIVE_DISCOVERY_SOURCES,
   createLiveDiscoverySource,
   isLiveDiscoverySource,
   type LiveDiscoverySourceName,
 } from './factory';
+export { OpenRouterLlmProvider, createOpenRouterFromEnv } from './openrouter';

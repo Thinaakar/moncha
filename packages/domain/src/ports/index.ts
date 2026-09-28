@@ -20,7 +20,16 @@ export type EvidenceType =
   | 'screenshot'
   | 'page_excerpt'
   | 'llm_reason';
-export type ChannelType = 'whatsapp' | 'contact_form' | 'booking_link' | 'tel' | 'email';
+export type ChannelType =
+  | 'whatsapp'
+  | 'messenger'
+  | 'telegram'
+  | 'line'
+  | 'viber'
+  | 'contact_form'
+  | 'booking_link'
+  | 'tel'
+  | 'email';
 
 export type AuthContext = {
   userId: string;
@@ -108,6 +117,11 @@ export type DetectedChannelInput = {
   sourcePage?: string;
 };
 
+export type WebsiteAuditArtifacts = {
+  screenshot?: Uint8Array;
+  renderedDom?: string;
+};
+
 export type WebsiteAuditResult = {
   websiteStatus: WebsiteStatus;
   finalUrl?: string;
@@ -135,6 +149,8 @@ export type WebsiteAuditResult = {
   llmResult?: unknown;
   llmPromptTokens?: number;
   llmCompletionTokens?: number;
+  /** In-memory only; persisted via EvidenceStore after audit insert. */
+  artifacts?: WebsiteAuditArtifacts;
 };
 
 export type WebsiteAuditRecord = WebsiteAuditResult & {
@@ -181,6 +197,8 @@ export type LeadListQuery = {
   assistantVerdict?: AssistantVerdict;
   vendor?: string;
   method?: AuditMethod;
+  /** When true, exclude HAS_ASSISTANT (omit_chatbot_sites). */
+  omitChatbotSites?: boolean;
 };
 
 export type LeadListItem = LeadRecord & {
@@ -248,6 +266,28 @@ export type EvidenceStorePut = {
 
 export interface EvidenceStore {
   put(input: EvidenceStorePut): Promise<{ objectUri: string }>;
+}
+
+export type HostAuditCacheRecord = {
+  tenantId: string;
+  host: string;
+  classifierVersion: string;
+  result: WebsiteAuditResult;
+  auditedAt: Date;
+};
+
+export interface HostAuditCacheRepo {
+  get(
+    tenantId: string,
+    host: string,
+    classifierVersion: string,
+  ): Promise<HostAuditCacheRecord | null>;
+  put(input: {
+    tenantId: string;
+    host: string;
+    classifierVersion: string;
+    result: WebsiteAuditResult;
+  }): Promise<void>;
 }
 
 export type CompanyWrite = {

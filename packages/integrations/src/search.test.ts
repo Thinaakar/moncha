@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { CompositeDiscoverySource } from './composite';
+import { CompositeDiscoverySource, linkWebsitesAcrossSources } from './composite';
 import { createLiveDiscoverySource } from './factory';
 import { createSearchDiscoverySource, mapSearchResult } from './search';
 
@@ -10,6 +10,33 @@ describe('Search API mapping', () => {
       { country: 'Singapore', city: 'Singapore' },
     );
     expect(mapped).toMatchObject({ source: 'search', domain: 'smile.example', externalId: 'c1' });
+  });
+
+  it('cleans page titles down to the business name', () => {
+    const mapped = mapSearchResult(
+      { title: 'Smile Dental | Best Dentist in Singapore', link: 'https://smiledental.com.sg/' },
+      { country: 'Singapore', city: 'Singapore' },
+    );
+    expect(mapped?.name).toBe('Smile Dental');
+    expect(mapped?.domain).toBe('smiledental.com.sg');
+  });
+
+  it('drops web results that point at directories or social pages', () => {
+    expect(
+      mapSearchResult(
+        { title: 'Top 10 dentists in Singapore - Yelp', link: 'https://www.yelp.com.sg/search?q=dentist' },
+        { country: 'Singapore', city: 'Singapore' },
+      ),
+    ).toBeNull();
+  });
+
+  it('keeps maps listings without a website (DataForSEO cid)', () => {
+    const mapped = mapSearchResult(
+      { title: 'Clinic - Tampines', cid: '42', phone: '+65 6000 0000' },
+      { country: 'Singapore', city: 'Singapore' },
+    );
+    expect(mapped?.name).toBe('Clinic - Tampines');
+    expect(mapped?.domain).toBeUndefined();
   });
 
   it('uses Google CSE when search env is set', async () => {
@@ -68,6 +95,19 @@ describe('composite discovery', () => {
     const result = await source.discover({ country: 'Singapore', city: 'Singapore', keyword: 'dental' });
     expect(result).toHaveLength(1);
     expect(result[0]?.source).toBe('search');
+  });
+
+  it('lets website-less rows borrow the website of a matching row from another provider', () => {
+    const rows = linkWebsitesAcrossSources([
+      { name: 'Smile Dental', domain: 'smiledental.com.sg', websiteUrl: 'https://smiledental.com.sg', phone: '+65 6123 4567', source: 'google_places' },
+      { name: 'Smile Dental Clinic', phone: '6123 4567', source: 'yelp' },
+      { name: 'SMILE DENTAL', source: 'yelp' },
+      { name: 'Other Clinic', phone: '6999 0000', source: 'yelp' },
+      { name: 'Other Clinic', phone: '+65 6999 0000', source: 'foursquare' },
+    ]);
+    expect(rows[1]?.domain).toBe('smiledental.com.sg');
+    expect(rows[2]?.domain).toBe('smiledental.com.sg');
+    expect(rows.filter((r) => r.name === 'Other Clinic')).toHaveLength(1);
   });
 
   it('builds an all-source adapter from configured env keys', () => {

@@ -16,6 +16,7 @@
     "@moncha/db": "workspace:*",
     "@moncha/domain": "workspace:*",
     "@moncha/integrations": "workspace:*",
+    "@next/env": "^15.5.25",
     "@prisma/client": "6.19.3",
     "@trigger.dev/sdk": "^4.0.4",
     "next": "^15.5.3",

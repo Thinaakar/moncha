@@ -27,6 +27,11 @@ export function leadListWhere(tenantId: string, query: LeadListQuery): Prisma.Le
     },
   };
 
+  // omit_chatbot_sites=true → never return HAS_ASSISTANT (unless explicitly requesting that queue).
+  if (query.omitChatbotSites && queue !== 'HAS_ASSISTANT') {
+    where.queue = queue ? queue : { not: 'HAS_ASSISTANT' };
+  }
+
   if (query.method) {
     // Match leads whose latest audit used this method (latestAuditId points at that row).
     where.websiteAudits = {

@@ -86,8 +86,8 @@ export class PrismaJobRunRepository implements JobRepo {
   }
 
   /**
-   * Claim up to `limit` pending jobs using SKIP LOCKED.
-   * Caller must run inside a transaction / worker loop.
+   * Claim up to `limit` pending website_audit jobs using SKIP LOCKED.
+   * places_discovery / csv_import stay with the console in-process runners.
    */
   async claimJobs(workerId: string, limit: number): Promise<JobRunRecord[]> {
     const rows = await this.db.$queryRaw<
@@ -121,6 +121,7 @@ export class PrismaJobRunRepository implements JobRepo {
         SELECT id FROM "JobRun"
         WHERE status = 'pending'
           AND "runAfter" <= NOW()
+          AND type = 'website_audit'
         ORDER BY "runAfter" ASC, "createdAt" ASC
         FOR UPDATE SKIP LOCKED
         LIMIT ${limit}

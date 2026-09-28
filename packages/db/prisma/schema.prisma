@@ -78,6 +78,10 @@ enum EvidenceType {
 
 enum ChannelType {
   whatsapp
+  messenger
+  telegram
+  line
+  viber
   contact_form
   booking_link
   tel

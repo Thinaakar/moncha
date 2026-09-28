@@ -10,7 +10,6 @@
     "incremental": true,
     "allowJs": true,
     "noEmit": true,
-    "baseUrl": ".",
     "paths": {
       "@/*": [
         "./*"

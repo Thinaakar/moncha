@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { prisma } from '@moncha/db';
 import { getServerAuth } from '@/lib/auth';
+import { omitChatbotSites } from '@/lib/flags';
 
 export default async function Home() {
   const auth = await getServerAuth();
@@ -20,44 +21,52 @@ export default async function Home() {
     );
   }
 
+  const omitChatbots = omitChatbotSites();
   const tenantId = auth.tenantId;
-  const [discovered, withWebsite, noWebsite, failedJobs, recentJobs] = await Promise.all([
-    prisma.lead.count({ where: { tenantId, status: 'discovered' } }),
-    prisma.website.count({ where: { tenantId, reachable: true } }),
-    prisma.company.count({ where: { tenantId, website: null } }),
-    prisma.jobRun.count({ where: { tenantId, status: 'failed' } }),
-    prisma.jobRun.findMany({
-      where: { tenantId },
-      orderBy: { createdAt: 'desc' },
-      take: 5,
-    }),
-  ]);
+  const [pendingAudit, qualified, needsReview, hasAssistant, noWebsite, failedJobs, recentJobs] =
+    await Promise.all([
+      prisma.lead.count({ where: { tenantId, queue: 'PENDING_AUDIT' } }),
+      prisma.lead.count({ where: { tenantId, queue: 'QUALIFIED' } }),
+      prisma.lead.count({ where: { tenantId, queue: 'NEEDS_REVIEW' } }),
+      prisma.lead.count({ where: { tenantId, queue: 'HAS_ASSISTANT' } }),
+      prisma.lead.count({ where: { tenantId, queue: 'NO_WEBSITE' } }),
+      prisma.jobRun.count({ where: { tenantId, status: 'failed' } }),
+      prisma.jobRun.findMany({
+        where: { tenantId },
+        orderBy: { createdAt: 'desc' },
+        take: 5,
+      }),
+    ]);
+
+  const stats: Array<[string, number]> = [
+    ['Pending audit', pendingAudit],
+    ['Qualified', qualified],
+    ['Needs review', needsReview],
+    ...(omitChatbots ? [] : ([['Has assistant', hasAssistant]] as Array<[string, number]>)),
+    ['No website', noWebsite],
+    ['Failed jobs', failedJobs],
+  ];
 
   return (
     <main>
       <section className="hero-panel">
         <h1>Find companies. Review leads.</h1>
         <p>
-          Phase 1 primary loop: Discover with Google Places → normalize &amp; dedupe → Neon → website
-          check → dashboard review.
+          Discover → Neon → website audit → Qualified (active site, no assistant).
+          {omitChatbots ? ' Chatbot sites are omitted (OMIT_CHATBOT_SITES=true).' : ''}
         </p>
         <div className="hero-actions">
           <Link href="/discover" className="btn btn-ghost">
             Start Discover
           </Link>
-          <Link href="/leads" className="btn btn-ghost">
-            View leads
+          <Link href="/leads?queue=QUALIFIED" className="btn btn-ghost">
+            View qualified
           </Link>
         </div>
       </section>
 
       <div className="grid">
-        {[
-          ['Discovered', discovered],
-          ['With website', withWebsite],
-          ['No website', noWebsite],
-          ['Failed jobs', failedJobs],
-        ].map(([label, value]) => (
+        {stats.map(([label, value]) => (
           <div className="stat-card" key={String(label)}>
             <div className="label">{label}</div>
             <div className="stat">{value}</div>
@@ -92,7 +101,9 @@ export default async function Home() {
                   <tr key={job.id}>
                     <td>{job.type}</td>
                     <td>
-                      <span className={`chip chip-${job.status === 'done' ? 'green' : job.status === 'failed' ? 'red' : job.status === 'running' ? 'blue' : 'amber'}`}>
+                      <span
+                        className={`chip chip-${job.status === 'done' ? 'green' : job.status === 'failed' ? 'red' : job.status === 'running' ? 'blue' : 'amber'}`}
+                      >
                         {job.status}
                       </span>
                     </td>

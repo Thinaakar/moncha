@@ -16,24 +16,23 @@ describe('Foursquare mapping', () => {
     });
   });
 
-  it('fetches search then place details', async () => {
-    const fetchImpl = vi.fn(async (url: string) => {
-      if (url.includes('/places/search')) {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({ results: [{ fsq_id: 'f1', name: 'Clinic' }] }),
-        };
-      }
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({ fsq_id: 'f1', name: 'Clinic', website: 'https://clinic.example' }),
-      };
-    });
+  it('requests website/tel in the search call (no per-place details requests)', async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        results: [
+          { fsq_id: 'f1', name: 'Clinic', website: 'https://clinic.example', tel: '+65 6000 0000' },
+          { fsq_id: 'f2', name: 'Social Only', website: 'https://www.facebook.com/socialonly' },
+        ],
+      }),
+    }));
     const source = new FoursquareDiscoverySource('fsq-key', undefined, fetchImpl as unknown as typeof fetch);
     const result = await source.discover({ country: 'Singapore', city: 'Singapore', keyword: 'dental' });
     expect(result[0]?.domain).toBe('clinic.example');
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(result[0]?.phone).toBe('+65 6000 0000');
+    expect(result[1]?.domain).toBeUndefined();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(String((fetchImpl.mock.calls[0] as unknown[])[0])).toContain('fields=');
   });
 });

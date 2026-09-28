@@ -2,28 +2,9 @@ import { z } from 'zod';
 import type { DiscoveredCompany, DiscoverySource, Logger } from '@moncha/domain';
 import { firstPartyDomain, firstPartyWebsite, readJson } from './http';
 
-const searchSchema = z.object({
-  results: z
-    .array(
-      z
-        .object({
-          fsq_id: z.string().optional(),
-          name: z.string().optional(),
-          location: z
-            .object({
-              formatted_address: z.string().optional(),
-              locality: z.string().optional(),
-              country: z.string().optional(),
-            })
-            .passthrough()
-            .optional(),
-        })
-        .passthrough(),
-    )
-    .optional(),
-});
+const SEARCH_FIELDS = 'fsq_id,name,location,website,tel';
 
-const detailsSchema = z
+const placeSchema = z
   .object({
     fsq_id: z.string().optional(),
     name: z.string().optional(),
@@ -33,11 +14,16 @@ const detailsSchema = z
       .object({
         formatted_address: z.string().optional(),
         locality: z.string().optional(),
+        country: z.string().optional(),
       })
       .passthrough()
       .optional(),
   })
   .passthrough();
+
+const searchSchema = z.object({
+  results: z.array(placeSchema).optional(),
+});
 
 export function mapFoursquarePlace(
   place: { fsq_id?: string; name?: string; location?: { formatted_address?: string; locality?: string } },
@@ -73,7 +59,10 @@ export class FoursquareDiscoverySource implements DiscoverySource {
   async discover(input: { country: string; city: string; keyword: string }): Promise<DiscoveredCompany[]> {
     const near = `${input.city}, ${input.country}`;
     this.logger?.info('discovery_provider_request', { provider: 'foursquare', keyword: input.keyword, near });
-    const searchUrl = `https://api.foursquare.com/v3/places/search?query=${encodeURIComponent(input.keyword)}&near=${encodeURIComponent(near)}&limit=20`;
+    // Request website/tel in the search itself — no per-place details round trip.
+    const searchUrl =
+      `https://api.foursquare.com/v3/places/search?query=${encodeURIComponent(input.keyword)}` +
+      `&near=${encodeURIComponent(near)}&limit=20&fields=${encodeURIComponent(SEARCH_FIELDS)}`;
     const json = await readJson(await this.fetchImpl(searchUrl, { headers: this.headers() }), 'Foursquare');
     const parsed = searchSchema.safeParse(json);
     if (!parsed.success) throw new Error('Foursquare returned a malformed response');
@@ -81,20 +70,11 @@ export class FoursquareDiscoverySource implements DiscoverySource {
     const discovered: DiscoveredCompany[] = [];
     for (const place of parsed.data.results ?? []) {
       if (!place.fsq_id || !place.name) continue;
-      const details = await this.fetchDetails(place.fsq_id);
-      const mapped = mapFoursquarePlace(place, details, input);
+      const mapped = mapFoursquarePlace(place, place, input);
       if (mapped) discovered.push(mapped);
     }
     this.logger?.info('discovery_provider_results', { provider: 'foursquare', found: discovered.length });
     return discovered;
-  }
-
-  private async fetchDetails(id: string) {
-    const url = `https://api.foursquare.com/v3/places/${encodeURIComponent(id)}?fields=fsq_id,name,website,tel,location`;
-    const json = await readJson(await this.fetchImpl(url, { headers: this.headers() }), 'Foursquare');
-    const parsed = detailsSchema.safeParse(json);
-    if (!parsed.success) return undefined;
-    return parsed.data;
   }
 
   private headers() {

@@ -10,8 +10,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     const { id } = await params;
     const job = await new PrismaJobRunRepository(prisma).get(auth.tenantId, id);
     if (!job) throw notFound('Job not found');
-    const result = (job.resultJson ?? null) as Record<string, unknown> | null;
-    const input = (job.inputJson ?? null) as { source?: string } | null;
+    const result = (job.result ?? null) as Record<string, unknown> | null;
+    const input = (job.payload ?? null) as { source?: string } | null;
     return NextResponse.json({
       id: job.id,
       status: job.status,
@@ -23,7 +23,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
       result,
       recordsDiscovered: result?.found ?? null,
       recordsImported: result?.created ?? null,
-      error: job.error,
+      error: job.lastError,
     });
   } catch (error) {
     return jsonError(error);

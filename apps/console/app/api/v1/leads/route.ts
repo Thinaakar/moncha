@@ -1,9 +1,16 @@
 import { NextResponse } from 'next/server';
 import { leadListQuerySchema, manualLeadSchema } from '@moncha/contracts';
-import { prisma, PrismaCompanyRepository, PrismaLeadRepository } from '@moncha/db';
+import {
+  prisma,
+  PrismaCompanyRepository,
+  PrismaJobRunRepository,
+  PrismaLeadRepository,
+  PrismaWebsiteRepository,
+} from '@moncha/db';
 import { createConsoleLogger, createManualLead } from '@moncha/domain';
 import { authFromRequest } from '@/lib/auth';
 import { jsonError } from '@/lib/errors';
+import { omitChatbotSites } from '@/lib/flags';
 
 export async function GET(req: Request) {
   try {
@@ -14,9 +21,12 @@ export async function GET(req: Request) {
       pageSize: url.searchParams.get('pageSize') ?? undefined,
       search: url.searchParams.get('search') ?? undefined,
       country: url.searchParams.get('country') ?? undefined,
-      status: url.searchParams.get('status') ?? undefined,
+      queue: url.searchParams.get('queue') ?? undefined,
     });
-    const result = await new PrismaLeadRepository(prisma).list(auth.tenantId, query);
+    const result = await new PrismaLeadRepository(prisma).list(auth.tenantId, {
+      ...query,
+      omitChatbotSites: omitChatbotSites(),
+    });
     return NextResponse.json(result);
   } catch (error) {
     return jsonError(error);
@@ -31,6 +41,8 @@ export async function POST(req: Request) {
       {
         companies: new PrismaCompanyRepository(prisma),
         leads: new PrismaLeadRepository(prisma),
+        websites: new PrismaWebsiteRepository(prisma),
+        jobs: new PrismaJobRunRepository(prisma),
         logger: createConsoleLogger(),
       },
       { ...input, tenantId: auth.tenantId },

@@ -8,7 +8,7 @@ export function WebsiteCheckButton({ leadId }: { leadId: string }) {
 
   async function run() {
     setBusy(true);
-    setMsg('Queuing website check…');
+    setMsg('Queuing website audit…');
     try {
       const res = await fetch(`/api/v1/leads/${leadId}/website-check`, {
         method: 'POST',
@@ -17,12 +17,12 @@ export function WebsiteCheckButton({ leadId }: { leadId: string }) {
       });
       const data = await res.json();
       if (!res.ok) {
-        setMsg(data.error?.message || data.error || 'Failed to queue check');
+        setMsg(data.error?.message || data.error || 'Failed to queue audit');
         return;
       }
-      setMsg(`Website check job ${data.id} (${data.status}). Refresh in a few seconds.`);
+      setMsg(`Website audit job ${data.id} (${data.status}). Worker will process it when available.`);
     } catch {
-      setMsg('Failed to queue website check');
+      setMsg('Failed to queue website audit');
     } finally {
       setBusy(false);
     }
@@ -31,7 +31,7 @@ export function WebsiteCheckButton({ leadId }: { leadId: string }) {
   return (
     <div>
       <button type="button" onClick={run} disabled={busy}>
-        {busy ? 'Queuing…' : 'Run website check'}
+        {busy ? 'Queuing…' : 'Enqueue website audit'}
       </button>
       {msg && <div className="notice" style={{ marginTop: 10 }}>{msg}</div>}
     </div>

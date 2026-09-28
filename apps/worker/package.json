@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "trigger.dev dev",
+    "dev": "tsx watch src/poller.ts",
+    "start": "tsx src/poller.ts",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "node -e \"process.exit(0)\"",
@@ -13,12 +14,12 @@
     "@moncha/crawling": "workspace:*",
     "@moncha/db": "workspace:*",
     "@moncha/domain": "workspace:*",
-    "@moncha/integrations": "workspace:*",
-    "@trigger.dev/sdk": "^4.0.4"
+    "@moncha/integrations": "workspace:*"
   },
   "devDependencies": {
     "@moncha/config": "workspace:*",
     "@types/node": "^24.3.0",
+    "tsx": "^4.20.5",
     "typescript": "^5.9.2"
   }
 }

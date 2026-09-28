@@ -16,7 +16,7 @@ export default async function Detail({ params }: { params: Promise<{ id: string 
   if (!lead) return notFound();
 
   const website = lead.company.website;
-  const websiteStatus = websiteLabel(website?.reachable, Boolean(website));
+  const websiteStatus = websiteLabel(website?.status, Boolean(website));
 
   return (
     <main>
@@ -27,7 +27,13 @@ export default async function Detail({ params }: { params: Promise<{ id: string 
           </p>
           <h1>{lead.company.name}</h1>
           <p>
-            <span className={statusChip(lead.status)}>{lead.status}</span>
+            <span className={statusChip(lead.queue)}>{lead.queue}</span>
+            {lead.assistantVerdict ? (
+              <>
+                {' '}
+                <span className={statusChip(lead.assistantVerdict)}>{lead.assistantVerdict}</span>
+              </>
+            ) : null}
           </p>
         </div>
         <Link href="/discover" className="btn btn-secondary">
@@ -56,6 +62,10 @@ export default async function Detail({ params }: { params: Promise<{ id: string 
             <div className="kv-row">
               <span>Address</span>
               <span>{lead.company.address || '—'}</span>
+            </div>
+            <div className="kv-row">
+              <span>Vendor</span>
+              <span>{lead.assistantVendor || '—'}</span>
             </div>
             <div className="kv-row">
               <span>Created</span>
@@ -90,7 +100,7 @@ export default async function Detail({ params }: { params: Promise<{ id: string 
               </div>
             </div>
           ) : (
-            <p className="muted">Not checked yet.</p>
+            <p className="muted">No website on file.</p>
           )}
           <div style={{ marginTop: 16 }}>
             <WebsiteCheckButton leadId={lead.id} />

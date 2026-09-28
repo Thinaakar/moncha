@@ -28,13 +28,25 @@ export type LlmCombineResult = {
   canQualify: boolean;
 };
 
+const MESSAGING_VENDOR_RE = /whats\s?app|messenger|facebook|telegram|\bline\b|viber/i;
+
+/** WhatsApp / Facebook Messenger / Telegram / LINE / Viber links are contact channels, not assistants. */
+export function isMessagingOnlyAssistant(llm: Pick<LlmClassifyOutput, 'kind' | 'vendor'>): boolean {
+  if (llm.kind === 'MESSAGING_LINK') return true;
+  return Boolean(llm.vendor && MESSAGING_VENDOR_RE.test(llm.vendor));
+}
+
 /**
  * Combine a validated Pass-3 LLM result into a verdict.
  * Invalid refs → caller should treat as invalid (retry / UNCERTAIN), not call this.
  */
 export function combineLlmVerdict(input: LlmCombineInput): LlmCombineResult {
   const config = input.config ?? DEFAULT_AUDIT_CONFIG;
-  const { llm, validEvidenceRefs } = input;
+  const { validEvidenceRefs } = input;
+  const llm: LlmClassifyOutput =
+    input.llm.hasConversationalAssistant === 'yes' && isMessagingOnlyAssistant(input.llm)
+      ? { ...input.llm, hasConversationalAssistant: 'no', kind: 'NONE', vendor: null }
+      : input.llm;
 
   for (const ref of llm.evidenceRefs) {
     if (!validEvidenceRefs.has(ref)) {

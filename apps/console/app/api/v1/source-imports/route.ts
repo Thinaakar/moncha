@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { sourceImportSchema } from '@moncha/contracts';
-import { prisma, PrismaJobRunRepository } from '@moncha/db';
+import { prisma, PrismaJobRunRepository, withDbRetry } from '@moncha/db';
 import { authFromRequest } from '@/lib/auth';
 import { jsonError } from '@/lib/errors';
 import { enqueueCsvImport, enqueuePlacesDiscovery } from '@/lib/enqueue';
@@ -13,7 +13,13 @@ export async function POST(req: Request) {
     const jobs = new PrismaJobRunRepository(prisma);
 
     if (input.source === 'csv') {
-      const job = await jobs.create(auth.tenantId, 'csv_import', input);
+      const job = await withDbRetry(() =>
+        jobs.create({
+          tenantId: auth.tenantId,
+          type: 'csv_import',
+          payload: input,
+        }),
+      );
       try {
         await enqueueCsvImport({
           jobId: job.id,
@@ -24,7 +30,7 @@ export async function POST(req: Request) {
       } catch (error) {
         await jobs.update(auth.tenantId, job.id, {
           status: 'failed',
-          error: error instanceof Error ? error.message : 'Failed to enqueue CSV import',
+          lastError: error instanceof Error ? error.message : 'Failed to enqueue CSV import',
           finishedAt: new Date(),
         });
         throw providerError('Failed to start CSV import job');
@@ -32,7 +38,13 @@ export async function POST(req: Request) {
       return NextResponse.json({ id: job.id, status: job.status }, { status: 202 });
     }
 
-    const job = await jobs.create(auth.tenantId, 'places_discovery', input);
+    const job = await withDbRetry(() =>
+      jobs.create({
+        tenantId: auth.tenantId,
+        type: 'places_discovery',
+        payload: input,
+      }),
+    );
     try {
       await enqueuePlacesDiscovery({
         jobId: job.id,
@@ -45,7 +57,7 @@ export async function POST(req: Request) {
     } catch (error) {
       await jobs.update(auth.tenantId, job.id, {
         status: 'failed',
-        error: error instanceof Error ? error.message : 'Failed to enqueue discovery',
+        lastError: error instanceof Error ? error.message : 'Failed to enqueue discovery',
         finishedAt: new Date(),
       });
       throw providerError('Failed to start discovery job');

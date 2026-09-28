@@ -42,6 +42,10 @@ export const evidenceTypeSchema = z.enum([
 
 export const channelTypeSchema = z.enum([
   'whatsapp',
+  'messenger',
+  'telegram',
+  'line',
+  'viber',
   'contact_form',
   'booking_link',
   'tel',

@@ -21,7 +21,7 @@ export default function Layout({ children }: { children: ReactNode }) {
             </Link>
             <nav className="nav">
               <Link href="/">Home</Link>
-              <Link href="/leads">Leads</Link>
+              <Link href="/leads?queue=QUALIFIED">Leads</Link>
               <Link href="/discover" className="nav-primary">
                 Discover
               </Link>

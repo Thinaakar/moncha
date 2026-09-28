@@ -18,14 +18,14 @@ export type AuditConfig = {
 };
 
 export const DEFAULT_AUDIT_CONFIG: AuditConfig = {
-  classifierVersion: 'assistants-v1',
+  classifierVersion: 'assistants-v2',
   minConfidence: 0.8,
   disqualifyingKinds: ['AI_CHATBOT', 'LIVE_CHAT'],
   llmMaxConfidence: 0.85,
   llmCanQualify: false,
   llmYesMinConfidence: 0.7,
   llmNoMinConfidence: 0.85,
-  llmPromptVersion: 'assistant-classify-v1',
+  llmPromptVersion: 'assistant-classify-v2',
   reauditAfterDays: 30,
 };
 

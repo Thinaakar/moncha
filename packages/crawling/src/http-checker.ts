@@ -1,6 +1,17 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
-import type { WebsiteChecker, WebsiteResult } from '@moncha/domain';
+
+export type WebsiteResult = {
+  reachable: boolean;
+  finalUrl?: string;
+  httpStatus?: number;
+  title?: string;
+  error?: string;
+};
+
+export interface WebsiteChecker {
+  check(url: string): Promise<WebsiteResult>;
+}
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_BYTES = 512_000;
