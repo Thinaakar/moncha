@@ -24,7 +24,6 @@ export function AddLeadForm() {
           name: value('name'),
           domain: value('domain'),
           country: value('country'),
-          city: value('city'),
           phone: value('phone'),
           address: value('address'),
         }),
@@ -66,20 +65,14 @@ export function AddLeadForm() {
             <input name="country" placeholder="Country" />
           </label>
           <label>
-            City
-            <input name="city" placeholder="City" />
-          </label>
-        </div>
-        <div className="form-grid two">
-          <label>
             Phone
             <input name="phone" placeholder="Phone" />
           </label>
-          <label>
-            Address
-            <input name="address" placeholder="Address" />
-          </label>
         </div>
+        <label>
+          Address
+          <input name="address" placeholder="Address" />
+        </label>
         <button disabled={busy}>{busy ? 'Saving…' : 'Create lead'}</button>
       </form>
       {msg && <div className={ok ? 'notice success' : 'notice error'}>{msg}</div>}

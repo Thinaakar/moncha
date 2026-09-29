@@ -33,32 +33,31 @@ export default function Login() {
   return (
     <main className="login-shell">
       <div className="login-card">
-        <div className="brand">
-          <img src="/brand/mark.svg" alt="" />
-          <span>
-            Mon<b>Cha</b> Lead Engine
-          </span>
+        <div className="login-card-head">
+          <div className="brand">
+            <img src="/brand/mark.svg" alt="" />
+            <span>
+              Mon<b>Cha</b> Lead Engine
+            </span>
+          </div>
+          <h1>Sign in</h1>
+          <p>Use your operator email to open Discover, jobs, and leads.</p>
         </div>
-        <h1 style={{ margin: '0 0 8px', fontFamily: 'var(--display)', letterSpacing: '-0.03em' }}>
-          Internal login
-        </h1>
-        <p className="muted" style={{ marginBottom: 18 }}>
-          Sign in with a seeded operator email to access Discover and leads.
-        </p>
         <form className="form-grid" onSubmit={submit}>
           <label>
             Email
             <input
               name="email"
               type="email"
-              placeholder="Email"
+              placeholder="operator@moncha.local"
               defaultValue="operator@moncha.local"
+              autoComplete="email"
               required
             />
           </label>
           <button disabled={busy}>{busy ? 'Signing in…' : 'Continue'}</button>
         </form>
-        {msg && <div className="notice error">{msg}</div>}
+        {msg ? <div className="notice error">{msg}</div> : null}
       </div>
     </main>
   );

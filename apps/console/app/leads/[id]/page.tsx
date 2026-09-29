@@ -1,14 +1,103 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { prisma } from '@moncha/db';
+import { findDummyLead } from '@/lib/dummy-leads';
 import { getServerAuth } from '@/lib/auth';
 import { statusChip, websiteLabel } from '@/lib/ui';
 import { WebsiteCheckButton } from './website-check-button';
 
 export default async function Detail({ params }: { params: Promise<{ id: string }> }) {
-  const auth = await getServerAuth();
-  if (!auth) notFound();
   const { id } = await params;
+  const auth = await getServerAuth();
+  if (!auth || !process.env.DATABASE_URL) {
+    const sample = findDummyLead(id);
+    if (!sample) notFound();
+    const websiteStatus = websiteLabel(sample.websiteStatus, Boolean(sample.domain || sample.websiteStatus));
+    return (
+      <main>
+        <div className="page-head">
+          <div>
+            <p className="muted" style={{ margin: 0 }}>
+              <Link href="/leads">← Leads</Link>
+            </p>
+            <h1>{sample.name}</h1>
+            <p>
+              <span className={statusChip(sample.queue)}>{sample.queue}</span>
+            </p>
+          </div>
+          <Link href="/discover" className="btn btn-secondary">
+            Discover more
+          </Link>
+        </div>
+
+        <div className="detail-grid">
+          <div className="card">
+            <h2>Company</h2>
+            <div className="kv">
+              <div className="kv-row">
+                <span>Domain</span>
+                <span>{sample.domain || '—'}</span>
+              </div>
+              <div className="kv-row">
+                <span>Location</span>
+                <span>{[sample.city, sample.country].filter(Boolean).join(', ') || '—'}</span>
+              </div>
+              <div className="kv-row">
+                <span>Phone</span>
+                <span>{sample.phone || '—'}</span>
+              </div>
+              <div className="kv-row">
+                <span>Address</span>
+                <span>{sample.address || '—'}</span>
+              </div>
+              <div className="kv-row">
+                <span>Created</span>
+                <span>{sample.createdAt}</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="card">
+            <h2>Website</h2>
+            <div className="kv">
+              <div className="kv-row">
+                <span>Status</span>
+                <span className={statusChip(websiteStatus)}>{websiteStatus}</span>
+              </div>
+              <div className="kv-row">
+                <span>URL</span>
+                <span className="mono">{sample.domain ? `https://${sample.domain}` : '—'}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="card">
+          <h2>Source provenance</h2>
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Source</th>
+                  <th>External ID</th>
+                  <th>Created</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>
+                    <span className="chip chip-blue">{sample.source}</span>
+                  </td>
+                  <td className="mono">{sample.id}</td>
+                  <td>{sample.createdAt}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </main>
+    );
+  }
+  const { prisma } = await import('@moncha/db');
   const lead = await prisma.lead.findFirst({
     where: { id, tenantId: auth.tenantId },
     include: { company: { include: { website: true, sourceRecords: true } } },

@@ -1,9 +1,10 @@
 import Link from 'next/link';
-import { prisma } from '@moncha/db';
 import { getServerAuth } from '@/lib/auth';
+import { DUMMY_LEADS } from '@/lib/dummy-leads';
 import { omitChatbotSites } from '@/lib/flags';
 import { statusChip, websiteLabel } from '@/lib/ui';
 import type { LeadQueue, Prisma } from '@prisma/client';
+import { SampleLeadsTable } from './sample-table';
 
 type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 
@@ -53,24 +54,26 @@ function leadsQuery(opts: {
 
 export default async function Leads({ searchParams }: { searchParams: SearchParams }) {
   const auth = await getServerAuth();
-  if (!auth) {
+  if (!auth || !process.env.DATABASE_URL) {
     return (
       <main>
         <div className="page-head">
           <div>
             <h1>Leads</h1>
-            <p>Sign in to review discovered companies.</p>
+            <p>{DUMMY_LEADS.length} sample leads for frontend review.</p>
           </div>
+          <Link href="/discover" className="btn">
+            Discover more
+          </Link>
         </div>
         <div className="card">
-          <p>
-            Authentication required. <Link href="/login">Login</Link>
-          </p>
+          <SampleLeadsTable />
         </div>
       </main>
     );
   }
 
+  const { prisma } = await import('@moncha/db');
   const omitChatbots = omitChatbotSites();
   const visibleQueues = omitChatbots
     ? ALL_QUEUES.filter((q) => q !== 'HAS_ASSISTANT')

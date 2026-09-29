@@ -1,28 +1,25 @@
 import Link from 'next/link';
-import { prisma } from '@moncha/db';
 import { getServerAuth } from '@/lib/auth';
 import { statusChip } from '@/lib/ui';
+import { DailySchedule } from './daily-schedule';
 
 export default async function Jobs() {
   const auth = await getServerAuth();
-  if (!auth) {
+  if (!auth || !process.env.DATABASE_URL) {
     return (
       <main>
         <div className="page-head">
           <div>
             <h1>Jobs</h1>
-            <p>Sign in to view discovery and import history.</p>
+            <p>A country can run at more than one Malaysia time. Each time repeats every day.</p>
           </div>
         </div>
-        <div className="card">
-          <p>
-            Authentication required. <Link href="/login">Login</Link>
-          </p>
-        </div>
+        <DailySchedule />
       </main>
     );
   }
 
+  const { prisma } = await import('@moncha/db');
   const jobs = await prisma.jobRun.findMany({
     where: { tenantId: auth.tenantId },
     orderBy: { createdAt: 'desc' },
@@ -34,12 +31,14 @@ export default async function Jobs() {
       <div className="page-head">
         <div>
           <h1>Jobs</h1>
-          <p>Auto discovery and CSV import runs with pending / running / done / failed.</p>
+          <p>A country can run at more than one Malaysia time. Each time repeats every day.</p>
         </div>
         <Link href="/discover" className="btn">
           New Discover job
         </Link>
       </div>
+
+      <DailySchedule />
 
       <div className="card">
         {jobs.length === 0 ? (

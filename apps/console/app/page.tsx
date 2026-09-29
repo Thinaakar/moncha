@@ -1,26 +1,43 @@
 import Link from 'next/link';
-import { prisma } from '@moncha/db';
+import { SampleLeadsTable } from '@/app/leads/sample-table';
 import { getServerAuth } from '@/lib/auth';
+import { DUMMY_LEADS } from '@/lib/dummy-leads';
 import { omitChatbotSites } from '@/lib/flags';
 
 export default async function Home() {
   const auth = await getServerAuth();
-  if (!auth) {
+  if (!auth || !process.env.DATABASE_URL) {
     return (
       <main>
         <section className="hero-panel">
           <h1>MonCha Lead Engine</h1>
           <p>Sign in to run auto discovery and review system-sourced leads.</p>
           <div className="hero-actions">
+            <Link href="/leads" className="btn btn-ghost">
+              View sample leads
+            </Link>
             <Link href="/login" className="btn btn-ghost">
               Sign in
             </Link>
           </div>
         </section>
+        <div className="card">
+          <div className="page-head" style={{ marginBottom: 8 }}>
+            <div>
+              <h2 style={{ margin: 0 }}>Sample leads</h2>
+              <p className="muted">{DUMMY_LEADS.length} companies shown without a database.</p>
+            </div>
+            <Link href="/leads" className="btn-secondary btn">
+              All leads
+            </Link>
+          </div>
+          <SampleLeadsTable />
+        </div>
       </main>
     );
   }
 
+  const { prisma } = await import('@moncha/db');
   const omitChatbots = omitChatbotSites();
   const tenantId = auth.tenantId;
   const [pendingAudit, qualified, needsReview, hasAssistant, noWebsite, failedJobs, recentJobs] =

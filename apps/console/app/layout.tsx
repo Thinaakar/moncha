@@ -1,6 +1,7 @@
 import './globals.css';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
+import { NavBar } from './nav-bar';
 
 export const metadata = {
   title: 'MonCha Lead Engine',
@@ -19,17 +20,7 @@ export default function Layout({ children }: { children: ReactNode }) {
                 Mon<b>Cha</b> Lead Engine
               </span>
             </Link>
-            <nav className="nav">
-              <Link href="/">Home</Link>
-              <Link href="/leads?queue=QUALIFIED">Leads</Link>
-              <Link href="/discover" className="nav-primary">
-                Discover
-              </Link>
-              <Link href="/jobs">Jobs</Link>
-              <Link href="/add-lead">Add lead</Link>
-              <Link href="/import">Import</Link>
-              <Link href="/login">Login</Link>
-            </nav>
+            <NavBar />
           </header>
           {children}
         </div>
