@@ -1,3 +1,4 @@
+import './env';
 import { randomUUID } from 'node:crypto';
 import {
   prisma,
@@ -23,33 +24,6 @@ const WORKER_ID = `worker-${process.env.HOSTNAME || 'local'}-${randomUUID().slic
 const CONCURRENCY = Math.max(1, Number(process.env.WORKER_CONCURRENCY || 3));
 const POLL_MS = Math.max(500, Number(process.env.WORKER_POLL_MS || 2000));
 const STALE_MS = Math.max(60_000, Number(process.env.WORKER_STALE_MS || 10 * 60_000));
-
-function loadEnvFromRoot() {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const fs = require('node:fs') as typeof import('node:fs');
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const path = require('node:path') as typeof import('node:path');
-    const envPath = path.resolve(__dirname, '../../../.env');
-    if (!fs.existsSync(envPath)) return;
-    for (const line of fs.readFileSync(envPath, 'utf8').split(/\r?\n/)) {
-      const s = line.trim();
-      if (!s || s.startsWith('#')) continue;
-      const i = s.indexOf('=');
-      if (i < 0) continue;
-      const k = s.slice(0, i).trim();
-      let v = s.slice(i + 1).trim();
-      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
-        v = v.slice(1, -1);
-      }
-      if (process.env[k] === undefined) process.env[k] = v;
-    }
-  } catch {
-    // ignore
-  }
-}
-
-loadEnvFromRoot();
 
 const logger = createConsoleLogger();
 const jobs = new PrismaJobRunRepository(prisma);

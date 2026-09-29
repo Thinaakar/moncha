@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { DiscoveredCompany, DiscoverySource, Logger } from '@moncha/domain';
+import type { DiscoverInput, DiscoveredCompany, DiscoverySource, Logger } from '@moncha/domain';
 import { firstPartyDomain, firstPartyWebsite } from './http';
 
 const placeSchema = z
@@ -48,6 +48,8 @@ export type GooglePlacesDetails = {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const FIELD_MASK = [
+  // Text Search (New) omits the token unless it is in the field mask.
+  'nextPageToken',
   'places.id',
   'places.displayName',
   'places.formattedAddress',
@@ -106,7 +108,12 @@ export function mapNewPlaceToDiscoveredCompany(
   );
 }
 
+/** Text Search (New) returns at most 3 pages of 20. */
+const MAX_PAGES = 3;
+
 export class GooglePlacesDiscoverySource implements DiscoverySource {
+  private requests = 0;
+
   constructor(
     private apiKey: string,
     private logger?: Logger,
@@ -115,36 +122,63 @@ export class GooglePlacesDiscoverySource implements DiscoverySource {
     if (!apiKey) throw new Error('GOOGLE_PLACES_API_KEY is required');
   }
 
-  async discover(input: { country: string; city: string; keyword: string }): Promise<DiscoveredCompany[]> {
+  /** HTTP requests sent to Places so far (including retries); each one is billable. */
+  get requestCount() {
+    return this.requests;
+  }
+
+  async discover(input: DiscoverInput): Promise<DiscoveredCompany[]> {
     const query = `${input.keyword} in ${input.city}, ${input.country}`;
-    this.logger?.info('discovery_provider_request', { provider: 'google_places', query });
+    const maxPages = Math.min(MAX_PAGES, Math.max(1, input.maxPages ?? 1));
+    this.logger?.info('discovery_provider_request', { provider: 'google_places', query, maxPages });
 
-    const search = await this.searchText(query);
-    if (search.nextPageToken) {
-      this.logger?.info('discovery_provider_pagination_ignored', {
-        provider: 'google_places',
-        hasNextPage: true,
-      });
-    }
-
-    const places = search.places ?? [];
     const discovered: DiscoveredCompany[] = [];
-    for (const place of places) {
-      const mapped = mapNewPlaceToDiscoveredCompany(place, input);
-      if (!mapped) {
-        this.logger?.info('normalized_record_skipped', { reason: 'malformed_provider_row' });
-        continue;
+    const seen = new Set<string>();
+    let pageToken: string | undefined;
+    for (let page = 0; page < maxPages; page += 1) {
+      const search = await this.searchText({
+        textQuery: query,
+        pageToken,
+        languageCode: input.languageCode,
+        regionCode: input.regionCode,
+      });
+      for (const place of search.places ?? []) {
+        const mapped = mapNewPlaceToDiscoveredCompany(place, input);
+        if (!mapped) {
+          this.logger?.info('normalized_record_skipped', { reason: 'malformed_provider_row' });
+          continue;
+        }
+        if (mapped.externalId) {
+          if (seen.has(mapped.externalId)) continue;
+          seen.add(mapped.externalId);
+        }
+        discovered.push(mapped);
       }
-      discovered.push(mapped);
+      pageToken = search.nextPageToken;
+      if (!pageToken) break;
+      if (page + 1 >= maxPages) {
+        this.logger?.info('discovery_provider_pagination_capped', { provider: 'google_places', maxPages });
+      }
     }
 
     this.logger?.info('discovery_provider_results', { provider: 'google_places', found: discovered.length });
     return discovered;
   }
 
-  private async searchText(textQuery: string) {
+  private async searchText(params: {
+    textQuery: string;
+    pageToken?: string;
+    languageCode?: string;
+    regionCode?: string;
+  }) {
+    const body: Record<string, unknown> = { textQuery: params.textQuery, pageSize: 20 };
+    if (params.pageToken) body.pageToken = params.pageToken;
+    if (params.languageCode) body.languageCode = params.languageCode;
+    if (params.regionCode) body.regionCode = params.regionCode;
+
     let lastError = 'UNKNOWN_ERROR';
     for (let attempt = 0; attempt < 3; attempt += 1) {
+      this.requests += 1;
       const response = await this.fetchImpl('https://places.googleapis.com/v1/places:searchText', {
         method: 'POST',
         headers: {
@@ -152,7 +186,7 @@ export class GooglePlacesDiscoverySource implements DiscoverySource {
           'X-Goog-Api-Key': this.apiKey,
           'X-Goog-FieldMask': FIELD_MASK,
         },
-        body: JSON.stringify({ textQuery, pageSize: 20 }),
+        body: JSON.stringify(body),
       });
 
       const json: unknown = await response.json().catch(() => ({}));

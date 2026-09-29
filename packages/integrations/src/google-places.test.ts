@@ -97,4 +97,50 @@ describe('Google Places mapping', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(String(fetchImpl.mock.calls[0]?.[0])).toContain('places.googleapis.com/v1/places:searchText');
   });
+
+  it('fetches one page by default even when more are available', async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ places: [{ id: 'p1', displayName: { text: 'A' } }], nextPageToken: 'next' }),
+    }));
+    const source = new GooglePlacesDiscoverySource('test-key', undefined, fetchImpl as unknown as typeof fetch);
+    await source.discover({ country: 'Singapore', city: 'Singapore', keyword: 'dental' });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(source.requestCount).toBe(1);
+  });
+
+  it('follows nextPageToken up to maxPages with region and language hints', async () => {
+    const pages = [
+      { places: [{ id: 'p1', displayName: { text: 'A' } }], nextPageToken: 't2' },
+      { places: [{ id: 'p2', displayName: { text: 'B' } }, { id: 'p1', displayName: { text: 'A' } }], nextPageToken: 't3' },
+      { places: [{ id: 'p3', displayName: { text: 'C' } }], nextPageToken: 't4' },
+    ];
+    const bodies: Array<Record<string, unknown>> = [];
+    const fetchImpl = vi.fn(async (_url: string, init: { body: string; headers: Record<string, string> }) => {
+      expect(init.headers['X-Goog-FieldMask']).toContain('nextPageToken');
+      bodies.push(JSON.parse(init.body));
+      return { ok: true, json: async () => pages[bodies.length - 1] };
+    });
+    const source = new GooglePlacesDiscoverySource('test-key', undefined, fetchImpl as unknown as typeof fetch);
+    const result = await source.discover({
+      country: 'Japan',
+      city: 'Shinjuku, Tokyo',
+      keyword: 'dentist',
+      maxPages: 5,
+      regionCode: 'JP',
+      languageCode: 'ja',
+    });
+    expect(result.map((r) => r.externalId)).toEqual(['p1', 'p2', 'p3']);
+    expect(source.requestCount).toBe(3);
+    expect(bodies[0]).toEqual({ textQuery: 'dentist in Shinjuku, Tokyo, Japan', pageSize: 20, languageCode: 'ja', regionCode: 'JP' });
+    expect(bodies[1]).toMatchObject({ pageToken: 't2', textQuery: 'dentist in Shinjuku, Tokyo, Japan' });
+    expect(bodies[2]).toMatchObject({ pageToken: 't3' });
+  });
+
+  it('stops paging when there is no nextPageToken', async () => {
+    const fetchImpl = vi.fn(async () => ({ ok: true, json: async () => ({ places: [{ id: 'p1', displayName: { text: 'A' } }] }) }));
+    const source = new GooglePlacesDiscoverySource('test-key', undefined, fetchImpl as unknown as typeof fetch);
+    await source.discover({ country: 'Malaysia', city: 'Ipoh, Perak', keyword: 'gym', maxPages: 3 });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
 });

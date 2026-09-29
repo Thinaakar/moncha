@@ -231,8 +231,64 @@ export interface Logger {
   error(event: string, fields?: Record<string, unknown>): void;
 }
 
+/** Optional provider hints; sources that do not support a field ignore it. */
+export type DiscoverySearchOptions = {
+  /** Result pages to fetch (Google Places: 20 per page, max 3). Defaults to 1. */
+  maxPages?: number;
+  /** CLDR region code used to bias results, e.g. SG, MY, JP. */
+  regionCode?: string;
+  /** Language for place names/addresses, e.g. en, ja. */
+  languageCode?: string;
+};
+
+export type DiscoverInput = { country: string; city: string; keyword: string } & DiscoverySearchOptions;
+
 export interface DiscoverySource {
-  discover(input: { country: string; city: string; keyword: string }): Promise<DiscoveredCompany[]>;
+  discover(input: DiscoverInput): Promise<DiscoveredCompany[]>;
+}
+
+export type DiscoveryTargetStatus = 'pending' | 'done' | 'failed';
+
+export type DiscoveryTargetRecord = {
+  id: string;
+  tenantId: string;
+  source: string;
+  countryCode: string;
+  city: string;
+  keyword: string;
+  status: DiscoveryTargetStatus;
+  attempts: number;
+  calls: number;
+  found: number;
+  created: number;
+  lastError?: string | null;
+  lastRunAt?: Date | null;
+};
+
+export type DiscoveryTargetKey = { tenantId: string; source: string; countryCode: string };
+
+export interface DiscoveryTargetRepo {
+  /** Inserts missing city × keyword targets; existing rows keep their progress. Returns rows inserted. */
+  ensure(key: DiscoveryTargetKey, pairs: Array<{ city: string; keyword: string }>): Promise<number>;
+  /** Pending targets plus failed ones still under maxAttempts, in plan order (largest city first). */
+  nextBatch(
+    key: DiscoveryTargetKey,
+    limit: number,
+    maxAttempts: number,
+    filter?: { cities?: string[]; keywords?: string[] },
+  ): Promise<DiscoveryTargetRecord[]>;
+  markStarted(id: string): Promise<void>;
+  markDone(id: string, stats: { calls: number; found: number; created: number }): Promise<void>;
+  markFailed(id: string, error: string, calls: number): Promise<void>;
+  counts(key: DiscoveryTargetKey): Promise<Record<DiscoveryTargetStatus, number>>;
+  /** Sets every target for the country back to pending (re-crawl). Returns rows reset. */
+  reset(key: DiscoveryTargetKey): Promise<number>;
+}
+
+export interface DiscoveryUsageRepo {
+  get(tenantId: string, source: string, day: string): Promise<number>;
+  /** Adds provider calls for the day and returns the new total. */
+  add(tenantId: string, source: string, day: string, calls: number): Promise<number>;
 }
 
 export interface WebsiteAuditor {

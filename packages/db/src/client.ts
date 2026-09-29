@@ -9,9 +9,9 @@ function withConnectTimeout(url: string | undefined) {
     if (!u.searchParams.has('connect_timeout')) {
       u.searchParams.set('connect_timeout', '30');
     }
-    // Neon pooler / PgBouncer: disable prepared-statement cache so schema
-    // resets don't hit "cached plan must not change result type".
-    if (u.hostname.includes('-pooler.') && !u.searchParams.has('pgbouncer')) {
+    // Opt-in only: pgbouncer=true makes every query ~4-5x slower against Neon's pooler, which
+    // supports prepared statements. withDbRetry reconnects on "cached plan must not change result type".
+    if (process.env.PRISMA_PGBOUNCER === '1' && !u.searchParams.has('pgbouncer')) {
       u.searchParams.set('pgbouncer', 'true');
     }
     return u.toString();

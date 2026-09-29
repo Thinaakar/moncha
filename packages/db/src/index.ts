@@ -9,5 +9,6 @@ export * from './repositories/host-audit-cache';
 export * from './repositories/review-task';
 export * from './repositories/audit-log';
 export * from './repositories/llm-usage';
+export * from './repositories/discovery';
 export * from './repositories/worker-heartbeat';
 export * from './repositories/user';

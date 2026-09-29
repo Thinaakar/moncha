@@ -1,0 +1,27 @@
+---
+description: Backend-only work. Never modify the frontend (apps/console).
+alwaysApply: true
+---
+
+# Rule 1: Backend only — do not touch the frontend
+
+The user works on the backend only. The frontend is off-limits.
+
+## Never edit, create, delete or reformat
+- `apps/console/**` (Next.js pages, components, API routes, `lib/`, `next.config.ts`, `tsconfig.json`, `package.json`)
+- Frontend dependencies (never `pnpm --filter @moncha/console add|remove`)
+
+## Allowed (backend)
+- `apps/worker/**`
+- `packages/**` (`db`, `domain`, `contracts`, `integrations`, `crawling`, `config`)
+- Prisma schema/migrations (Neon **dev** branch only; never prod)
+
+## If a backend change seems to need a frontend change
+Stop and tell the user what the console would need. Do not make the change.
+Keep shared contracts backward compatible so the console keeps working unchanged.
+
+## Environment
+- Backend env lives in `apps/worker/.env` (template: `apps/worker/.env.example`).
+- `apps/worker/src/poller.ts` loads `apps/worker/.env` first; the repo-root `.env` only fills missing keys.
+- Put new backend keys in `apps/worker/.env`. Do not edit the repo-root `.env` (the console reads it).
+- Never print secret values; show keys only.

@@ -407,6 +407,30 @@ describe('ingest and discovery', () => {
     expect(canTransitionJob('failed', 'running')).toBe(true);
   });
 
+  it('ingests in parallel without duplicating chain branches that share a domain', async () => {
+    const { companyRepo, leadRepo, jobRepo, websiteRepo, companies } = memory();
+    const found = [
+      { name: 'Chain Dental Tampines', domain: 'chaindental.example', source: 'google_places', externalId: 'a' },
+      { name: 'Solo Clinic', domain: 'solo.example', source: 'google_places', externalId: 'b' },
+      { name: 'Chain Dental Bedok', domain: 'www.chaindental.example', source: 'google_places', externalId: 'c' },
+      { name: 'No Site Gym', source: 'google_places', externalId: 'd' },
+      { name: 'Chain Dental Orchard', domain: 'chaindental.example', source: 'google_places', externalId: 'e' },
+    ];
+    const result = await discoverCompanies(
+      {
+        source: { discover: async () => found },
+        companies: companyRepo,
+        leads: leadRepo,
+        websites: websiteRepo,
+        jobs: jobRepo,
+        logger: createSilentLogger(),
+      },
+      { tenantId: 't1', country: 'Singapore', city: 'Tampines', keyword: 'dentist', concurrency: 5 },
+    );
+    expect(result).toMatchObject({ found: 5, created: 3, duplicates: 2, noWebsite: 1 });
+    expect(companies.filter((c) => c.domain === 'chaindental.example')).toHaveLength(1);
+  });
+
   it('does not double-ingest a done discovery job', async () => {
     const { companyRepo, leadRepo, jobRepo, websiteRepo, companies } = memory();
     const job = await jobRepo.create({

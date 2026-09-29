@@ -95,6 +95,20 @@ export const sourceImportSchema = z
 
 export const discoverSchema = discoverPlacesSchema;
 
+/** Country-wide crawl (worker): every city × industry in the country. City/keyword are not inputs. */
+export const countryDiscoverySchema = z.object({
+  country: z.string().trim().min(1),
+  source: z.literal('google_places').default('google_places'),
+  /** Optional subset of the country's search areas; default is all of them. */
+  cities: z.array(z.string().trim().min(1)).min(1).optional(),
+  /** Optional industry list; default is the built-in list. */
+  industries: z.array(z.string().trim().min(1)).min(1).optional(),
+  maxPages: z.coerce.number().int().min(1).max(3).default(3),
+  maxSearches: z.coerce.number().int().min(1).optional(),
+  maxCallsPerDay: z.coerce.number().int().min(1).optional(),
+  reset: z.boolean().default(false),
+});
+
 export const manualLeadSchema = z.object({
   name: z.string().trim().min(1),
   domain: z.string().trim().optional(),
@@ -152,6 +166,7 @@ export type EvidenceType = z.infer<typeof evidenceTypeSchema>;
 export type ChannelType = z.infer<typeof channelTypeSchema>;
 export type DiscoverInput = z.infer<typeof discoverPlacesSchema>;
 export type SourceImportInput = z.infer<typeof sourceImportSchema>;
+export type CountryDiscoveryRequest = z.infer<typeof countryDiscoverySchema>;
 export type ManualLeadInput = z.infer<typeof manualLeadSchema>;
 export type LeadListQueryInput = z.infer<typeof leadListQuerySchema>;
 export type ResolveReviewInput = z.infer<typeof resolveReviewSchema>;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  countryDiscoverySchema,
   isLeadQualified,
   leadListQuerySchema,
   llmAssistantOutputSchema,
@@ -9,6 +10,21 @@ import {
 } from './index';
 
 describe('API validation', () => {
+  it('accepts a country-only crawl request with defaults', () => {
+    expect(countryDiscoverySchema.parse({ country: 'Malaysia' })).toEqual({
+      country: 'Malaysia',
+      source: 'google_places',
+      maxPages: 3,
+      reset: false,
+    });
+    expect(countryDiscoverySchema.safeParse({ country: '' }).success).toBe(false);
+    expect(countryDiscoverySchema.safeParse({ country: 'Japan', maxPages: 4 }).success).toBe(false);
+  });
+
+  it('still requires city and keyword for a single Discover search', () => {
+    expect(sourceImportSchema.safeParse({ source: 'google_places', country: 'Singapore' }).success).toBe(false);
+  });
+
   it('accepts a google places discovery request', () => {
     const parsed = sourceImportSchema.parse({
       source: 'google_places',

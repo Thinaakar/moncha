@@ -5,12 +5,14 @@
   "scripts": {
     "dev": "tsx watch src/poller.ts",
     "start": "tsx src/poller.ts",
+    "discover": "tsx src/discover.ts",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "node -e \"process.exit(0)\"",
     "test": "node -e \"process.exit(0)\""
   },
   "dependencies": {
+    "@moncha/contracts": "workspace:*",
     "@moncha/crawling": "workspace:*",
     "@moncha/db": "workspace:*",
     "@moncha/domain": "workspace:*",

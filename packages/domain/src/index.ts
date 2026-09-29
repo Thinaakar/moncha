@@ -13,3 +13,6 @@ export * from './use-cases/auditLeadWebsite';
 export * from './use-cases/runPlacesDiscovery';
 export * from './use-cases/runCsvImport';
 export * from './use-cases/runWebsiteAuditJob';
+export * from './use-cases/runCountryDiscovery';
+export * from './discovery/countries';
+export * from './discovery/industries';

@@ -134,6 +134,8 @@ export class PrismaJobRunRepository implements JobRepo {
   async recoverStuck(staleBefore: Date) {
     const result = await this.db.jobRun.updateMany({
       where: {
+        // Only the type claimJobs hands out; other runners own their own job rows.
+        type: 'website_audit',
         status: 'running',
         lockedAt: { lt: staleBefore },
       },

@@ -119,7 +119,9 @@ export class PrismaWebsiteAuditRepository implements WebsiteAuditRepo {
         include: { evidenceItems: true, detectedChannels: true },
       });
       return created;
-    });
+    // Nested evidence/channel inserts are one round trip each; Prisma's 2s/5s defaults are too
+    // tight against a remote Neon region.
+    }, { maxWait: 15_000, timeout: 30_000 });
 
     return mapAudit(
       audit,

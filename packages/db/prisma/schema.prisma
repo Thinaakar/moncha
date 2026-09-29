@@ -93,6 +93,12 @@ enum ReviewTaskStatus {
   resolved
 }
 
+enum DiscoveryTargetStatus {
+  pending
+  done
+  failed
+}
+
 model Tenant {
   id               String            @id @default(cuid())
   name             String
@@ -111,6 +117,8 @@ model Tenant {
   hostAuditCaches  HostAuditCache[]
   llmResultCaches  LlmResultCache[]
   llmUsages        LlmUsage[]
+  discoveryTargets DiscoveryTarget[]
+  discoveryUsages  DiscoveryUsage[]
 }
 
 model User {
@@ -399,4 +407,42 @@ model LlmUsage {
   tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, day])
+}
+
+/// One country-crawl search (city × keyword) and its progress, so crawls resume across runs.
+model DiscoveryTarget {
+  id          String                @id @default(cuid())
+  tenantId    String
+  source      String
+  /// ISO 3166-1 alpha-2, e.g. SG, MY, JP.
+  countryCode String
+  city        String
+  keyword     String
+  /// Plan order: largest city first.
+  rank        Int                   @default(0)
+  status      DiscoveryTargetStatus @default(pending)
+  attempts    Int                   @default(0)
+  calls       Int                   @default(0)
+  found       Int                   @default(0)
+  created     Int                   @default(0)
+  lastError   String?
+  lastRunAt   DateTime?
+  createdAt   DateTime              @default(now())
+  tenant      Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, source, countryCode, city, keyword])
+  @@index([tenantId, source, countryCode, status, rank])
+}
+
+/// Source of truth for DISCOVERY_MAX_CALLS_PER_DAY. Counts every provider HTTP request.
+model DiscoveryUsage {
+  id       String @id @default(cuid())
+  tenantId String
+  source   String
+  /// UTC calendar day as YYYY-MM-DD.
+  day      String
+  calls    Int    @default(0)
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, source, day])
 }

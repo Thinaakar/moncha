@@ -79,6 +79,9 @@ importers:
 
   apps/worker:
     dependencies:
+      '@moncha/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       '@moncha/crawling':
         specifier: workspace:*
         version: link:../../packages/crawling
