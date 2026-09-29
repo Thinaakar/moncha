@@ -6,6 +6,8 @@ import {
   llmAssistantOutputSchema,
   manualLeadSchema,
   resolveReviewSchema,
+  scheduleCreateSchema,
+  scheduleRunsQuerySchema,
   sourceImportSchema,
 } from './index';
 
@@ -19,6 +21,18 @@ describe('API validation', () => {
     });
     expect(countryDiscoverySchema.safeParse({ country: '' }).success).toBe(false);
     expect(countryDiscoverySchema.safeParse({ country: 'Japan', maxPages: 4 }).success).toBe(false);
+  });
+
+  it('validates daily schedule requests', () => {
+    expect(scheduleCreateSchema.parse({ country: ' Malaysia ', time: '10:00' })).toEqual({
+      country: 'Malaysia',
+      time: '10:00',
+    });
+    expect(scheduleCreateSchema.safeParse({ country: 'Japan', time: '9:00' }).success).toBe(false);
+    expect(scheduleCreateSchema.safeParse({ country: 'Japan', time: '24:00' }).success).toBe(false);
+    expect(scheduleRunsQuerySchema.parse({})).toEqual({ limit: 50 });
+    expect(scheduleRunsQuerySchema.parse({ limit: '10' })).toEqual({ limit: 10 });
+    expect(scheduleRunsQuerySchema.safeParse({ limit: '500' }).success).toBe(false);
   });
 
   it('still requires city and keyword for a single Discover search', () => {

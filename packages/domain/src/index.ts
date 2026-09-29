@@ -14,5 +14,8 @@ export * from './use-cases/runPlacesDiscovery';
 export * from './use-cases/runCsvImport';
 export * from './use-cases/runWebsiteAuditJob';
 export * from './use-cases/runCountryDiscovery';
+export * from './use-cases/runCountryDiscoveryJob';
+export * from './use-cases/discoverySchedules';
 export * from './discovery/countries';
+export * from './discovery/schedule-time';
 export * from './discovery/industries';

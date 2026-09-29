@@ -151,6 +151,22 @@ describe('runCountryDiscovery', () => {
     expect(src.seen.map((s) => s.keyword)).toEqual(['spa']);
   });
 
+  it('stops at the per-run call budget even when the daily budget has room', async () => {
+    const src = countingSource();
+    const result = await runCountryDiscovery(deps(src), {
+      tenantId: 't1',
+      country: 'Singapore',
+      source: 'google_places',
+      maxCallsPerDay: 1000,
+      maxCallsPerRun: 3,
+      cities: ['Orchard'],
+      industries: ['dentist', 'gym', 'spa'],
+    });
+    // 2 + 1 (second search capped to the one call left in this run)
+    expect(result).toMatchObject({ searches: 2, calls: 3, stoppedReason: 'run_budget_reached' });
+    expect(src.seen.map((s) => s.maxPages)).toEqual([3, 1]);
+  });
+
   it('stops the whole run on a provider error that would repeat for every target', async () => {
     const src = countingSource(() => 'Google Places request denied: API key not valid');
     const result = await runCountryDiscovery(deps(src), {

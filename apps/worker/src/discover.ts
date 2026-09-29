@@ -1,16 +1,15 @@
 import './env';
 import { countryDiscoverySchema } from '@moncha/contracts';
+import { prisma, PrismaDiscoveryTargetRepository, PrismaDiscoveryUsageRepository } from '@moncha/db';
 import {
-  prisma,
-  PrismaCompanyRepository,
-  PrismaDiscoveryTargetRepository,
-  PrismaDiscoveryUsageRepository,
-  PrismaJobRunRepository,
-  PrismaLeadRepository,
-  PrismaWebsiteRepository,
-} from '@moncha/db';
-import { createConsoleLogger, resolveCountry, runCountryDiscovery, supportedCountries, utcDay } from '@moncha/domain';
-import { GooglePlacesDiscoverySource } from '@moncha/integrations';
+  createConsoleLogger,
+  resolveCountry,
+  runCountryDiscoveryJob,
+  supportedCountries,
+  utcDay,
+  type CountryDiscoveryJobPayload,
+} from '@moncha/domain';
+import { countryCrawlDeps, discoveryBudget, liveCountryCrawls } from './country-crawls';
 
 const USAGE = `Country-wide discovery: searches every city × industry in a country and queues website audits.
 
@@ -85,25 +84,29 @@ async function main() {
     return;
   }
 
-  await releaseStaleCrawls(tenantId, profile.name);
+  const live = await liveCountryCrawls(tenantId, profile.name);
+  if (live.length) {
+    throw new Error(
+      `A ${profile.name} crawl is already running (job ${live.join(', ')}). ` +
+        'Stop it first, or wait 15 minutes after it last searched.',
+    );
+  }
 
   const logger = createConsoleLogger();
-  const source = new GooglePlacesDiscoverySource(process.env.GOOGLE_PLACES_API_KEY || '', logger);
-  const jobs = new PrismaJobRunRepository(prisma);
-  const job = await jobs.create({
-    tenantId,
-    type: 'places_discovery',
-    payload: { mode: 'country', origin: 'worker', ...input, country: profile.name },
-  });
-  await jobs.update(tenantId, job.id, { status: 'running', startedAt: new Date(), lockedAt: new Date() });
-
-  // lockedAt doubles as this crawl's heartbeat (see releaseStaleCrawls).
-  const trackedTargets: typeof targets = Object.assign(Object.create(targets), {
-    markStarted: async (id: string) => {
-      await targets.markStarted(id);
-      await jobs.update(tenantId, job.id, { lockedAt: new Date() });
-    },
-  });
+  const deps = countryCrawlDeps(logger);
+  const payload: CountryDiscoveryJobPayload = {
+    mode: 'country',
+    origin: 'manual',
+    country: profile.name,
+    countryCode: profile.code,
+    cities: input.cities,
+    industries: input.industries,
+    maxPages: input.maxPages,
+    maxSearches: input.maxSearches,
+    maxCallsPerDay: input.maxCallsPerDay,
+    reset: input.reset,
+  };
+  const job = await deps.jobs.create({ tenantId, type: 'country_discovery', payload, status: 'running', maxAttempts: 1 });
 
   const controller = new AbortController();
   process.on('SIGINT', () => {
@@ -112,71 +115,14 @@ async function main() {
     controller.abort();
   });
 
-  try {
-    const result = await runCountryDiscovery(
-      {
-        source,
-        providerCalls: () => source.requestCount,
-        targets: trackedTargets,
-        usage,
-        jobs,
-        companies: new PrismaCompanyRepository(prisma),
-        leads: new PrismaLeadRepository(prisma),
-        websites: new PrismaWebsiteRepository(prisma),
-        logger,
-      },
-      { tenantId, ...input, maxCallsPerDay: input.maxCallsPerDay ?? 500, signal: controller.signal },
-    );
-    await jobs.update(tenantId, job.id, {
-      status: result.stoppedReason === 'provider_error' ? 'failed' : 'done',
-      result,
-      lastError: result.stoppedReason === 'provider_error' ? result.lastError : null,
-      finishedAt: new Date(),
-    });
-    console.log(JSON.stringify(result, null, 2));
-    if (result.stoppedReason === 'provider_error') process.exitCode = 1;
-  } catch (error) {
-    await jobs.update(tenantId, job.id, {
-      status: 'failed',
-      lastError: error instanceof Error ? error.message : String(error),
-      finishedAt: new Date(),
-    });
-    throw error;
-  }
-}
-
-const STALE_CRAWL_MS = 15 * 60_000;
-
-/**
- * One crawl per country at a time. A "running" crawl with no search activity for 15 minutes was
- * killed without a clean shutdown; mark it failed so it does not look live forever.
- */
-async function releaseStaleCrawls(tenantId: string, country: string) {
-  const running = await prisma.jobRun.findMany({
-    where: {
-      tenantId,
-      type: 'places_discovery',
-      status: 'running',
-      payload: { path: ['mode'], equals: 'country' },
-      AND: [{ payload: { path: ['country'], equals: country } }],
-    },
-    select: { id: true, startedAt: true, lockedAt: true },
+  const result = await runCountryDiscoveryJob(deps, {
+    job,
+    source: input.source,
+    maxCallsPerDay: discoveryBudget().maxCallsPerDay,
+    signal: controller.signal,
   });
-  const heartbeat = (j: (typeof running)[number]) => (j.lockedAt ?? j.startedAt)?.getTime() ?? 0;
-  const live = running.filter((j) => Date.now() - heartbeat(j) < STALE_CRAWL_MS);
-  const stale = running.filter((j) => !live.includes(j));
-  if (stale.length) {
-    await prisma.jobRun.updateMany({
-      where: { id: { in: stale.map((j) => j.id) } },
-      data: { status: 'failed', lastError: 'interrupted: process ended without a clean shutdown', finishedAt: new Date() },
-    });
-  }
-  if (live.length) {
-    throw new Error(
-      `A ${country} crawl is already running (job ${live.map((j) => j.id).join(', ')}). ` +
-        'Stop it first, or wait 15 minutes after it last searched.',
-    );
-  }
+  console.log(JSON.stringify(result, null, 2));
+  if (result.stoppedReason === 'provider_error') process.exitCode = 1;
 }
 
 main()

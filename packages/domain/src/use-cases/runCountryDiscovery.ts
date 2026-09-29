@@ -35,6 +35,8 @@ export type CountryDiscoveryInput = {
   country: string;
   source: string;
   maxCallsPerDay: number;
+  /** Provider calls this run may spend (on top of the daily limit); scheduled runs are small slices. */
+  maxCallsPerRun?: number;
   /** Restrict this run to these search areas (must match the country's city labels). */
   cities?: string[];
   industries?: string[];
@@ -52,6 +54,7 @@ export type CountryDiscoveryInput = {
 export type CountryDiscoveryStopReason =
   | 'completed'
   | 'daily_budget_reached'
+  | 'run_budget_reached'
   | 'max_searches_reached'
   | 'provider_error'
   | 'aborted';
@@ -128,6 +131,7 @@ export async function runCountryDiscovery(
     plannedTargets: pairs.length,
     newTargets,
     maxCallsPerDay: input.maxCallsPerDay,
+    maxCallsPerRun: input.maxCallsPerRun,
     callsToday: result.callsToday,
   });
 
@@ -146,11 +150,17 @@ export async function runCountryDiscovery(
       }
       const day = utcDay(now());
       result.callsToday = await deps.usage.get(input.tenantId, input.source, day);
-      const remaining = input.maxCallsPerDay - result.callsToday;
-      if (remaining <= 0) {
+      const remainingToday = input.maxCallsPerDay - result.callsToday;
+      if (remainingToday <= 0) {
         result.stoppedReason = 'daily_budget_reached';
         break outer;
       }
+      const remainingRun = input.maxCallsPerRun ? input.maxCallsPerRun - result.calls : Infinity;
+      if (remainingRun <= 0) {
+        result.stoppedReason = 'run_budget_reached';
+        break outer;
+      }
+      const remaining = Math.min(remainingToday, remainingRun);
 
       await deps.targets.markStarted(target.id);
       const before = deps.providerCalls();

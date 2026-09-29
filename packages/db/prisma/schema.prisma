@@ -57,6 +57,8 @@ enum JobType {
   places_discovery
   csv_import
   website_audit
+  /// Country-wide crawl slice (worker): scheduled or started from the discover CLI.
+  country_discovery
 }
 
 enum AuditMethod {
@@ -117,8 +119,9 @@ model Tenant {
   hostAuditCaches  HostAuditCache[]
   llmResultCaches  LlmResultCache[]
   llmUsages        LlmUsage[]
-  discoveryTargets DiscoveryTarget[]
-  discoveryUsages  DiscoveryUsage[]
+  discoveryTargets   DiscoveryTarget[]
+  discoveryUsages    DiscoveryUsage[]
+  discoverySchedules DiscoverySchedule[]
 }
 
 model User {
@@ -445,4 +448,26 @@ model DiscoveryUsage {
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, source, day])
+}
+
+/// Daily country crawl at a local wall-clock time. Each run is a country_discovery JobRun.
+model DiscoverySchedule {
+  id          String    @id @default(cuid())
+  tenantId    String
+  /// ISO 3166-1 alpha-2, e.g. SG, MY, JP.
+  countryCode String
+  /// 24h local time "HH:mm" in `timezone`.
+  timeOfDay   String
+  /// IANA zone, e.g. Asia/Kuala_Lumpur.
+  timezone    String
+  enabled     Boolean   @default(true)
+  /// Next slot in UTC; the scheduler picks rows where nextRunAt <= now.
+  nextRunAt   DateTime
+  lastRunAt   DateTime?
+  createdAt   DateTime  @default(now())
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, countryCode, timeOfDay])
+  @@index([enabled, nextRunAt])
+  @@index([tenantId, countryCode])
 }

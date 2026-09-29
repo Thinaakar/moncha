@@ -9,7 +9,7 @@ export type LeadQueue =
   | 'NEEDS_REVIEW'
   | 'INACTIVE';
 export type JobStatus = 'pending' | 'running' | 'done' | 'failed';
-export type JobType = 'places_discovery' | 'csv_import' | 'website_audit';
+export type JobType = 'places_discovery' | 'csv_import' | 'website_audit' | 'country_discovery';
 export type AuditMethod = 'html' | 'render' | 'llm';
 export type EvidenceType =
   | 'script_src'
@@ -291,6 +291,50 @@ export interface DiscoveryUsageRepo {
   add(tenantId: string, source: string, day: string, calls: number): Promise<number>;
 }
 
+export type DiscoveryScheduleRecord = {
+  id: string;
+  tenantId: string;
+  countryCode: string;
+  /** Local wall-clock time, "HH:mm". */
+  timeOfDay: string;
+  /** IANA time zone the time is in, e.g. Asia/Kuala_Lumpur. */
+  timezone: string;
+  enabled: boolean;
+  nextRunAt: Date;
+  lastRunAt?: Date | null;
+  createdAt?: Date;
+};
+
+export type DiscoveryScheduleCreate = {
+  tenantId: string;
+  countryCode: string;
+  timeOfDay: string;
+  timezone: string;
+  nextRunAt: Date;
+};
+
+export interface DiscoveryScheduleRepo {
+  /** Returns null when the tenant already has a schedule for this country at this time. */
+  create(data: DiscoveryScheduleCreate): Promise<DiscoveryScheduleRecord | null>;
+  list(tenantId: string): Promise<DiscoveryScheduleRecord[]>;
+  delete(tenantId: string, id: string): Promise<boolean>;
+  deleteByCountry(tenantId: string, countryCode: string): Promise<number>;
+  /** Enabled schedules of every tenant with nextRunAt <= now, oldest first. */
+  due(now: Date, limit: number): Promise<DiscoveryScheduleRecord[]>;
+  /**
+   * Atomically moves nextRunAt from `expected` to `next` and, when `job` is given, creates that job
+   * unless its dedupeKey already exists. `advanced` is false when another scheduler got there first.
+   */
+  advance(
+    schedule: DiscoveryScheduleRecord,
+    next: Date,
+    ranAt: Date,
+    job?: JobCreate,
+  ): Promise<{ advanced: boolean; job: JobRunRecord | null }>;
+  /** Newest country_discovery jobs for the tenant (scheduled and manual). */
+  recentRuns(tenantId: string, limit: number): Promise<JobRunRecord[]>;
+}
+
 export interface WebsiteAuditor {
   audit(input: { tenantId: string; leadId: string; url: string }): Promise<WebsiteAuditResult>;
 }
@@ -406,6 +450,8 @@ export type JobCreate = {
   dedupeKey?: string | null;
   maxAttempts?: number;
   runAfter?: Date;
+  /** "running" creates the job already claimed by the caller, so no queue worker picks it up. */
+  status?: 'pending' | 'running';
 };
 
 export type JobPatch = {

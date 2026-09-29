@@ -109,6 +109,25 @@ export const countryDiscoverySchema = z.object({
   reset: z.boolean().default(false),
 });
 
+/** Daily discovery schedule: run a slice of the country crawl every day at `time` in `timezone`. */
+export const scheduleCreateSchema = z.object({
+  country: z.string().trim().min(1),
+  time: z
+    .string()
+    .trim()
+    .regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Use 24-hour HH:mm'),
+  /** IANA zone; the server defaults to Asia/Kuala_Lumpur. */
+  timezone: z.string().trim().min(1).optional(),
+});
+
+export const scheduleDeleteCountrySchema = z.object({
+  country: z.string().trim().min(1),
+});
+
+export const scheduleRunsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+});
+
 export const manualLeadSchema = z.object({
   name: z.string().trim().min(1),
   domain: z.string().trim().optional(),
@@ -167,6 +186,8 @@ export type ChannelType = z.infer<typeof channelTypeSchema>;
 export type DiscoverInput = z.infer<typeof discoverPlacesSchema>;
 export type SourceImportInput = z.infer<typeof sourceImportSchema>;
 export type CountryDiscoveryRequest = z.infer<typeof countryDiscoverySchema>;
+export type ScheduleCreateRequest = z.infer<typeof scheduleCreateSchema>;
+export type ScheduleRunsQuery = z.infer<typeof scheduleRunsQuerySchema>;
 export type ManualLeadInput = z.infer<typeof manualLeadSchema>;
 export type LeadListQueryInput = z.infer<typeof leadListQuerySchema>;
 export type ResolveReviewInput = z.infer<typeof resolveReviewSchema>;

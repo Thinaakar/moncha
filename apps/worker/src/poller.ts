@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import {
   prisma,
   PrismaAuditLogRepository,
+  PrismaDiscoveryScheduleRepository,
   PrismaHostAuditCacheRepository,
   PrismaJobRunRepository,
   PrismaLeadRepository,
@@ -11,7 +12,15 @@ import {
   PrismaWebsiteRepository,
   withDbRetry,
 } from '@moncha/db';
-import { createConsoleLogger, runWebsiteAuditJob } from '@moncha/domain';
+import {
+  createConsoleLogger,
+  enqueueDueSchedules,
+  resolveCountry,
+  runCountryDiscoveryJob,
+  runWebsiteAuditJob,
+  type CountryDiscoveryJobPayload,
+  type JobRunRecord,
+} from '@moncha/domain';
 import {
   closeRenderBrowser,
   defaultEvidenceRoot,
@@ -19,14 +28,21 @@ import {
   MonchaWebsiteAuditor,
 } from '@moncha/crawling';
 import { createOpenRouterFromEnv } from '@moncha/integrations';
+import { countryCrawlDeps, discoveryBudget, liveCountryCrawls } from './country-crawls';
 
 const WORKER_ID = `worker-${process.env.HOSTNAME || 'local'}-${randomUUID().slice(0, 8)}`;
 const CONCURRENCY = Math.max(1, Number(process.env.WORKER_CONCURRENCY || 3));
 const POLL_MS = Math.max(500, Number(process.env.WORKER_POLL_MS || 2000));
 const STALE_MS = Math.max(60_000, Number(process.env.WORKER_STALE_MS || 10 * 60_000));
+const SCHEDULER_TICK_MS = Math.max(5_000, Number(process.env.SCHEDULER_TICK_MS || 30_000));
+const CRAWL_BUSY_RETRY_MS = 5 * 60_000;
+const SHUTDOWN_WAIT_MS = 120_000;
 
 const logger = createConsoleLogger();
 const jobs = new PrismaJobRunRepository(prisma);
+const schedules = new PrismaDiscoveryScheduleRepository(prisma);
+const crawlAbort = new AbortController();
+let activeCrawl: Promise<void> | null = null;
 const llm = createOpenRouterFromEnv(process.env);
 const evidenceStore = new LocalDiskEvidenceStore(defaultEvidenceRoot());
 const hostCache = new PrismaHostAuditCacheRepository(prisma);
@@ -98,16 +114,92 @@ async function tick() {
   );
 }
 
+async function schedulerTick() {
+  await withDbRetry(() => enqueueDueSchedules({ schedules, logger }));
+}
+
+/** One country crawl at a time per worker; audits keep running in their own loop. */
+async function countryTick() {
+  if (activeCrawl || crawlAbort.signal.aborted) return;
+  const [job] = await withDbRetry(() => jobs.claimJobs(WORKER_ID, 1, 'country_discovery'));
+  if (!job) return;
+  activeCrawl = runCrawl(job).finally(() => {
+    activeCrawl = null;
+  });
+  await activeCrawl;
+}
+
+async function runCrawl(job: JobRunRecord) {
+  const payload = (job.payload || {}) as Partial<CountryDiscoveryJobPayload>;
+  const profile = resolveCountry(payload.countryCode || payload.country || '');
+  if (profile) {
+    const live = await liveCountryCrawls(job.tenantId, profile.name, job.id);
+    if (live.length) {
+      await jobs.update(job.tenantId, job.id, {
+        status: 'pending',
+        lockedAt: null,
+        lockedBy: null,
+        runAfter: new Date(Date.now() + CRAWL_BUSY_RETRY_MS),
+        lastError: `waiting: ${profile.name} crawl ${live.join(', ')} is still running`,
+      });
+      logger.info('country_job_deferred', { jobId: job.id, country: profile.code, runningJobs: live });
+      return;
+    }
+  }
+  try {
+    const result = await runCountryDiscoveryJob(countryCrawlDeps(logger), {
+      job,
+      ...discoveryBudget(),
+      signal: crawlAbort.signal,
+    });
+    logger.info('country_job_done', {
+      jobId: job.id,
+      country: result.countryCode,
+      stoppedReason: result.stoppedReason,
+      found: result.found,
+      created: result.created,
+      calls: result.calls,
+    });
+  } catch (error) {
+    logger.error('country_job_failed', {
+      jobId: job.id,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+async function every(errorEvent: string, ms: number, fn: () => Promise<void>) {
+  for (;;) {
+    try {
+      await fn();
+    } catch (error) {
+      logger.error(errorEvent, {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+    await new Promise((r) => setTimeout(r, ms));
+  }
+}
+
 async function main() {
   logger.info('worker_started', {
     workerId: WORKER_ID,
     concurrency: CONCURRENCY,
     llm: Boolean(llm),
     render: true,
+    schedulerTickMs: SCHEDULER_TICK_MS,
+    ...discoveryBudget(),
   });
 
+  let stopping = false;
   const shutdown = async () => {
-    logger.info('worker_shutdown', { workerId: WORKER_ID });
+    if (stopping) process.exit(130);
+    stopping = true;
+    logger.info('worker_shutdown', { workerId: WORKER_ID, crawlRunning: Boolean(activeCrawl) });
+    crawlAbort.abort();
+    if (activeCrawl) {
+      await Promise.race([activeCrawl, new Promise((r) => setTimeout(r, SHUTDOWN_WAIT_MS))]);
+    }
     await closeRenderBrowser();
     process.exit(0);
   };
@@ -118,16 +210,11 @@ async function main() {
     void shutdown();
   });
 
-  for (;;) {
-    try {
-      await tick();
-    } catch (error) {
-      logger.error('worker_tick_error', {
-        message: error instanceof Error ? error.message : String(error),
-      });
-    }
-    await new Promise((r) => setTimeout(r, POLL_MS));
-  }
+  await Promise.all([
+    every('worker_tick_error', POLL_MS, tick),
+    every('scheduler_tick_error', SCHEDULER_TICK_MS, schedulerTick),
+    every('country_tick_error', POLL_MS, countryTick),
+  ]);
 }
 
 main().catch(async (error) => {

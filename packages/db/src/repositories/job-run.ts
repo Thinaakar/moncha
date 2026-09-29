@@ -1,7 +1,11 @@
 import type { Prisma, PrismaClient } from '@prisma/client';
 import type { JobCreate, JobPatch, JobRepo, JobRunRecord } from '@moncha/domain';
 
-function mapJob(row: {
+/** Job types the worker claims from the queue. */
+export const WORKER_JOB_TYPES = ['website_audit', 'country_discovery'] as const;
+export type WorkerJobType = (typeof WORKER_JOB_TYPES)[number];
+
+export function mapJob(row: {
   id: string;
   tenantId: string;
   type: JobRunRecord['type'];
@@ -43,6 +47,8 @@ export class PrismaJobRunRepository implements JobRepo {
   constructor(private db: PrismaClient) {}
 
   async create(data: JobCreate) {
+    const now = new Date();
+    const running = data.status === 'running';
     const row = await this.db.jobRun.create({
       data: {
         tenantId: data.tenantId,
@@ -50,7 +56,8 @@ export class PrismaJobRunRepository implements JobRepo {
         payload: data.payload as Prisma.InputJsonValue,
         dedupeKey: data.dedupeKey ?? null,
         maxAttempts: data.maxAttempts ?? 3,
-        runAfter: data.runAfter ?? new Date(),
+        runAfter: data.runAfter ?? now,
+        ...(running ? { status: 'running', attempts: 1, startedAt: now, lockedAt: now } : {}),
       },
     });
     return mapJob(row);
@@ -86,10 +93,14 @@ export class PrismaJobRunRepository implements JobRepo {
   }
 
   /**
-   * Claim up to `limit` pending website_audit jobs using SKIP LOCKED.
+   * Claim up to `limit` pending jobs of one type using SKIP LOCKED.
    * places_discovery / csv_import stay with the console in-process runners.
    */
-  async claimJobs(workerId: string, limit: number): Promise<JobRunRecord[]> {
+  async claimJobs(
+    workerId: string,
+    limit: number,
+    type: WorkerJobType = 'website_audit',
+  ): Promise<JobRunRecord[]> {
     const rows = await this.db.$queryRaw<
       Array<{
         id: string;
@@ -121,7 +132,7 @@ export class PrismaJobRunRepository implements JobRepo {
         SELECT id FROM "JobRun"
         WHERE status = 'pending'
           AND "runAfter" <= NOW()
-          AND type = 'website_audit'
+          AND type = ${type}::"JobType"
         ORDER BY "runAfter" ASC, "createdAt" ASC
         FOR UPDATE SKIP LOCKED
         LIMIT ${limit}
@@ -134,8 +145,8 @@ export class PrismaJobRunRepository implements JobRepo {
   async recoverStuck(staleBefore: Date) {
     const result = await this.db.jobRun.updateMany({
       where: {
-        // Only the type claimJobs hands out; other runners own their own job rows.
-        type: 'website_audit',
+        // Only types claimJobs hands out; other runners own their own job rows.
+        type: { in: [...WORKER_JOB_TYPES] },
         status: 'running',
         lockedAt: { lt: staleBefore },
       },
