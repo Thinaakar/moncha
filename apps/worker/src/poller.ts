@@ -1,5 +1,6 @@
 import './env';
 import { randomUUID } from 'node:crypto';
+import { createServer } from 'node:http';
 import {
   prisma,
   PrismaAuditLogRepository,
@@ -37,6 +38,9 @@ const STALE_MS = Math.max(60_000, Number(process.env.WORKER_STALE_MS || 10 * 60_
 const SCHEDULER_TICK_MS = Math.max(5_000, Number(process.env.SCHEDULER_TICK_MS || 30_000));
 const CRAWL_BUSY_RETRY_MS = 5 * 60_000;
 const SHUTDOWN_WAIT_MS = 120_000;
+/** Set in hosted containers (Cloudflare) so the platform can see the process is up. */
+const HEALTH_PORT = Number(process.env.HEALTH_PORT || 0);
+const STARTED_AT = new Date();
 
 const logger = createConsoleLogger();
 const jobs = new PrismaJobRunRepository(prisma);
@@ -209,6 +213,20 @@ async function main() {
   process.on('SIGTERM', () => {
     void shutdown();
   });
+
+  if (HEALTH_PORT) {
+    createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          ok: true,
+          workerId: WORKER_ID,
+          startedAt: STARTED_AT.toISOString(),
+          crawlRunning: Boolean(activeCrawl),
+        }),
+      );
+    }).listen(HEALTH_PORT, () => logger.info('worker_health_listening', { port: HEALTH_PORT }));
+  }
 
   await Promise.all([
     every('worker_tick_error', POLL_MS, tick),

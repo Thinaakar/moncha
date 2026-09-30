@@ -1,0 +1,224 @@
+{
+  "info": {
+    "name": "Moncha backend (worker test API)",
+    "description": "Start the API with `pnpm --filter @moncha/worker api` (http://127.0.0.1:4000). Start the worker with `pnpm --filter @moncha/worker start` so queued crawls, schedules and audits actually run. Create requests save their ids into collection variables for the follow-up requests.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://127.0.0.1:4000" },
+    { "key": "tenantId", "value": "tenant_moncha_internal" },
+    { "key": "apiKey", "value": "" },
+    { "key": "scheduleId", "value": "" },
+    { "key": "jobId", "value": "" },
+    { "key": "leadId", "value": "" }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "pm.request.headers.upsert({ key: 'x-tenant-id', value: pm.collectionVariables.get('tenantId') });",
+          "const key = pm.collectionVariables.get('apiKey');",
+          "if (key) pm.request.headers.upsert({ key: 'x-api-key', value: key });"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "request": { "method": "GET", "url": "{{baseUrl}}/health" },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": ["pm.test('status 200', () => pm.response.to.have.status(200));"]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Schedules",
+      "item": [
+        {
+          "name": "Save schedule",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/v1/schedules",
+            "body": { "mode": "raw", "raw": "{\n  \"country\": \"Malaysia\",\n  \"time\": \"10:00\"\n}" }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('created (201)', () => pm.response.to.have.status(201));",
+                  "if (pm.response.code === 201) pm.collectionVariables.set('scheduleId', pm.response.json().id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Save schedule (Japan, Tokyo time)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/v1/schedules",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"country\": \"Japan\",\n  \"time\": \"09:30\",\n  \"timezone\": \"Asia/Tokyo\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Save schedule - invalid time (expect 400)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/v1/schedules",
+            "body": { "mode": "raw", "raw": "{\n  \"country\": \"Malaysia\",\n  \"time\": \"25:00\"\n}" }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('rejected (400)', () => pm.response.to.have.status(400));"]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List schedules (grouped by country)",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/schedules" }
+        },
+        {
+          "name": "Run history",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/schedules/runs?limit=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "schedules", "runs"],
+              "query": [{ "key": "limit", "value": "20" }]
+            }
+          }
+        },
+        {
+          "name": "Delete one time",
+          "request": { "method": "DELETE", "url": "{{baseUrl}}/api/v1/schedules/{{scheduleId}}" }
+        },
+        {
+          "name": "Delete country",
+          "request": {
+            "method": "DELETE",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/schedules?country=Malaysia",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "schedules"],
+              "query": [{ "key": "country", "value": "Malaysia" }]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Discovery",
+      "item": [
+        {
+          "name": "Start country crawl now (small)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/v1/discovery/country",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"country\": \"Singapore\",\n  \"maxSearches\": 1\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('queued (202)', () => pm.response.to.have.status(202));",
+                  "if (pm.response.code === 202) pm.collectionVariables.set('jobId', pm.response.json().id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Job status",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/jobs/{{jobId}}" }
+        }
+      ]
+    },
+    {
+      "name": "Leads",
+      "item": [
+        {
+          "name": "List qualified leads",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/leads?queue=QUALIFIED&page=1&pageSize=25",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "leads"],
+              "query": [
+                { "key": "queue", "value": "QUALIFIED" },
+                { "key": "page", "value": "1" },
+                { "key": "pageSize", "value": "25" },
+                { "key": "country", "value": "Singapore", "disabled": true },
+                { "key": "search", "value": "clinic", "disabled": true }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const first = pm.response.json().items?.[0];",
+                  "if (first) pm.collectionVariables.set('leadId', first.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Queue counts",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/leads/counts" }
+        },
+        {
+          "name": "Get lead",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/leads/{{leadId}}" }
+        },
+        {
+          "name": "Add lead manually",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/v1/leads",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Example Dental\",\n  \"domain\": \"example.com\",\n  \"country\": \"Singapore\",\n  \"city\": \"Bedok\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Re-audit lead website",
+          "request": { "method": "POST", "url": "{{baseUrl}}/api/v1/leads/{{leadId}}/audit" }
+        }
+      ]
+    }
+  ]
+}

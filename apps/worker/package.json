@@ -6,6 +6,11 @@
     "dev": "tsx watch src/poller.ts",
     "start": "tsx src/poller.ts",
     "discover": "tsx src/discover.ts",
+    "api": "tsx src/api.ts",
+    "cf:typecheck": "tsc -p cloudflare/tsconfig.json",
+    "cf:check": "wrangler deploy --dry-run",
+    "cf:deploy": "wrangler deploy",
+    "cf:logs": "wrangler tail",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "node -e \"process.exit(0)\"",
@@ -19,9 +24,12 @@
     "@moncha/integrations": "workspace:*"
   },
   "devDependencies": {
+    "@cloudflare/containers": "^0.3.7",
+    "@cloudflare/workers-types": "^5.20260930.1",
     "@moncha/config": "workspace:*",
     "@types/node": "^24.3.0",
     "tsx": "^4.20.5",
-    "typescript": "^5.9.2"
+    "typescript": "^5.9.2",
+    "wrangler": "^4.144.0"
   }
 }

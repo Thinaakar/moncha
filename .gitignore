@@ -9,3 +9,6 @@ coverage
 .neon
 # Worker audit evidence (screenshots, DOM snapshots)
 apps/worker/.data/
+# Wrangler (Cloudflare) local state and secrets
+.wrangler
+.dev.vars*

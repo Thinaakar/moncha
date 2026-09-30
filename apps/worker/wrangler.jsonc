@@ -1,0 +1,47 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "moncha-backend",
+  "account_id": "e390359f1a93734c8f7faa10732501c6",
+  "main": "cloudflare/index.ts",
+  "compatibility_date": "2026-09-29",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "observability": { "enabled": true },
+
+  "containers": [
+    {
+      "class_name": "BackendWorker",
+      "image": "./Dockerfile",
+      "image_build_context": "../..",
+      // 4 GiB: Chromium audits run WORKER_CONCURRENCY pages at once. "basic" (1 GiB) needs WORKER_CONCURRENCY=1.
+      "instance_type": "standard-1",
+      "max_instances": 1,
+      // Neon is in us-east-2; keep the worker in Eastern North America so queries stay fast.
+      "constraints": { "regions": ["ENAM"] }
+    }
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "BACKEND", "class_name": "BackendWorker" }]
+  },
+  "exports": {
+    "BackendWorker": { "type": "durable-object", "storage": "sqlite" }
+  },
+
+  // Restarts the container after deploys, crashes or host restarts.
+  "triggers": { "crons": ["*/5 * * * *"] },
+
+  // Non-secret settings. Secrets (DATABASE_URL, DIRECT_URL, DB_ENV, NEON_BRANCH, PROD_DB_HOST,
+  // GOOGLE_PLACES_API_KEY, OPENROUTER_API_KEY, OPENROUTER_MODEL) go in with `wrangler secret put`
+  // or the dashboard; every var and secret is passed to the container.
+  "vars": {
+    "DEFAULT_TENANT_ID": "tenant_moncha_internal",
+    "DISCOVERY_MAX_CALLS_PER_DAY": "500",
+    "DISCOVERY_MAX_CALLS_PER_RUN": "30",
+    "SCHEDULER_TICK_MS": "30000",
+    "WORKER_CONCURRENCY": "3",
+    "OMIT_CHATBOT_SITES": "false",
+    "OPENROUTER_BASE_URL": "https://openrouter.ai/api/v1",
+    "LLM_TIMEOUT_MS": "20000",
+    "LLM_MAX_CALLS_PER_DAY": "500"
+  }
+}
