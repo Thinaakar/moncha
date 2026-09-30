@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 
-export function WebsiteCheckButton({ leadId }: { leadId: string }) {
+export function WebsiteCheckButton({ leadId, disabled = false }: { leadId: string; disabled?: boolean }) {
   const [msg, setMsg] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -29,11 +29,12 @@ export function WebsiteCheckButton({ leadId }: { leadId: string }) {
   }
 
   return (
-    <div>
-      <button type="button" onClick={run} disabled={busy}>
-        {busy ? 'Queuing…' : 'Enqueue website audit'}
+    <div className="check-action">
+      <button type="button" onClick={run} disabled={busy || disabled}>
+        {busy ? 'Queuing…' : 'Check again'}
       </button>
-      {msg && <div className="notice" style={{ marginTop: 10 }}>{msg}</div>}
+      {disabled ? <p className="muted">Connect a database to run website checks.</p> : null}
+      {msg ? <div className="notice">{msg}</div> : null}
     </div>
   );
 }

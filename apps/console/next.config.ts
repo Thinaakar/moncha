@@ -44,6 +44,7 @@ function forceRootDbEnv() {
 forceRootDbEnv();
 
 const config: NextConfig = {
+  devIndicators: { position: 'bottom-right' },
   transpilePackages: [
     '@moncha/db',
     '@moncha/domain',
