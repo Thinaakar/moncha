@@ -10,7 +10,7 @@ export default function Discover() {
           country dedupes by domain (counts as already saved, not failed).
         </p>
       </section>
-      <DiscoverPanel demo={!process.env.DATABASE_URL} />
+      <DiscoverPanel />
     </main>
   );
 }

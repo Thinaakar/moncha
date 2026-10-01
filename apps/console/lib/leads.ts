@@ -1,5 +1,3 @@
-import type { LeadRow } from '@/components/leads-table';
-import { findDummyLead, type DummyLead } from './dummy-leads';
 import { formatStatus, sourceLabel, websiteLabel } from './ui';
 
 export type TimelineEntry = { label: string; when: string | null };
@@ -27,54 +25,8 @@ export type LeadDetail = {
   live: boolean;
 };
 
-export function dummyRow(lead: DummyLead): LeadRow {
-  return {
-    id: lead.id,
-    name: lead.name,
-    domain: lead.domain,
-    city: lead.city,
-    country: lead.country,
-    queue: lead.queue,
-    website: websiteLabel(lead.websiteStatus, Boolean(lead.domain || lead.websiteStatus)),
-    created: lead.createdAt,
-  };
-}
-
-function dummyDetail(id: string): LeadDetail | null {
-  const lead = findDummyLead(id);
-  if (!lead) return null;
-  const status = websiteLabel(lead.websiteStatus, Boolean(lead.domain || lead.websiteStatus));
-  const checked = status !== 'UNCHECKED' && status !== 'MISSING';
-  const timeline: TimelineEntry[] = [{ label: `Found via ${sourceLabel(lead.source)}`, when: lead.createdAt }];
-  if (checked) timeline.push({ label: `Website checked: ${formatStatus(status)}`, when: lead.createdAt });
-  timeline.push({ label: `Now in ${formatStatus(lead.queue)}`, when: null });
-
-  return {
-    id: lead.id,
-    name: lead.name,
-    domain: lead.domain,
-    phone: lead.phone,
-    address: lead.address,
-    city: lead.city,
-    country: lead.country,
-    queue: lead.queue,
-    verdict: null,
-    vendor: null,
-    website: {
-      status,
-      url: lead.domain ? `https://${lead.domain}` : null,
-      httpStatus: null,
-      title: null,
-      checkedAt: checked ? lead.createdAt : null,
-    },
-    created: lead.createdAt,
-    timeline,
-    live: false,
-  };
-}
-
 export async function loadLeadDetail(id: string, auth: { tenantId: string } | null): Promise<LeadDetail | null> {
-  if (!auth || !process.env.DATABASE_URL) return dummyDetail(id);
+  if (!auth || !process.env.DATABASE_URL) return null;
 
   const { prisma } = await import('@moncha/db');
   const lead = await prisma.lead.findFirst({

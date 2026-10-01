@@ -2,7 +2,6 @@
 
 import Link from 'next/link';
 import { useEffect, useState, type FormEvent } from 'react';
-import { DUMMY_LEADS } from '@/lib/dummy-leads';
 
 type JobResult = {
   found: number;
@@ -15,37 +14,13 @@ type PreviewLead = { id: string; name: string; domain: string | null; country: s
 
 type Step = 'idle' | 'starting' | 'finding' | 'saving' | 'done' | 'failed';
 
-const SOURCE = 'google_places';
-const SOURCE_LABEL = 'Google Places';
 const RECENT_KEY = 'moncha-discover-recent';
 const RECENT_LIMIT = 5;
 
 const COUNTRIES = [
-  'Australia',
-  'Bangladesh',
-  'Brunei',
-  'Cambodia',
-  'Canada',
-  'China',
-  'Hong Kong',
-  'India',
-  'Indonesia',
   'Japan',
-  'Laos',
   'Malaysia',
-  'Myanmar',
-  'New Zealand',
-  'Philippines',
-  'Saudi Arabia',
   'Singapore',
-  'South Korea',
-  'Sri Lanka',
-  'Taiwan',
-  'Thailand',
-  'United Arab Emirates',
-  'United Kingdom',
-  'United States',
-  'Vietnam',
 ];
 
 const STEPS: { key: Exclude<Step, 'idle' | 'failed'>; label: string }[] = [
@@ -77,7 +52,7 @@ function stepState(current: Step, failedAt: Step, key: Step) {
   return 'upcoming';
 }
 
-export function DiscoverPanel({ demo }: { demo: boolean }) {
+export function DiscoverPanel() {
   const [country, setCountry] = useState('Singapore');
   const [recent, setRecent] = useState<string[]>([]);
   const [step, setStep] = useState<Step>('idle');
@@ -131,28 +106,6 @@ export function DiscoverPanel({ demo }: { demo: boolean }) {
     }
   }
 
-  async function runDemo(value: string, seenBefore: boolean) {
-    setStep('starting');
-    setMsg(`Starting ${SOURCE_LABEL} discovery for ${value}…`);
-    await wait(700);
-    setStep('finding');
-    setMsg(`Finding companies in ${value}…`);
-    await wait(1200);
-    setStep('saving');
-    setMsg('Saving new leads…');
-    await wait(800);
-    const leads = DUMMY_LEADS.map((lead) => ({
-      id: lead.id,
-      name: lead.name,
-      domain: lead.domain,
-      country: value,
-    }));
-    const found = 12;
-    const created = seenBefore ? 0 : leads.length;
-    setPreview(seenBefore ? [] : leads);
-    finish(value, { found, created, duplicates: found - created, skipped: 0 });
-  }
-
   async function loadPreview(value: string) {
     try {
       const params = new URLSearchParams({ queue: 'PENDING_AUDIT', country: value, pageSize: '5' });
@@ -176,13 +129,13 @@ export function DiscoverPanel({ demo }: { demo: boolean }) {
 
   async function runLive(value: string) {
     setStep('starting');
-    setMsg(`Starting ${SOURCE_LABEL} discovery for ${value}…`);
+    setMsg(`Starting discovery for ${value}…`);
     let data: { id?: string; status?: string; error?: { message?: string } | string };
     try {
-      const res = await fetch('/api/v1/source-imports', {
+      const res = await fetch('/api/v1/discovery/country', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ source: SOURCE, country: value }),
+        body: JSON.stringify({ country: value }),
       });
       data = await res.json();
       if (!res.ok || !data.id) {
@@ -198,7 +151,7 @@ export function DiscoverPanel({ demo }: { demo: boolean }) {
     for (let i = 0; i < 40; i += 1) {
       await wait(2000);
       try {
-        const res = await fetch(`/api/v1/source-imports/${data.id}`);
+        const res = await fetch(`/api/v1/jobs/${data.id}`);
         const job = await res.json();
         if (!res.ok) {
           fail('finding', job.error?.message || 'Could not read job status');
@@ -207,8 +160,8 @@ export function DiscoverPanel({ demo }: { demo: boolean }) {
         if (job.status === 'done') {
           const payload = job.result || {};
           const next: JobResult = {
-            found: job.recordsDiscovered ?? payload.found ?? 0,
-            created: job.recordsImported ?? payload.created ?? 0,
+            found: payload.found ?? 0,
+            created: payload.created ?? payload.saved ?? 0,
             duplicates: payload.duplicates ?? 0,
             skipped: payload.skipped ?? 0,
           };
@@ -217,8 +170,8 @@ export function DiscoverPanel({ demo }: { demo: boolean }) {
           finish(value, next);
           return;
         }
-        if (job.status === 'failed') {
-          fail('finding', job.error || 'Discovery failed');
+          if (job.status === 'failed') {
+            fail('finding', job.lastError || 'Discovery failed');
           return;
         }
         setStep(job.status === 'running' ? 'finding' : 'starting');
@@ -236,14 +189,12 @@ export function DiscoverPanel({ demo }: { demo: boolean }) {
     event.preventDefault();
     const value = country.trim();
     if (!value || busy) return;
-    const seenBefore = recent.some((item) => item.toLowerCase() === value.toLowerCase());
     setResult(null);
     setPreview([]);
     setTone('info');
     setSearched(value);
     remember(value);
-    if (demo) await runDemo(value, seenBefore);
-    else await runLive(value);
+    await runLive(value);
   }
 
   const cards = result
@@ -258,11 +209,6 @@ export function DiscoverPanel({ demo }: { demo: boolean }) {
   return (
     <>
       <div className="card">
-        {demo ? (
-          <div className="notice discover-demo">
-            Demo mode: no database is connected, so discovery shows sample results.
-          </div>
-        ) : null}
         <form className="discover-form" onSubmit={submit}>
           <label className="discover-field">
             Country

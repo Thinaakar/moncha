@@ -1,15 +1,21 @@
 import { NextResponse } from 'next/server';
 import { sourceImportSchema } from '@moncha/contracts';
-import { prisma, PrismaJobRunRepository, withDbRetry } from '@moncha/db';
 import { authFromRequest } from '@/lib/auth';
 import { jsonError } from '@/lib/errors';
-import { enqueueCsvImport, enqueuePlacesDiscovery } from '@/lib/enqueue';
 import { providerError } from '@/lib/api-error';
 
 export async function POST(req: Request) {
   try {
     const auth = authFromRequest(req);
+    if (!process.env.DATABASE_URL) {
+      return NextResponse.json(
+        { error: { code: 'internal_error', message: 'CSV and source imports require DATABASE_URL' } },
+        { status: 503 },
+      );
+    }
     const input = sourceImportSchema.parse(await req.json());
+    const { prisma, PrismaJobRunRepository, withDbRetry } = await import('@moncha/db');
+    const { enqueueCsvImport, enqueuePlacesDiscovery } = await import('@/lib/enqueue');
     const jobs = new PrismaJobRunRepository(prisma);
 
     if (input.source === 'csv') {

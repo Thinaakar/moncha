@@ -1,15 +1,11 @@
 import type { ReactNode } from 'react';
 import { getServerAuth } from '@/lib/auth';
-import { DUMMY_LEADS } from '@/lib/dummy-leads';
 import { Sidebar } from '../nav-bar';
 
 async function sidebarData() {
   const auth = await getServerAuth();
   if (!auth || !process.env.DATABASE_URL) {
-    return {
-      demo: true,
-      qualifiedCount: DUMMY_LEADS.filter((lead) => lead.queue === 'QUALIFIED').length,
-    };
+    return { demo: false, qualifiedCount: null };
   }
   try {
     const { prisma } = await import('@moncha/db');
