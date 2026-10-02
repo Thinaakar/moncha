@@ -1,6 +1,7 @@
 import './env';
 import { randomUUID } from 'node:crypto';
-import { createServer } from 'node:http';
+import type { Server } from 'node:http';
+import { createApiServer } from './api';
 import {
   prisma,
   PrismaAuditLogRepository,
@@ -196,10 +197,14 @@ async function main() {
   });
 
   let stopping = false;
+  let apiServer: Server | null = null;
   const shutdown = async () => {
     if (stopping) process.exit(130);
     stopping = true;
     logger.info('worker_shutdown', { workerId: WORKER_ID, crawlRunning: Boolean(activeCrawl) });
+    if (apiServer) {
+      apiServer.close();
+    }
     crawlAbort.abort();
     if (activeCrawl) {
       await Promise.race([activeCrawl, new Promise((r) => setTimeout(r, SHUTDOWN_WAIT_MS))]);
@@ -214,18 +219,18 @@ async function main() {
     void shutdown();
   });
 
-  if (HEALTH_PORT) {
-    createServer((_req, res) => {
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(
-        JSON.stringify({
-          ok: true,
-          workerId: WORKER_ID,
-          startedAt: STARTED_AT.toISOString(),
-          crawlRunning: Boolean(activeCrawl),
-        }),
-      );
-    }).listen(HEALTH_PORT, () => logger.info('worker_health_listening', { port: HEALTH_PORT }));
+  const LISTEN_PORT = HEALTH_PORT || Number(process.env.PORT || 0);
+  if (LISTEN_PORT) {
+    apiServer = createApiServer({
+      workerStatusProvider: () => ({
+        workerId: WORKER_ID,
+        startedAt: STARTED_AT.toISOString(),
+        crawlRunning: Boolean(activeCrawl),
+      }),
+    });
+    apiServer.listen(LISTEN_PORT, () => {
+      logger.info('worker_api_listening', { port: LISTEN_PORT, workerId: WORKER_ID });
+    });
   }
 
   await Promise.all([

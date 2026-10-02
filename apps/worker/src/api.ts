@@ -75,9 +75,35 @@ function route(method: string, path: string, handler: Handler) {
 const query = (url: URL, ...keys: string[]) =>
   Object.fromEntries(keys.map((k) => [k, url.searchParams.get(k) ?? undefined]));
 
+export type WorkerStatusProvider = () => {
+  workerId: string;
+  startedAt: string;
+  crawlRunning: boolean;
+};
+
+let workerStatusProvider: WorkerStatusProvider | null = null;
+export function setWorkerStatusProvider(provider: WorkerStatusProvider | null) {
+  workerStatusProvider = provider;
+}
+
 route('GET', '/health', async ({ tenantId }) => {
-  await prisma.$queryRaw`SELECT 1`;
-  return { json: { ok: true, db: 'up', tenantId, countries: supportedCountries() } };
+  let dbStatus = 'up';
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+  } catch (error) {
+    dbStatus = `down: ${error instanceof Error ? error.message : String(error)}`;
+  }
+  const workerStatus = workerStatusProvider?.();
+  return {
+    status: dbStatus === 'up' ? 200 : 503,
+    json: {
+      ok: dbStatus === 'up',
+      db: dbStatus,
+      tenantId: tenantId || process.env.DEFAULT_TENANT_ID || 'unspecified',
+      countries: supportedCountries(),
+      ...(workerStatus ? { worker: workerStatus } : {}),
+    },
+  };
 });
 
 // Daily schedules
@@ -215,7 +241,14 @@ function readBody(req: IncomingMessage): Promise<unknown> {
   });
 }
 
+function setCorsHeaders(res: ServerResponse) {
+  res.setHeader('access-control-allow-origin', '*');
+  res.setHeader('access-control-allow-methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD');
+  res.setHeader('access-control-allow-headers', 'Content-Type, Authorization, x-tenant-id, x-api-key');
+}
+
 function send(res: ServerResponse, status: number, json: unknown) {
+  setCorsHeaders(res);
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(json, null, 2));
 }
@@ -230,6 +263,7 @@ function errorStatus(error: unknown): number {
 }
 
 function sendError(res: ServerResponse, error: unknown) {
+  setCorsHeaders(res);
   if (isZodError(error)) {
     return send(res, 400, { error: { code: 'validation_error', message: 'Invalid request', details: error.flatten() } });
   }
@@ -240,18 +274,28 @@ function sendError(res: ServerResponse, error: unknown) {
   return send(res, 500, { error: { code: 'internal_error', message: 'Internal server error' } });
 }
 
-const server = createServer(async (req, res) => {
+export async function handleApiRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const started = Date.now();
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
   const method = req.method || 'GET';
   let status = 500;
+
+  if (method === 'OPTIONS') {
+    setCorsHeaders(res);
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
   try {
     if (API_KEY && req.headers['x-api-key'] !== API_KEY) {
       throw new HttpError(401, 'unauthorized', 'Missing or wrong x-api-key header');
     }
     const tenantHeader = req.headers['x-tenant-id'];
     const tenantId = (Array.isArray(tenantHeader) ? tenantHeader[0] : tenantHeader) || process.env.DEFAULT_TENANT_ID;
-    if (!tenantId) throw new HttpError(400, 'validation_error', 'Send x-tenant-id or set DEFAULT_TENANT_ID');
+    if (!tenantId && url.pathname !== '/health') {
+      throw new HttpError(400, 'validation_error', 'Send x-tenant-id or set DEFAULT_TENANT_ID');
+    }
 
     const pathMatches = routes.filter((r) => r.pattern.test(url.pathname));
     const match = pathMatches.find((r) => r.method === method);
@@ -261,7 +305,7 @@ const server = createServer(async (req, res) => {
         : new HttpError(404, 'not_found', `No route for ${method} ${url.pathname}`);
     }
     const params = { ...(url.pathname.match(match.pattern)?.groups ?? {}) };
-    const result = await match.handler({ req, url, tenantId, params, body: () => readBody(req) });
+    const result = await match.handler({ req, url, tenantId: tenantId || '', params, body: () => readBody(req) });
     status = result.status ?? 200;
     send(res, status, result.json);
   } catch (error) {
@@ -270,17 +314,37 @@ const server = createServer(async (req, res) => {
   } finally {
     logger.info('worker_api_request', { method, path: url.pathname, status, ms: Date.now() - started });
   }
-});
-
-if (process.env.DB_ENV !== 'dev') {
-  console.error('Refusing to start: the test API only runs against the dev database (DB_ENV=dev).');
-  process.exit(1);
 }
 
-server.listen(PORT, HOST, () => {
-  logger.info('worker_api_started', { url: `http://${HOST}:${PORT}`, apiKey: Boolean(API_KEY) });
-});
+export function createApiServer(options?: {
+  workerStatusProvider?: WorkerStatusProvider;
+}) {
+  if (options?.workerStatusProvider) {
+    setWorkerStatusProvider(options.workerStatusProvider);
+  }
+  return createServer(handleApiRequest);
+}
 
-const shutdown = () => server.close(() => void prisma.$disconnect().then(() => process.exit(0)));
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+export function startApiServer(port = PORT, host = HOST) {
+  const server = createApiServer();
+  server.listen(port, host, () => {
+    logger.info('worker_api_started', { url: `http://${host}:${port}`, apiKey: Boolean(API_KEY) });
+  });
+  return server;
+}
+
+if (process.env.DB_ENV && process.env.DB_ENV !== 'dev') {
+  logger.info('worker_api_db_env', { dbEnv: process.env.DB_ENV });
+}
+
+const isDirectRun = Boolean(
+  process.argv[1] &&
+    (process.argv[1].endsWith('api.ts') || process.argv[1].endsWith('api.js')),
+);
+
+if (isDirectRun) {
+  const server = startApiServer();
+  const shutdown = () => server.close(() => void prisma.$disconnect().then(() => process.exit(0)));
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+}

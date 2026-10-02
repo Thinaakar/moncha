@@ -43,13 +43,110 @@ function backend(env: Env) {
   return env.BACKEND.get(env.BACKEND.idFromName(INSTANCE), { locationHint: 'enam' });
 }
 
+function corsHeaders(request: Request): Record<string, string> {
+  const origin = request.headers.get('Origin') || '*';
+  return {
+    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD',
+    'Access-Control-Allow-Headers':
+      request.headers.get('Access-Control-Request-Headers') ||
+      'Content-Type, Authorization, x-tenant-id, x-api-key',
+    'Access-Control-Max-Age': '86400',
+  };
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    const { pathname } = new URL(request.url);
-    if (pathname !== '/health') return new Response('Not found', { status: 404 });
-    const stub = backend(env);
-    await stub.startAndWaitForPorts();
-    return stub.fetch(new Request('http://container/health'));
+    if (request.method === 'OPTIONS') {
+      return new Response(null, {
+        status: 204,
+        headers: corsHeaders(request),
+      });
+    }
+
+    const url = new URL(request.url);
+    const pathname = url.pathname;
+
+    if (pathname === '/') {
+      return new Response(
+        JSON.stringify(
+          {
+            service: 'moncha-backend',
+            status: 'ok',
+            endpoints: ['/health', '/api/v1/schedules', '/api/v1/schedules/runs', '/api/v1/leads'],
+          },
+          null,
+          2,
+        ),
+        {
+          status: 200,
+          headers: {
+            'content-type': 'application/json; charset=utf-8',
+            ...corsHeaders(request),
+          },
+        },
+      );
+    }
+
+    const isAllowed = pathname === '/health' || pathname.startsWith('/api/');
+    if (!isAllowed) {
+      return new Response(
+        JSON.stringify({ error: { code: 'not_found', message: `Route not found: ${pathname}` } }, null, 2),
+        {
+          status: 404,
+          headers: {
+            'content-type': 'application/json; charset=utf-8',
+            ...corsHeaders(request),
+          },
+        },
+      );
+    }
+
+    try {
+      const stub = backend(env);
+      await stub.startAndWaitForPorts();
+
+      const containerUrl = new URL(pathname + url.search, 'http://container');
+      const containerRequest = new Request(containerUrl.toString(), {
+        method: request.method,
+        headers: request.headers,
+        body: ['GET', 'HEAD'].includes(request.method) ? undefined : request.body,
+        // @ts-expect-error duplex is required for streaming bodies in standard fetch
+        duplex: 'half',
+      });
+
+      const response = await stub.fetch(containerRequest);
+      const headers = new Headers(response.headers);
+      for (const [key, value] of Object.entries(corsHeaders(request))) {
+        headers.set(key, value);
+      }
+
+      return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers,
+      });
+    } catch (error) {
+      return new Response(
+        JSON.stringify(
+          {
+            error: {
+              code: 'gateway_error',
+              message: error instanceof Error ? error.message : String(error),
+            },
+          },
+          null,
+          2,
+        ),
+        {
+          status: 502,
+          headers: {
+            'content-type': 'application/json; charset=utf-8',
+            ...corsHeaders(request),
+          },
+        },
+      );
+    }
   },
 
   /** Cron: (re)start the container if a deploy, crash or host restart stopped it. */
