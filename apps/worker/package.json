@@ -8,8 +8,8 @@
     "discover": "tsx src/discover.ts",
     "api": "tsx src/api.ts",
     "cf:typecheck": "tsc -p cloudflare/tsconfig.json",
-    "cf:check": "wrangler deploy --dry-run",
-    "cf:deploy": "wrangler deploy",
+    "cf:check": "wrangler deploy --dry-run --containers-rollout=none",
+    "cf:deploy": "wrangler deploy --containers-rollout=none",
     "cf:logs": "wrangler tail",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -21,7 +21,8 @@
     "@moncha/crawling": "workspace:*",
     "@moncha/db": "workspace:*",
     "@moncha/domain": "workspace:*",
-    "@moncha/integrations": "workspace:*"
+    "@moncha/integrations": "workspace:*",
+    "@neondatabase/serverless": "^1.2.0"
   },
   "devDependencies": {
     "@cloudflare/containers": "^0.3.7",

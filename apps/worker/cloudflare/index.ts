@@ -1,7 +1,11 @@
 import { Container } from '@cloudflare/containers';
+import { handleNeonApi } from './neon-router';
 
 interface Env {
-  BACKEND: DurableObjectNamespace<BackendWorker>;
+  BACKEND?: DurableObjectNamespace<BackendWorker>;
+  DATABASE_URL?: string;
+  DEFAULT_TENANT_ID?: string;
+  WORKER_API_KEY?: string;
   [key: string]: unknown;
 }
 
@@ -40,6 +44,7 @@ export class BackendWorker extends Container<Env> {
 }
 
 function backend(env: Env) {
+  if (!env.BACKEND) throw new Error('Container backend not bound');
   return env.BACKEND.get(env.BACKEND.idFromName(INSTANCE), { locationHint: 'enam' });
 }
 
@@ -102,6 +107,25 @@ export default {
       );
     }
 
+    // 1. Direct Edge-native Neon API: handles /health and /api/v1/* with zero container overhead
+    const neonResponse = await handleNeonApi(request, env, corsHeaders(request));
+    if (neonResponse) {
+      return neonResponse;
+    }
+
+    if (!env.BACKEND) {
+      return new Response(
+        JSON.stringify({ error: { code: 'not_found', message: `Route not found: ${pathname}` } }, null, 2),
+        {
+          status: 404,
+          headers: {
+            'content-type': 'application/json; charset=utf-8',
+            ...corsHeaders(request),
+          },
+        },
+      );
+    }
+
     try {
       const stub = backend(env);
       await stub.startAndWaitForPorts();
@@ -151,6 +175,8 @@ export default {
 
   /** Cron: (re)start the container if a deploy, crash or host restart stopped it. */
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-    ctx.waitUntil(backend(env).startAndWaitForPorts());
+    if (env.BACKEND) {
+      ctx.waitUntil(backend(env).startAndWaitForPorts().catch(() => undefined));
+    }
   },
 } satisfies ExportedHandler<Env>;
