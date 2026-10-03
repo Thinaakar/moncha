@@ -39,6 +39,24 @@ describe('combineLlmVerdict', () => {
     expect(out.canQualify).toBe(false);
   });
 
+  it('lets a confident no qualify when llmCanQualify=true', () => {
+    const out = combineLlmVerdict({
+      llm: {
+        hasConversationalAssistant: 'no',
+        kind: 'NONE',
+        vendor: null,
+        confidence: 1,
+        reasons: ['only WhatsApp link'],
+        evidenceRefs: ['e1'],
+      },
+      validEvidenceRefs: refs,
+      config: { ...DEFAULT_AUDIT_CONFIG, llmCanQualify: true },
+    });
+    expect(out.verdict).toBe('NO_ASSISTANT');
+    expect(out.canQualify).toBe(true);
+    expect(out.confidence).toBeGreaterThanOrEqual(DEFAULT_AUDIT_CONFIG.minConfidence);
+  });
+
   it('rejects hallucinated evidence refs', () => {
     const out = combineLlmVerdict({
       llm: {

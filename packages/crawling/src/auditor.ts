@@ -134,6 +134,9 @@ export class MonchaWebsiteAuditor implements WebsiteAuditor {
           renderRan: base.renderRan,
           instructions:
             'Set hasConversationalAssistant to yes|no|unsure. kind one of AI_CHATBOT|LIVE_CHAT|NONE. ' +
+            'vendor is the chatbot product name or null. ' +
+            'confidence is a number from 0 to 1 for how sure you are of hasConversationalAssistant. ' +
+            'reasons is 1 to 5 short strings explaining the answer. ' +
             'WhatsApp/Messenger/Telegram/LINE/Viber links alone mean "no" with kind NONE. ' +
             'evidenceRefs must only use provided evidenceIds.',
         }),

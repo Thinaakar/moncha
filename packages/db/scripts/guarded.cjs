@@ -4,11 +4,8 @@ const { readFileSync, existsSync } = require('node:fs');
 const { resolve } = require('node:path');
 const { assertDevDatabase } = require('./assert-dev-db.cjs');
 
-function loadRootEnv() {
-  const candidates = [
-    resolve(__dirname, '../../../.env'),
-    resolve(__dirname, '../../.env'),
-  ];
+function loadWorkerEnv() {
+  const candidates = [resolve(__dirname, '../../../apps/worker/.env')];
   for (const file of candidates) {
     if (!existsSync(file)) continue;
     const text = readFileSync(file, 'utf8');
@@ -32,7 +29,7 @@ function loadRootEnv() {
   }
 }
 
-loadRootEnv();
+loadWorkerEnv();
 assertDevDatabase();
 
 const args = process.argv.slice(2);

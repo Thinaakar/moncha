@@ -7,7 +7,7 @@ export type AuditConfig = {
   disqualifyingKinds: AssistantKind[];
   /** Cap on LLM-derived confidence stored on the audit. */
   llmMaxConfidence: number;
-  /** When false (default), LLM "no assistant" never qualifies — goes to Needs review. */
+  /** When false, LLM "no assistant" never qualifies — goes to Needs review. */
   llmCanQualify: boolean;
   /** Min LLM confidence for yes → HAS_ASSISTANT. */
   llmYesMinConfidence: number;
@@ -22,10 +22,10 @@ export const DEFAULT_AUDIT_CONFIG: AuditConfig = {
   minConfidence: 0.8,
   disqualifyingKinds: ['AI_CHATBOT', 'LIVE_CHAT'],
   llmMaxConfidence: 0.85,
-  llmCanQualify: false,
+  llmCanQualify: true,
   llmYesMinConfidence: 0.7,
   llmNoMinConfidence: 0.85,
-  llmPromptVersion: 'assistant-classify-v2',
+  llmPromptVersion: 'assistant-classify-v3',
   reauditAfterDays: 30,
 };
 

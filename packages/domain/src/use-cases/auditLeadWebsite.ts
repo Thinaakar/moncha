@@ -148,7 +148,7 @@ export async function auditLeadWebsite(
   let result: WebsiteAuditResult | undefined;
   let fromCache = false;
 
-  if (host && deps.hostCache) {
+  if (host && deps.hostCache && !input.force) {
     const cached = await deps.hostCache.get(input.tenantId, host, config.classifierVersion);
     if (cached) {
       const cacheAgeMs = Date.now() - cached.auditedAt.getTime();

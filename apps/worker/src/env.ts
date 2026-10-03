@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 // Import this module before anything that reads process.env at load time (@moncha/db builds the
-// Prisma client on import). apps/worker/.env wins; the repo-root .env only fills missing keys.
+// Prisma client on import). apps/worker/.env is the only env file the backend reads; the repo-root
+// .env belongs to the console.
 
 function loadEnvFile(envPath: string, override: boolean) {
   if (!fs.existsSync(envPath)) return;
@@ -21,4 +22,3 @@ function loadEnvFile(envPath: string, override: boolean) {
 }
 
 loadEnvFile(path.resolve(__dirname, '../.env'), true);
-loadEnvFile(path.resolve(__dirname, '../../../.env'), false);

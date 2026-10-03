@@ -3,8 +3,8 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { PrismaClient } from '@prisma/client';
 
-function loadRootEnv() {
-  const file = resolve(__dirname, '../../../.env');
+function loadWorkerEnv() {
+  const file = resolve(__dirname, '../../../apps/worker/.env');
   if (!existsSync(file)) return;
   for (const line of readFileSync(file, 'utf8').split(/\r?\n/)) {
     const trimmed = line.trim();
@@ -23,7 +23,7 @@ function loadRootEnv() {
   }
 }
 
-loadRootEnv();
+loadWorkerEnv();
 
 const run = Boolean(process.env.DATABASE_URL) && process.env.DB_ENV === 'dev';
 
