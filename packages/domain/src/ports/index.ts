@@ -37,6 +37,50 @@ export type AuthContext = {
   role: string;
 };
 
+export type UserRole = 'admin' | 'operator' | 'viewer';
+
+export type AuthUserRecord = {
+  id: string;
+  tenantId: string;
+  email: string;
+  name: string | null;
+  role: UserRole;
+  /** Null for users created before password login (they cannot use password login). */
+  passwordHash: string | null;
+  createdAt: Date;
+};
+
+export type AuthUserCreate = {
+  tenantId: string;
+  email: string;
+  name: string | null;
+  role: UserRole;
+  passwordHash: string;
+};
+
+export interface AuthUserRepo {
+  /** Case-insensitive email match within the tenant. */
+  findByEmail(tenantId: string, email: string): Promise<AuthUserRecord | null>;
+  /** Returns null when the tenant already has a user with this email. */
+  create(data: AuthUserCreate): Promise<AuthUserRecord | null>;
+}
+
+export type SessionCreate = {
+  tenantId: string;
+  userId: string;
+  /** SHA-256 hex of the bearer token; the raw token is never stored. */
+  tokenHash: string;
+  expiresAt: Date;
+};
+
+export interface SessionRepo {
+  create(data: SessionCreate): Promise<{ id: string; expiresAt: Date }>;
+  /** The session's user when the token is known, not revoked and not expired at `now`. */
+  findActiveUser(tokenHash: string, now: Date): Promise<AuthUserRecord | null>;
+  /** Marks the session revoked; false when it was unknown or already revoked. */
+  revoke(tokenHash: string, now: Date): Promise<boolean>;
+}
+
 export type DiscoveredCompany = {
   name: string;
   domain?: string;

@@ -16,6 +16,7 @@ export * from './use-cases/runWebsiteAuditJob';
 export * from './use-cases/runCountryDiscovery';
 export * from './use-cases/runCountryDiscoveryJob';
 export * from './use-cases/discoverySchedules';
+export * from './use-cases/auth';
 export * from './discovery/countries';
 export * from './discovery/schedule-time';
 export * from './discovery/industries';

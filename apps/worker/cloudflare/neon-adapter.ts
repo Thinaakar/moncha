@@ -1,5 +1,10 @@
 import { neon } from '@neondatabase/serverless';
 import type {
+  AuthUserCreate,
+  AuthUserRecord,
+  AuthUserRepo,
+  SessionCreate,
+  SessionRepo,
   CompanyPatch,
   CompanyRecord,
   CompanyRepo,
@@ -446,6 +451,81 @@ export class NeonWebsiteRepo implements WebsiteRepo {
     );
     return rows.length ? mapWebsiteRow(rows[0]) : null;
   }
+}
+
+const USER_COLUMNS = 'u.id, u."tenantId", u.email, u.name, u.role, u."passwordHash", u."createdAt"';
+
+export class NeonAuthUserRepo implements AuthUserRepo {
+  constructor(private sql: any) {}
+
+  async findByEmail(tenantId: string, email: string): Promise<AuthUserRecord | null> {
+    const rows = await queryRows(
+      this.sql,
+      `SELECT ${USER_COLUMNS} FROM "User" u WHERE u."tenantId" = $1 AND lower(u.email) = lower($2) LIMIT 1`,
+      [tenantId, email]
+    );
+    return rows.length ? mapUserRow(rows[0]) : null;
+  }
+
+  async create(data: AuthUserCreate): Promise<AuthUserRecord | null> {
+    const id = `user_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+    const rows = await queryRows(
+      this.sql,
+      `INSERT INTO "User" AS u (id, "tenantId", email, name, role, "passwordHash", "createdAt")
+       VALUES ($1, $2, $3, $4, $5::"UserRole", $6, NOW())
+       ON CONFLICT ("tenantId", email) DO NOTHING
+       RETURNING ${USER_COLUMNS}`,
+      [id, data.tenantId, data.email, data.name, data.role, data.passwordHash]
+    );
+    return rows.length ? mapUserRow(rows[0]) : null;
+  }
+}
+
+export class NeonSessionRepo implements SessionRepo {
+  constructor(private sql: any) {}
+
+  async create(data: SessionCreate): Promise<{ id: string; expiresAt: Date }> {
+    const id = `sess_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+    const rows = await queryRows(
+      this.sql,
+      `INSERT INTO "Session" (id, "tenantId", "userId", "tokenHash", "expiresAt", "createdAt")
+       VALUES ($1, $2, $3, $4, $5, NOW())
+       RETURNING id, "expiresAt"`,
+      [id, data.tenantId, data.userId, data.tokenHash, data.expiresAt.toISOString()]
+    );
+    return { id: rows[0].id, expiresAt: new Date(rows[0].expiresAt) };
+  }
+
+  async findActiveUser(tokenHash: string, now: Date): Promise<AuthUserRecord | null> {
+    const rows = await queryRows(
+      this.sql,
+      `SELECT ${USER_COLUMNS} FROM "Session" s JOIN "User" u ON u.id = s."userId"
+       WHERE s."tokenHash" = $1 AND s."revokedAt" IS NULL AND s."expiresAt" > $2 LIMIT 1`,
+      [tokenHash, now.toISOString()]
+    );
+    return rows.length ? mapUserRow(rows[0]) : null;
+  }
+
+  async revoke(tokenHash: string, now: Date): Promise<boolean> {
+    const rows = await queryRows(
+      this.sql,
+      'UPDATE "Session" SET "revokedAt" = $2 WHERE "tokenHash" = $1 AND "revokedAt" IS NULL RETURNING id',
+      [tokenHash, now.toISOString()]
+    );
+    return rows.length > 0;
+  }
+}
+
+function mapUserRow(r: any): AuthUserRecord {
+  return {
+    id: r.id,
+    tenantId: r.tenantId,
+    email: r.email,
+    name: r.name ?? null,
+    role: r.role,
+    passwordHash: r.passwordHash ?? null,
+    createdAt: new Date(r.createdAt),
+  };
 }
 
 function mapCompanyRow(r: any): CompanyRecord {

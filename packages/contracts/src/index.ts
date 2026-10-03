@@ -162,6 +162,17 @@ export const loginSchema = z.object({
   email: z.string().trim().email(),
 });
 
+export const registerSchema = z.object({
+  email: z.string().trim().toLowerCase().email().max(254),
+  password: z.string().min(8, 'Use at least 8 characters').max(128),
+  name: z.string().trim().min(1).max(100).optional(),
+});
+
+export const passwordLoginSchema = z.object({
+  email: z.string().trim().toLowerCase().email().max(254),
+  password: z.string().min(1).max(128),
+});
+
 export const llmAssistantOutputSchema = z.object({
   hasConversationalAssistant: z.enum(['yes', 'no', 'unsure']),
   kind: assistantKindSchema,
@@ -192,4 +203,6 @@ export type ManualLeadInput = z.infer<typeof manualLeadSchema>;
 export type LeadListQueryInput = z.infer<typeof leadListQuerySchema>;
 export type ResolveReviewInput = z.infer<typeof resolveReviewSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
+export type RegisterInput = z.infer<typeof registerSchema>;
+export type PasswordLoginInput = z.infer<typeof passwordLoginSchema>;
 export type LlmAssistantOutput = z.infer<typeof llmAssistantOutputSchema>;

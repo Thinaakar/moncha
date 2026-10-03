@@ -78,7 +78,7 @@ export default {
           {
             service: 'moncha-backend',
             status: 'ok',
-            endpoints: ['/health', '/api/v1/schedules', '/api/v1/schedules/runs', '/api/v1/leads'],
+            endpoints: ['/health', '/api/v1/auth/login', '/api/v1/schedules', '/api/v1/schedules/runs', '/api/v1/leads'],
           },
           null,
           2,

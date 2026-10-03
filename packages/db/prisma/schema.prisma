@@ -106,6 +106,7 @@ model Tenant {
   name             String
   createdAt        DateTime          @default(now())
   users            User[]
+  sessions         Session[]
   companies        Company[]
   leads            Lead[]
   jobs             JobRun[]
@@ -125,15 +126,33 @@ model Tenant {
 }
 
 model User {
-  id        String   @id @default(cuid())
-  tenantId  String
-  email     String
-  name      String?
-  role      UserRole @default(operator)
-  createdAt DateTime @default(now())
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id           String    @id @default(cuid())
+  tenantId     String
+  email        String
+  name         String?
+  role         UserRole  @default(operator)
+  /// pbkdf2_sha256$<iterations>$<salt>$<hash>. Null = no password login.
+  passwordHash String?
+  createdAt    DateTime  @default(now())
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  sessions     Session[]
 
   @@unique([tenantId, email])
+}
+
+/// Bearer-token login session. Only the SHA-256 of the token is stored.
+model Session {
+  id        String    @id @default(cuid())
+  tenantId  String
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model Company {

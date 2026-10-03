@@ -4,22 +4,32 @@ import {
   countryDiscoverySchema,
   leadListQuerySchema,
   manualLeadSchema,
+  passwordLoginSchema,
+  registerSchema,
   scheduleCreateSchema,
   scheduleDeleteCountrySchema,
   scheduleRunsQuerySchema,
 } from '@moncha/contracts';
 import {
   prisma,
+  PrismaAuthUserRepository,
   PrismaCompanyRepository,
   PrismaDiscoveryScheduleRepository,
   PrismaJobRunRepository,
   PrismaLeadRepository,
+  PrismaSessionRepository,
   PrismaWebsiteRepository,
 } from '@moncha/db';
 import {
+  AuthError,
+  bearerToken,
   createConsoleLogger,
   createManualLead,
   createSchedule,
+  currentUser,
+  loginUser,
+  logoutUser,
+  registerUser,
   DEFAULT_AUDIT_CONFIG,
   deleteCountrySchedules,
   deleteSchedule,
@@ -34,7 +44,8 @@ import {
 } from '@moncha/domain';
 
 // Local test API for Postman: exposes the same use cases the console routes call.
-// No login: tenant comes from the x-tenant-id header or DEFAULT_TENANT_ID. Dev database only.
+// Routes other than /api/v1/auth/* need no login: tenant comes from the x-tenant-id header or DEFAULT_TENANT_ID.
+// Dev database only.
 
 const PORT = Number(process.env.WORKER_API_PORT || 4000);
 const HOST = process.env.WORKER_API_HOST || '127.0.0.1';
@@ -215,6 +226,24 @@ route('POST', '/api/v1/leads/:id/audit', async ({ tenantId, params }) => {
   return { status: 202, json: { id: job.id, status: job.status } };
 });
 
+// Auth: bearer-token sessions.
+const auth = { users: new PrismaAuthUserRepository(prisma), sessions: new PrismaSessionRepository(prisma) };
+const tokenOf = (req: IncomingMessage) => bearerToken(req.headers.authorization);
+
+route('POST', '/api/v1/auth/register', async ({ tenantId, body }) => {
+  const input = registerSchema.parse(await body());
+  return { status: 201, json: await registerUser(auth, { ...input, tenantId }) };
+});
+
+route('POST', '/api/v1/auth/login', async ({ tenantId, body }) => {
+  const input = passwordLoginSchema.parse(await body());
+  return { json: await loginUser(auth, { ...input, tenantId }) };
+});
+
+route('POST', '/api/v1/auth/logout', async ({ req }) => ({ json: await logoutUser(auth, { token: tokenOf(req) }) }));
+
+route('GET', '/api/v1/auth/me', async ({ req }) => ({ json: { user: await currentUser(auth, { token: tokenOf(req) }) } }));
+
 function readBody(req: IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -258,7 +287,7 @@ const isZodError = (error: unknown): error is ZodLikeError =>
   error instanceof Error && error.name === 'ZodError' && typeof (error as ZodLikeError).flatten === 'function';
 
 function errorStatus(error: unknown): number {
-  if (error instanceof ScheduleError || error instanceof HttpError) return error.status;
+  if (error instanceof ScheduleError || error instanceof AuthError || error instanceof HttpError) return error.status;
   return isZodError(error) ? 400 : 500;
 }
 
@@ -267,7 +296,7 @@ function sendError(res: ServerResponse, error: unknown) {
   if (isZodError(error)) {
     return send(res, 400, { error: { code: 'validation_error', message: 'Invalid request', details: error.flatten() } });
   }
-  if (error instanceof ScheduleError || error instanceof HttpError) {
+  if (error instanceof ScheduleError || error instanceof AuthError || error instanceof HttpError) {
     return send(res, error.status, { error: { code: error.code, message: error.message } });
   }
   logger.error('worker_api_error', { message: error instanceof Error ? error.message : String(error) });

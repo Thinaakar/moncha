@@ -3,13 +3,21 @@ import {
   countryDiscoverySchema,
   leadListQuerySchema,
   manualLeadSchema,
+  passwordLoginSchema,
+  registerSchema,
   scheduleCreateSchema,
   scheduleDeleteCountrySchema,
   scheduleRunsQuerySchema,
 } from '@moncha/contracts';
 import {
+  AuthError,
+  bearerToken,
   createManualLead,
   createSchedule,
+  currentUser,
+  loginUser,
+  logoutUser,
+  registerUser,
   DEFAULT_AUDIT_CONFIG,
   deleteCountrySchedules,
   deleteSchedule,
@@ -22,10 +30,12 @@ import {
   type CountryDiscoveryJobPayload,
 } from '@moncha/domain';
 import {
+  NeonAuthUserRepo,
   NeonCompanyRepo,
   NeonDiscoveryScheduleRepo,
   NeonJobRepo,
   NeonLeadRepo,
+  NeonSessionRepo,
   NeonWebsiteRepo,
 } from './neon-adapter';
 
@@ -45,7 +55,7 @@ const isZodError = (error: unknown): error is ZodLikeError =>
   error instanceof Error && error.name === 'ZodError' && typeof (error as ZodLikeError).flatten === 'function';
 
 function errorStatus(error: unknown): number {
-  if (error instanceof ScheduleError || error instanceof HttpError) return error.status;
+  if (error instanceof ScheduleError || error instanceof AuthError || error instanceof HttpError) return error.status;
   return isZodError(error) ? 400 : 500;
 }
 
@@ -54,7 +64,7 @@ function errorResponse(error: unknown, cors: Record<string, string>): Response {
   let body: unknown;
   if (isZodError(error)) {
     body = { error: { code: 'validation_error', message: 'Invalid request', details: error.flatten() } };
-  } else if (error instanceof ScheduleError || error instanceof HttpError) {
+  } else if (error instanceof ScheduleError || error instanceof AuthError || error instanceof HttpError) {
     body = { error: { code: error.code, message: error.message } };
   } else {
     body = { error: { code: 'internal_error', message: error instanceof Error ? error.message : String(error) } };
@@ -150,6 +160,26 @@ export async function handleNeonApi(
     const leads = new NeonLeadRepo(sql);
     const companies = new NeonCompanyRepo(sql);
     const websites = new NeonWebsiteRepo(sql);
+
+    // Auth
+    if (pathname.startsWith('/api/v1/auth/')) {
+      const auth = { users: new NeonAuthUserRepo(sql), sessions: new NeonSessionRepo(sql) };
+      const token = bearerToken(request.headers.get('authorization'));
+      if (pathname === '/api/v1/auth/register' && method === 'POST') {
+        const input = registerSchema.parse(await readJson(request));
+        return jsonResponse(await registerUser(auth, { ...input, tenantId }), 201, cors);
+      }
+      if (pathname === '/api/v1/auth/login' && method === 'POST') {
+        const input = passwordLoginSchema.parse(await readJson(request));
+        return jsonResponse(await loginUser(auth, { ...input, tenantId }), 200, cors);
+      }
+      if (pathname === '/api/v1/auth/logout' && method === 'POST') {
+        return jsonResponse(await logoutUser(auth, { token }), 200, cors);
+      }
+      if (pathname === '/api/v1/auth/me' && method === 'GET') {
+        return jsonResponse({ user: await currentUser(auth, { token }) }, 200, cors);
+      }
+    }
 
     // 2. Schedules
     if (pathname === '/api/v1/schedules') {
