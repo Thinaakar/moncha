@@ -162,6 +162,18 @@ export const resolveReviewSchema = z.object({
   vendor: z.string().trim().min(1).optional(),
 });
 
+export const reviewListQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(25),
+  /** `all` lists open and resolved tasks; omitted means open. */
+  status: z
+    .enum(['open', 'resolved', 'all'])
+    .default('open')
+    .transform((status) => (status === 'all' ? undefined : status)),
+  search: z.string().trim().min(1).optional(),
+  country: z.string().trim().min(1).optional(),
+});
+
 export const loginSchema = z.object({
   email: z.string().trim().email(),
 });

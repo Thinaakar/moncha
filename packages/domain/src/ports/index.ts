@@ -595,6 +595,55 @@ export interface WebsiteAuditRepo {
   latestForLead(tenantId: string, leadId: string): Promise<WebsiteAuditRecord | null>;
 }
 
+export type ReviewTaskStatus = 'open' | 'resolved';
+export type ReviewAction = 'confirm_no_assistant' | 'mark_has_assistant' | 'request_reaudit';
+
+export type ReviewTaskRecord = {
+  id: string;
+  tenantId: string;
+  leadId: string;
+  auditId: string;
+  reason: string;
+  status: ReviewTaskStatus;
+  resolvedBy?: string | null;
+  resolutionNote?: string | null;
+  resolvedAt?: Date | null;
+  createdAt: Date;
+};
+
+export type ReviewTaskListItem = ReviewTaskRecord & {
+  lead: LeadRecord & { company: CompanyRecord & { website?: WebsiteRecord | null } };
+  audit: {
+    id: string;
+    method: AuditMethod;
+    verdict: AssistantVerdict;
+    kind: AssistantKind;
+    vendor?: string | null;
+    confidence: number;
+    classifierVersion: string;
+    failureReason?: string | null;
+    finalUrl?: string | null;
+    auditedAt: Date;
+  } | null;
+};
+
+export type ReviewTaskListQuery = {
+  /** Omitted lists every status. */
+  status?: ReviewTaskStatus;
+  page?: number;
+  pageSize?: number;
+  search?: string;
+  country?: string;
+};
+
+export type ReviewTaskListResult = {
+  items: ReviewTaskListItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+};
+
 export interface ReviewTaskRepo {
   open(data: {
     tenantId: string;
@@ -602,12 +651,15 @@ export interface ReviewTaskRepo {
     auditId: string;
     reason: string;
   }): Promise<{ id: string }>;
+  /** Returns false when the task was not open (already resolved or missing). */
   resolve(
     tenantId: string,
     id: string,
     data: { resolvedBy: string; resolutionNote: string },
-  ): Promise<void>;
+  ): Promise<boolean>;
   findOpenForLead(tenantId: string, leadId: string): Promise<{ id: string; reason: string } | null>;
+  get(tenantId: string, id: string): Promise<ReviewTaskRecord | null>;
+  list(tenantId: string, query: ReviewTaskListQuery): Promise<ReviewTaskListResult>;
 }
 
 export interface AuditLogRepo {

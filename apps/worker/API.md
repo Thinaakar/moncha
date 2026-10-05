@@ -1,9 +1,10 @@
 # Moncha Backend API
 
-Every endpoint served by the backend (26 in total). Endpoints 1 to 19 were captured from the live deployment on
+Every endpoint served by the backend (29 in total). Endpoints 1 to 19 were captured from the live deployment on
 2026-10-03 (50 of 50 full test cases, 26 of 26 re-checks after the audit changes, and 22 of 22 auth cases passed).
 Endpoints 20 to 26 and `queue=ALL` were added on 2026-10-05 and tested against the local API on the dev database
-(34 of 34 cases passed), see [Test report](#test-report).
+(34 of 34 cases passed). Endpoints 27 to 29 (review actions) were added on 2026-10-05 and tested against the local
+API on the dev database (27 of 27 cases passed), see [Test report](#test-report).
 
 - **Base URL (deployed):** `https://moncha-backend.vinothjv4-tech.workers.dev`
 - **Base URL (local):** `http://localhost:4000` (`pnpm --filter @moncha/worker api`), see [Local API differences](#local-api-differences)
@@ -22,6 +23,7 @@ Endpoints 20 to 26 and `queue=ALL` were added on 2026-10-05 and tested against t
 - [Auth](#auth): register, login, logout, current user, update profile, change password, forgot and reset password
 - [Source imports](#source-imports): CSV import and import status
 - [Worker health](#worker-health): is the background worker running
+- [Reviews](#reviews): list review tasks, get one, resolve one (confirm, mark chatbot, re-audit)
 - [How a lead's queue is decided](#how-a-leads-queue-is-decided)
 - [Enums](#enums)
 - [Background processing](#background-processing)
@@ -60,6 +62,9 @@ Endpoints 20 to 26 and `queue=ALL` were added on 2026-10-05 and tested against t
 | 24 | POST | `/api/v1/source-imports` | Create | Import companies from a CSV | 202 | JobRun, Company, SourceRecord, Lead, Website |
 | 25 | GET | `/api/v1/source-imports/:id` | Read | Status and result of an import | 200 | JobRun |
 | 26 | GET | `/api/v1/worker/health` | Read | Is the background worker running | 200 | WorkerHeartbeat, JobRun |
+| 27 | GET | `/api/v1/reviews` | Read | Review tasks (default: open) with lead, company and audit | 200 | ReviewTask, Lead, Company, Website, WebsiteAudit |
+| 28 | GET | `/api/v1/reviews/:id` | Read | One review task | 200 | ReviewTask |
+| 29 | POST | `/api/v1/reviews/:id/resolve` | Update | Apply a human decision to a `NEEDS_REVIEW` lead | 200 | ReviewTask, Lead, AuditLog, Website, JobRun |
 
 The only PATCH is #20. To change a schedule time, delete the old one (#6) and create the new one (#5).
 
@@ -72,7 +77,7 @@ The only PATCH is #20. To change a schedule time, delete the old one (#6) and cr
 | Header | Required | Description |
 |---|---|---|
 | `content-type: application/json` | For POST with a body | Body must be valid JSON. An empty body is treated as `{}`. |
-| `authorization: Bearer <token>` | Only for `/api/v1/auth/logout`, `/api/v1/auth/me` (GET and PATCH) and `/api/v1/auth/change-password` | Token from register or login. Other endpoints do not check it yet. |
+| `authorization: Bearer <token>` | Only for `/api/v1/auth/logout`, `/api/v1/auth/me` (GET and PATCH) and `/api/v1/auth/change-password`; optional on `/api/v1/reviews/:id/resolve` | Token from register or login. On resolve it records who decided. Other endpoints do not check it yet. |
 | `x-tenant-id` | No | Tenant to read and write. Default: `tenant_moncha_internal` (`DEFAULT_TENANT_ID`). |
 | `x-api-key` | Only if `WORKER_API_KEY` is set on the server | Currently **not** set on the deployed backend, so it is not needed. |
 
@@ -99,9 +104,10 @@ Every error has the same shape:
 | 400 | `invalid_password` | Change password: the current password is wrong |
 | 400 | `unsupported_source` | Source import with a source other than `csv` |
 | 401 | `unauthorized` | Wrong email or password; missing, expired or logged-out token; or wrong `x-api-key` (only when `WORKER_API_KEY` is set) |
-| 404 | `not_found` | Unknown route, or the schedule, job, lead or import does not exist |
+| 403 | `forbidden` | Resolve review: the bearer token belongs to a user of another tenant |
+| 404 | `not_found` | Unknown route, or the schedule, job, lead, import or review task does not exist |
 | 405 | `method_not_allowed` | Local API only: known path, wrong method (deployed returns 404) |
-| 409 | `conflict` | Schedule already exists for that country and time, or an account with that email already exists |
+| 409 | `conflict` | Schedule already exists for that country and time, an account with that email already exists, or the review task is already resolved |
 | 413 | `too_many_rows` | CSV with more than 20,000 rows |
 | 413 | `payload_too_large` | Local API only: body larger than 10 MB |
 | 500 | `internal_error` | Unexpected server error |
@@ -1314,6 +1320,211 @@ schedules, website audits and large CSV imports wait until it starts."`. `lastSe
 
 ---
 
+## Reviews
+
+When an audit is not sure (no chatbot found but confidence below 0.8, or still uncertain after all passes), the
+lead goes to the `NEEDS_REVIEW` queue and an open review task is created for it. A person checks the website and
+resolves the task with one of three actions. Each lead has at most one open review task. The audit itself is never
+changed; the decision is stored on the lead, the task and the audit log.
+
+Served by the Node API (Railway and local). Not served by the Cloudflare edge backend, so examples use the Railway
+URL.
+
+**Review task object**
+
+```json
+{
+  "id": "cmuvr7k2p0001a8tq3x9d2f1b",
+  "tenantId": "tenant_moncha_internal",
+  "leadId": "cmuv6c3vp016bt30uhaiwsu6a",
+  "auditId": "cmuv6d1qa0190t30u7bq2k4mn",
+  "reason": "no_assistant_below_confidence",
+  "status": "open",
+  "resolvedBy": null,
+  "resolutionNote": null,
+  "resolvedAt": null,
+  "createdAt": "2026-10-05T11:02:41.118Z"
+}
+```
+
+| Field | Description |
+|---|---|
+| `reason` | Why the audit was not sure: `no_assistant_below_confidence`, `uncertain` or `llm_no_assistant_pending_precision` |
+| `status` | `open` or `resolved` |
+| `resolvedBy` | Email of the signed-in user who resolved it, or `api` when no bearer token was sent |
+| `resolutionNote` | The note sent with the decision |
+
+### 27. GET `/api/v1/reviews`
+
+**CRUD:** Read. Paginated review tasks, each with its lead, company, website and the audit that raised it.
+
+**Query parameters**
+
+| Param | Type | Default | Description |
+|---|---|---|---|
+| `status` | `open`, `resolved`, `all` | `open` | Which tasks to list |
+| `page` | integer ≥ 1 | `1` | |
+| `pageSize` | integer 1 to 100 | `25` | |
+| `search` | string | none | Matches company name or domain (case-insensitive) |
+| `country` | string | none | Exact company country |
+
+Open tasks are sorted oldest first (work through them as a queue); `resolved` and `all` are sorted newest first.
+
+```bash
+curl "https://monchaworker-production.up.railway.app/api/v1/reviews?pageSize=10"
+```
+
+**200 OK**
+
+```json
+{
+  "items": [
+    {
+      "id": "cmuvr7k2p0001a8tq3x9d2f1b",
+      "tenantId": "tenant_moncha_internal",
+      "leadId": "cmuv6c3vp016bt30uhaiwsu6a",
+      "auditId": "cmuv6d1qa0190t30u7bq2k4mn",
+      "reason": "no_assistant_below_confidence",
+      "status": "open",
+      "resolvedBy": null,
+      "resolutionNote": null,
+      "resolvedAt": null,
+      "createdAt": "2026-10-05T11:02:41.118Z",
+      "lead": {
+        "id": "cmuv6c3vp016bt30uhaiwsu6a",
+        "tenantId": "tenant_moncha_internal",
+        "companyId": "cmuv6c3th0169t30u5wz1y2xq",
+        "queue": "NEEDS_REVIEW",
+        "assistantVerdict": "NO_ASSISTANT",
+        "assistantVendor": null,
+        "qualificationReason": "no_assistant_below_confidence",
+        "latestAuditId": "cmuv6d1qa0190t30u7bq2k4mn",
+        "version": 2,
+        "createdAt": "2026-10-05T10:58:12.004Z",
+        "updatedAt": "2026-10-05T11:02:41.090Z",
+        "company": {
+          "id": "cmuv6c3th0169t30u5wz1y2xq",
+          "tenantId": "tenant_moncha_internal",
+          "name": "Example Dental Clinic",
+          "domain": "exampledental.sg",
+          "country": "Singapore",
+          "city": "Singapore",
+          "phone": "+65 6123 4567",
+          "address": "1 Example Road",
+          "createdAt": "2026-10-05T10:58:11.950Z",
+          "updatedAt": "2026-10-05T10:58:11.950Z",
+          "website": {
+            "id": "cmuv6c3ue016at30u8n4p0r2s",
+            "url": "https://exampledental.sg",
+            "status": "ACTIVE",
+            "title": "Example Dental Clinic",
+            "finalUrl": "https://exampledental.sg/",
+            "httpStatus": 200,
+            "latestAuditId": "cmuv6d1qa0190t30u7bq2k4mn",
+            "lastCheckedAt": "2026-10-05T11:02:40.877Z"
+          }
+        }
+      },
+      "audit": {
+        "id": "cmuv6d1qa0190t30u7bq2k4mn",
+        "method": "render",
+        "verdict": "NO_ASSISTANT",
+        "kind": "NONE",
+        "vendor": null,
+        "confidence": 0.7,
+        "classifierVersion": "assistants-v2",
+        "failureReason": null,
+        "finalUrl": "https://exampledental.sg/",
+        "auditedAt": "2026-10-05T11:02:40.877Z"
+      }
+    }
+  ],
+  "total": 1,
+  "page": 1,
+  "pageSize": 10,
+  "totalPages": 1
+}
+```
+
+`website` contains every website field (shortened above). `audit` is `null` only if the audit row is missing.
+
+**400** `validation_error` for an unknown `status` or a `pageSize` over 100.
+
+### 28. GET `/api/v1/reviews/:id`
+
+**CRUD:** Read. One review task (task object above, without lead and audit).
+
+**200 OK** → review task object. **404** `{ "error": { "code": "not_found", "message": "Review task not found" } }`
+
+### 29. POST `/api/v1/reviews/:id/resolve`
+
+**CRUD:** Update. Applies a human decision and closes the task.
+
+**Headers:** `authorization: Bearer <token>` is optional. When sent, `resolvedBy` is that user's email; an invalid
+or expired token returns 401, and a user of another tenant returns 403. Without it, `resolvedBy` is `api`.
+
+**Body**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `action` | `confirm_no_assistant`, `mark_has_assistant`, `request_reaudit` | Yes | The decision |
+| `note` | string | Yes | Why (not blank) |
+| `vendor` | string | No | Only for `mark_has_assistant`: the chatbot vendor seen, for example `tidio`. Default: the vendor the audit detected, if any |
+
+**What each action does**
+
+| `action` | Lead after | `qualificationReason` | Job |
+|---|---|---|---|
+| `confirm_no_assistant` | `QUALIFIED`, verdict `NO_ASSISTANT`, vendor `null` | `review_confirmed_no_assistant` | none |
+| `mark_has_assistant` | `HAS_ASSISTANT`, verdict `HAS_ASSISTANT`, vendor from the body | `review_marked_has_assistant` | none |
+| `request_reaudit` | Unchanged (stays `NEEDS_REVIEW` until the new audit finishes) | unchanged | Forced `website_audit` job, same as `POST /api/v1/leads/:id/audit` |
+
+Every action marks the task `resolved` (with `resolvedBy`, `resolutionNote`, `resolvedAt`) and writes an audit log
+entry (`entityType: "ReviewTask"`, `action: "review_resolved"`, lead state before and after). The first two also
+raise the lead's `version`. If the re-audit is still not sure, it opens a new review task.
+
+```bash
+curl -X POST https://monchaworker-production.up.railway.app/api/v1/reviews/cmuvr7k2p0001a8tq3x9d2f1b/resolve \
+  -H "content-type: application/json" \
+  -H "authorization: Bearer <token>" \
+  -d '{ "action": "mark_has_assistant", "note": "Tidio bubble bottom right", "vendor": "tidio" }'
+```
+
+**200 OK**
+
+```json
+{
+  "review": {
+    "id": "cmuvr7k2p0001a8tq3x9d2f1b",
+    "status": "resolved",
+    "action": "mark_has_assistant",
+    "resolvedBy": "ops@moncha.example",
+    "resolutionNote": "Tidio bubble bottom right"
+  },
+  "lead": {
+    "id": "cmuv6c3vp016bt30uhaiwsu6a",
+    "queue": "HAS_ASSISTANT",
+    "assistantVerdict": "HAS_ASSISTANT",
+    "assistantVendor": "tidio",
+    "qualificationReason": "review_marked_has_assistant"
+  },
+  "job": null
+}
+```
+
+For `request_reaudit`, `job` is the queued audit, for example `{ "id": "cmuvr9...", "status": "pending" }`, or
+`{ "id": "...", "status": "running", "deduped": true }` when an audit for this lead was already queued.
+
+| Status | `code` | When |
+|---|---|---|
+| 400 | `validation_error` | Missing or blank `note`, unknown `action`, or `request_reaudit` on a lead without a domain |
+| 401 | `unauthorized` | Bearer token sent but invalid, expired or logged out |
+| 403 | `forbidden` | Bearer token of a user in another tenant |
+| 404 | `not_found` | Unknown review task (or one in another tenant) |
+| 409 | `conflict` | Task already resolved |
+
+---
+
 ## How a lead's queue is decided
 
 The worker audits the lead's website in up to three passes and stops at the first clear answer:
@@ -1335,6 +1546,10 @@ The result then sets `queue` and `qualificationReason`:
 | No chatbot, confidence ≥ 0.8 (HTML, render, or AI with confidence ≥ 0.85) | `QUALIFIED` | `no_assistant_high_confidence` |
 | No chatbot, but confidence below 0.8 | `NEEDS_REVIEW` | `no_assistant_below_confidence` |
 | Still not sure after all passes | `NEEDS_REVIEW` | `uncertain` |
+| Reviewer confirmed no chatbot (#29) | `QUALIFIED` | `review_confirmed_no_assistant` |
+| Reviewer saw a chatbot (#29) | `HAS_ASSISTANT` | `review_marked_has_assistant` |
+
+Every `NEEDS_REVIEW` lead has an open review task; see [Reviews](#reviews).
 
 WhatsApp, Messenger, Telegram, LINE and Viber links are contact channels, not chatbots, so a site with only those
 can still be `QUALIFIED`.
@@ -1365,6 +1580,7 @@ The API only stores requests. The work is done by the background worker (`apps/w
 | `POST /api/v1/discovery/country` | Run the crawl (job goes `pending` → `running` → `done`) |
 | `POST /api/v1/leads` with a domain | Audit the website (lead leaves `PENDING_AUDIT`) |
 | `POST /api/v1/leads/:id/audit` | Run the re-audit |
+| `POST /api/v1/reviews/:id/resolve` with `request_reaudit` | Run the re-audit |
 | `POST /api/v1/source-imports` | Import files over 1,000 rows, and audit the imported leads' websites |
 
 On the deployed backend the worker container is not running (the Cloudflare account has no Containers access), so
@@ -1377,7 +1593,8 @@ worker is running.
 ## Local API differences
 
 The local API (`pnpm --filter @moncha/worker api` on port 4000, or the worker itself on `HEALTH_PORT`) serves the
-same endpoints 2 to 26 with the same payloads. Differences from the deployed backend:
+same endpoints 2 to 26 with the same payloads, plus the reviews endpoints 27 to 29. Differences from the deployed
+backend:
 
 | Area | Local API | Deployed backend |
 |---|---|---|
@@ -1390,10 +1607,22 @@ same endpoints 2 to 26 with the same payloads. Differences from the deployed bac
 | Lead `company.website` | All website fields filled | Only `id`, `url`, `status`, `title` |
 | Lead `company.sourceRecords` | Filled | Always `[]` |
 | `openReviewTasks` in counts | Real count | Always `0` |
+| Reviews (#27 to #29) | Served | Not served (404) |
 
 ---
 
 ## Test report
+
+**Review actions (2026-10-05, local API on the Neon dev database): 27 passed, 0 failed.** Run on an isolated test
+tenant; every task, job and user it created was removed afterwards and the test lead restored. List: open task
+listed with lead, company and audit; hidden from another tenant; `status=bogus` 400; search by domain 200 with
+`pageSize=5`; get one 200, unknown 404. Resolve: missing note 400, unknown action 400, invalid token 401, other
+tenant 404; `confirm_no_assistant` 200 (lead `QUALIFIED`, version +1, task resolved by `api`, audit log written);
+same task again 409; `mark_has_assistant` with `vendor: "tidio"` 200 (`HAS_ASSISTANT`, vendor `tidio`);
+`request_reaudit` 200 returning the already-running audit job (`deduped: true`), lead stays `NEEDS_REVIEW`, task
+resolved; `POST /api/v1/leads/:id/audit` still 202 deduped; signed-in resolve records the user's email; token of
+another tenant 403; `status=resolved` lists the 4 resolved tasks; open list empty; counts `openReviewTasks: 0`.
+Plus 10 of 10 unit tests for the resolve logic (including retry when an audit changes the lead at the same time).
 
 **New endpoints (2026-10-05, local API on the Neon dev database): 34 passed, 0 failed.** Worker health: 200
 online with job counts. Leads: `queue=ALL` 200, default 200, `queue=all` 400. Auth: register 201; update profile

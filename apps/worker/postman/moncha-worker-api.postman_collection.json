@@ -10,7 +10,9 @@
     { "key": "apiKey", "value": "" },
     { "key": "scheduleId", "value": "" },
     { "key": "jobId", "value": "" },
-    { "key": "leadId", "value": "" }
+    { "key": "leadId", "value": "" },
+    { "key": "reviewId", "value": "" },
+    { "key": "authToken", "value": "" }
   ],
   "event": [
     {
@@ -217,6 +219,107 @@
         {
           "name": "Re-audit lead website",
           "request": { "method": "POST", "url": "{{baseUrl}}/api/v1/leads/{{leadId}}/audit" }
+        }
+      ]
+    },
+    {
+      "name": "Reviews",
+      "description": "NEEDS_REVIEW leads. Set authToken (from login) to record who resolved the task; leave it empty to resolve as \"api\". Each task can be resolved once, so run List open reviews again before the next resolve.",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const token = pm.collectionVariables.get('authToken');",
+              "if (token) pm.request.headers.upsert({ key: 'Authorization', value: `Bearer ${token}` });"
+            ]
+          }
+        }
+      ],
+      "item": [
+        {
+          "name": "List open reviews",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/reviews?status=open&page=1&pageSize=25",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "reviews"],
+              "query": [
+                { "key": "status", "value": "open" },
+                { "key": "page", "value": "1" },
+                { "key": "pageSize", "value": "25" },
+                { "key": "country", "value": "Singapore", "disabled": true },
+                { "key": "search", "value": "clinic", "disabled": true }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const first = pm.response.json().items?.[0];",
+                  "if (first) pm.collectionVariables.set('reviewId', first.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Resolved review history",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/reviews?status=resolved",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "reviews"],
+              "query": [{ "key": "status", "value": "resolved" }]
+            }
+          }
+        },
+        {
+          "name": "Get review",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/reviews/{{reviewId}}" }
+        },
+        {
+          "name": "Resolve - confirm no assistant",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/v1/reviews/{{reviewId}}/resolve",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"confirm_no_assistant\",\n  \"note\": \"Checked the site, no chat widget\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Resolve - mark has assistant",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/v1/reviews/{{reviewId}}/resolve",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"mark_has_assistant\",\n  \"note\": \"Tidio bubble bottom right\",\n  \"vendor\": \"tidio\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Resolve - request re-audit",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/api/v1/reviews/{{reviewId}}/resolve",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"request_reaudit\",\n  \"note\": \"Site was down during the audit\"\n}"
+            }
+          }
         }
       ]
     }

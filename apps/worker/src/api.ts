@@ -10,6 +10,8 @@ import {
   passwordLoginSchema,
   registerSchema,
   resetPasswordSchema,
+  resolveReviewSchema,
+  reviewListQuerySchema,
   scheduleCreateSchema,
   scheduleDeleteCountrySchema,
   scheduleRunsQuerySchema,
@@ -18,12 +20,14 @@ import {
 } from '@moncha/contracts';
 import {
   prisma,
+  PrismaAuditLogRepository,
   PrismaAuthUserRepository,
   PrismaCompanyRepository,
   PrismaDiscoveryScheduleRepository,
   PrismaJobRunRepository,
   PrismaLeadRepository,
   PrismaPasswordResetRepository,
+  PrismaReviewTaskRepository,
   PrismaSessionRepository,
   PrismaWebsiteRepository,
 } from '@moncha/db';
@@ -44,10 +48,13 @@ import {
   DEFAULT_AUDIT_CONFIG,
   deleteCountrySchedules,
   deleteSchedule,
+  listReviewTasks,
   listScheduleRuns,
   listSchedules,
   omitChatbotSitesEnabled,
   resolveCountry,
+  resolveReviewTask,
+  ReviewError,
   ScheduleError,
   supportedCountries,
   websiteAuditDedupeKey,
@@ -217,9 +224,8 @@ route('GET', '/api/v1/leads/:id', async ({ tenantId, params }) => {
   return { json: lead };
 });
 
-// Re-audit one lead's website (the worker picks it up).
-route('POST', '/api/v1/leads/:id/audit', async ({ tenantId, params }) => {
-  const id = params.id!;
+/** Queues a forced website audit for the lead, or returns the audit job already queued for it. */
+async function queueLeadAudit(tenantId: string, id: string) {
   const lead = await leads.get(tenantId, id);
   if (!lead?.company.domain) throw new HttpError(404, 'not_found', 'Lead or its website domain not found');
   const open = await prisma.jobRun.findFirst({
@@ -231,7 +237,7 @@ route('POST', '/api/v1/leads/:id/audit', async ({ tenantId, params }) => {
     },
     select: { id: true, status: true },
   });
-  if (open) return { status: 202, json: { ...open, deduped: true } };
+  if (open) return { ...open, deduped: true };
 
   const url = `https://${lead.company.domain}`;
   await new PrismaWebsiteRepository(prisma).upsert({ tenantId, companyId: lead.companyId, url, status: 'UNCHECKED' });
@@ -241,12 +247,48 @@ route('POST', '/api/v1/leads/:id/audit', async ({ tenantId, params }) => {
     payload: { leadId: id, companyId: lead.companyId, url, force: true },
     dedupeKey: `${websiteAuditDedupeKey(id, DEFAULT_AUDIT_CONFIG.classifierVersion)}:manual:${Date.now()}`,
   });
-  return { status: 202, json: { id: job.id, status: job.status } };
-});
+  return { id: job.id, status: job.status };
+}
+
+// Re-audit one lead's website (the worker picks it up).
+route('POST', '/api/v1/leads/:id/audit', async ({ tenantId, params }) => ({
+  status: 202,
+  json: await queueLeadAudit(tenantId, params.id!),
+}));
 
 // Auth: bearer-token sessions.
 const auth = { users: new PrismaAuthUserRepository(prisma), sessions: new PrismaSessionRepository(prisma) };
 const tokenOf = (req: IncomingMessage) => bearerToken(req.headers.authorization);
+
+// Review queue: NEEDS_REVIEW leads wait here for a human decision.
+const reviewDeps = {
+  reviewTasks: new PrismaReviewTaskRepository(prisma),
+  leads,
+  auditLogs: new PrismaAuditLogRepository(prisma),
+  requestReaudit: queueLeadAudit,
+  logger,
+};
+
+route('GET', '/api/v1/reviews', async ({ tenantId, url }) => {
+  const q = reviewListQuerySchema.parse(query(url, 'page', 'pageSize', 'status', 'search', 'country'));
+  return { json: await listReviewTasks(reviewDeps, { ...q, tenantId }) };
+});
+
+route('GET', '/api/v1/reviews/:id', async ({ tenantId, params }) => {
+  const task = await reviewDeps.reviewTasks.get(tenantId, params.id!);
+  if (!task) throw new HttpError(404, 'not_found', 'Review task not found');
+  return { json: task };
+});
+
+// Resolver is the signed-in user when a bearer token is sent; an invalid token is rejected.
+route('POST', '/api/v1/reviews/:id/resolve', async ({ req, tenantId, params, body }) => {
+  const input = resolveReviewSchema.parse(await body());
+  const token = tokenOf(req);
+  const user = token ? await currentUser(auth, { token }) : null;
+  if (user && user.tenantId !== tenantId) throw new HttpError(403, 'forbidden', 'Signed-in user belongs to another tenant');
+  const resolvedBy = user ? user.email : 'api';
+  return { json: await resolveReviewTask(reviewDeps, { ...input, tenantId, id: params.id!, resolvedBy }) };
+});
 
 route('POST', '/api/v1/auth/register', async ({ tenantId, body }) => {
   const input = registerSchema.parse(await body());
@@ -355,9 +397,10 @@ type ZodLikeError = Error & { flatten: () => unknown };
 const isZodError = (error: unknown): error is ZodLikeError =>
   error instanceof Error && error.name === 'ZodError' && typeof (error as ZodLikeError).flatten === 'function';
 
-const isCodedError = (error: unknown): error is ScheduleError | AuthError | HttpError | CsvImportError =>
+const isCodedError = (error: unknown): error is ScheduleError | AuthError | ReviewError | HttpError | CsvImportError =>
   error instanceof ScheduleError ||
   error instanceof AuthError ||
+  error instanceof ReviewError ||
   error instanceof HttpError ||
   error instanceof CsvImportError;
 
