@@ -17,5 +17,5 @@ export default async function LoginPage({
   const store = await cookies();
   if (verifySession(store.get(SESSION_COOKIE)?.value)) redirect(next);
 
-  return <LoginForm next={next} demo={!process.env.DATABASE_URL} />;
+  return <LoginForm next={next} demo={!process.env.WORKER_API_BASE_URL && !process.env.DATABASE_URL} />;
 }

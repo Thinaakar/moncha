@@ -63,3 +63,29 @@ export function failedJobAction(type: string) {
 export function locationText(city?: string | null, country?: string | null) {
   return [city, country].filter(Boolean).join(', ') || '—';
 }
+
+const COUNTRY_CODES: Record<string, string> = {
+  singapore: 'SG',
+  malaysia: 'MY',
+  japan: 'JP',
+};
+
+export function countryCode(country?: string | null) {
+  if (!country) return null;
+  return COUNTRY_CODES[country.trim().toLowerCase()] || country.trim().slice(0, 2).toUpperCase();
+}
+
+export function timeAgo(iso: string, now = Date.now()) {
+  const seconds = Math.max(0, Math.floor((now - Date.parse(iso)) / 1000));
+  if (Number.isNaN(seconds)) return '—';
+  if (seconds < 60) return 'just now';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months}mo ago`;
+  return `${Math.floor(months / 12)}y ago`;
+}

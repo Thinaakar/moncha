@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { loginSchema } from '@moncha/contracts';
 import type { AuthContext } from '@moncha/domain';
+import { backendBaseUrl, callBackendAuth, signedInResponse } from '@/lib/backend-auth';
 import { jsonError } from '@/lib/errors';
 import { unauthorized } from '@/lib/api-error';
 import { sessionCookie, signSession } from '@/lib/session';
@@ -15,6 +16,14 @@ function signedIn(context: AuthContext, email: string) {
 
 export async function POST(req: Request) {
   try {
+    if (backendBaseUrl()) {
+      const result = await callBackendAuth('/api/v1/auth/login', { method: 'POST', body: await req.text() });
+      if (result instanceof NextResponse) return result;
+      const { response, data } = result;
+      if (!response.ok) return NextResponse.json(data, { status: response.status });
+      return signedInResponse(data, 200);
+    }
+
     const input = loginSchema.parse(await req.json());
 
     if (!process.env.DATABASE_URL) {

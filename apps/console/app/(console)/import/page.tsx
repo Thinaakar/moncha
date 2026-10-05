@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { Icon } from '@/components/icon';
 import { PageHeader } from '@/components/page-header';
 import { ImportForm } from './import-form';
 
@@ -7,21 +8,16 @@ export default function ImportPage() {
     <main>
       <PageHeader
         title="Import CSV"
-        description="Secondary fallback only. Prefer Discover for new company lists."
+        description="Add companies from a spreadsheet. Discover is still the main way."
         action={
           <Link href="/discover" className="btn btn-secondary">
-            Prefer Discover
+            <Icon name="discover" size={16} />
+            Use Discover →
           </Link>
         }
       />
 
-      <div className="card">
-        <p className="muted card-intro">
-          Columns: <code>name</code>, <code>domain</code>/<code>website</code>, <code>country</code>,{' '}
-          <code>city</code>, <code>phone</code>, <code>address</code>.
-        </p>
-        <ImportForm />
-      </div>
+      <ImportForm />
     </main>
   );
 }
