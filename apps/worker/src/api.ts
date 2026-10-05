@@ -1,14 +1,20 @@
 import './env';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { neon } from '@neondatabase/serverless';
 import {
+  changePasswordSchema,
   countryDiscoverySchema,
+  forgotPasswordSchema,
   leadListQuerySchema,
   manualLeadSchema,
   passwordLoginSchema,
   registerSchema,
+  resetPasswordSchema,
   scheduleCreateSchema,
   scheduleDeleteCountrySchema,
   scheduleRunsQuerySchema,
+  sourceImportSchema,
+  updateProfileSchema,
 } from '@moncha/contracts';
 import {
   prisma,
@@ -17,12 +23,14 @@ import {
   PrismaDiscoveryScheduleRepository,
   PrismaJobRunRepository,
   PrismaLeadRepository,
+  PrismaPasswordResetRepository,
   PrismaSessionRepository,
   PrismaWebsiteRepository,
 } from '@moncha/db';
 import {
   AuthError,
   bearerToken,
+  changePassword,
   createConsoleLogger,
   createManualLead,
   createSchedule,
@@ -30,6 +38,9 @@ import {
   loginUser,
   logoutUser,
   registerUser,
+  requestPasswordReset,
+  resetPassword,
+  updateProfile,
   DEFAULT_AUDIT_CONFIG,
   deleteCountrySchedules,
   deleteSchedule,
@@ -42,6 +53,9 @@ import {
   websiteAuditDedupeKey,
   type CountryDiscoveryJobPayload,
 } from '@moncha/domain';
+import { createResendMailerFromEnv } from '@moncha/integrations';
+import { CsvImportError, SOURCE_IMPORT_JOB_TYPES, sourceImportView, startCsvImport, type CsvSqlClient } from './csv-import';
+import { workerHealth } from './worker-health';
 
 // Local test API for Postman: exposes the same use cases the console routes call.
 // Routes other than /api/v1/auth/* need no login: tenant comes from the x-tenant-id header or DEFAULT_TENANT_ID.
@@ -50,12 +64,15 @@ import {
 const PORT = Number(process.env.WORKER_API_PORT || 4000);
 const HOST = process.env.WORKER_API_HOST || '127.0.0.1';
 const API_KEY = process.env.WORKER_API_KEY || '';
-const MAX_BODY_BYTES = 1_000_000;
+const MAX_BODY_BYTES = 10_000_000;
 
 const logger = createConsoleLogger();
 const schedules = new PrismaDiscoveryScheduleRepository(prisma);
 const jobs = new PrismaJobRunRepository(prisma);
 const leads = new PrismaLeadRepository(prisma);
+let neonSql: CsvSqlClient | null = null;
+/** Set-based CSV import and worker health share their SQL with the Cloudflare edge. */
+const sqlClient = (): CsvSqlClient => (neonSql ??= neon(process.env.DATABASE_URL || '') as unknown as CsvSqlClient);
 
 class HttpError extends Error {
   constructor(
@@ -173,7 +190,8 @@ route('GET', '/api/v1/jobs/:id', async ({ tenantId, params }) => {
 // Leads
 route('GET', '/api/v1/leads', async ({ tenantId, url }) => {
   const q = leadListQuerySchema.parse(query(url, 'page', 'pageSize', 'search', 'country', 'queue'));
-  return { json: await leads.list(tenantId, { ...q, omitChatbotSites: omitChatbotSitesEnabled() }) };
+  // queue=ALL (parsed to undefined) must list every lead, including chatbot sites.
+  return { json: await leads.list(tenantId, { ...q, omitChatbotSites: q.queue ? omitChatbotSitesEnabled() : false }) };
 });
 
 route('GET', '/api/v1/leads/counts', async ({ tenantId }) => ({ json: await leads.queueCounts(tenantId) }));
@@ -244,6 +262,57 @@ route('POST', '/api/v1/auth/logout', async ({ req }) => ({ json: await logoutUse
 
 route('GET', '/api/v1/auth/me', async ({ req }) => ({ json: { user: await currentUser(auth, { token: tokenOf(req) }) } }));
 
+route('PATCH', '/api/v1/auth/me', async ({ req, body }) => {
+  const input = updateProfileSchema.parse(await body());
+  return { json: { user: await updateProfile(auth, { ...input, token: tokenOf(req) }) } };
+});
+
+route('POST', '/api/v1/auth/change-password', async ({ req, body }) => {
+  const input = changePasswordSchema.parse(await body());
+  return { json: await changePassword(auth, { ...input, token: tokenOf(req) }) };
+});
+
+const resetDeps = () => ({
+  ...auth,
+  resets: new PrismaPasswordResetRepository(prisma),
+  mailer: createResendMailerFromEnv(process.env) ?? undefined,
+  logger,
+});
+
+route('POST', '/api/v1/auth/forgot-password', async ({ tenantId, body }) => {
+  const input = forgotPasswordSchema.parse(await body());
+  const resetUrl = process.env.RESET_PASSWORD_URL?.trim() || undefined;
+  return { json: await requestPasswordReset(resetDeps(), { ...input, tenantId, resetUrl }) };
+});
+
+route('POST', '/api/v1/auth/reset-password', async ({ body }) => {
+  const input = resetPasswordSchema.parse(await body());
+  return { json: await resetPassword(resetDeps(), input) };
+});
+
+// Background worker liveness (heartbeat written by poller.ts).
+route('GET', '/api/v1/worker/health', async ({ tenantId }) => ({ json: await workerHealth(sqlClient(), tenantId) }));
+
+// CSV import: small files now, large files queued for the worker.
+route('POST', '/api/v1/source-imports', async ({ tenantId, body }) => {
+  const input = sourceImportSchema.parse(await body());
+  if (input.source !== 'csv') {
+    throw new HttpError(
+      400,
+      'unsupported_source',
+      'Only source "csv" is imported here. Use POST /api/v1/discovery/country for Google Places discovery.',
+    );
+  }
+  const started = await startCsvImport({ sql: sqlClient(), jobs }, { tenantId, csv: input.csv, records: input.records });
+  return { status: 202, json: started };
+});
+
+route('GET', '/api/v1/source-imports/:id', async ({ tenantId, params }) => {
+  const job = await jobs.get(tenantId, params.id!);
+  if (!job || !SOURCE_IMPORT_JOB_TYPES.includes(job.type)) throw new HttpError(404, 'not_found', 'Import not found');
+  return { json: sourceImportView(job) };
+});
+
 function readBody(req: IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -251,7 +320,7 @@ function readBody(req: IncomingMessage): Promise<unknown> {
     req.on('data', (chunk: Buffer) => {
       size += chunk.length;
       if (size > MAX_BODY_BYTES) {
-        reject(new HttpError(413, 'payload_too_large', 'Body larger than 1 MB'));
+        reject(new HttpError(413, 'payload_too_large', 'Body larger than 10 MB'));
         req.destroy();
         return;
       }
@@ -286,8 +355,14 @@ type ZodLikeError = Error & { flatten: () => unknown };
 const isZodError = (error: unknown): error is ZodLikeError =>
   error instanceof Error && error.name === 'ZodError' && typeof (error as ZodLikeError).flatten === 'function';
 
+const isCodedError = (error: unknown): error is ScheduleError | AuthError | HttpError | CsvImportError =>
+  error instanceof ScheduleError ||
+  error instanceof AuthError ||
+  error instanceof HttpError ||
+  error instanceof CsvImportError;
+
 function errorStatus(error: unknown): number {
-  if (error instanceof ScheduleError || error instanceof AuthError || error instanceof HttpError) return error.status;
+  if (isCodedError(error)) return error.status;
   return isZodError(error) ? 400 : 500;
 }
 
@@ -296,7 +371,7 @@ function sendError(res: ServerResponse, error: unknown) {
   if (isZodError(error)) {
     return send(res, 400, { error: { code: 'validation_error', message: 'Invalid request', details: error.flatten() } });
   }
-  if (error instanceof ScheduleError || error instanceof AuthError || error instanceof HttpError) {
+  if (isCodedError(error)) {
     return send(res, error.status, { error: { code: error.code, message: error.message } });
   }
   logger.error('worker_api_error', { message: error instanceof Error ? error.message : String(error) });

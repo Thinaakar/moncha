@@ -1,23 +1,33 @@
 import { neon } from '@neondatabase/serverless';
 import {
+  changePasswordSchema,
   countryDiscoverySchema,
+  forgotPasswordSchema,
   leadListQuerySchema,
   manualLeadSchema,
   passwordLoginSchema,
   registerSchema,
+  resetPasswordSchema,
   scheduleCreateSchema,
   scheduleDeleteCountrySchema,
   scheduleRunsQuerySchema,
+  sourceImportSchema,
+  updateProfileSchema,
 } from '@moncha/contracts';
 import {
   AuthError,
   bearerToken,
+  changePassword,
+  createConsoleLogger,
   createManualLead,
   createSchedule,
   currentUser,
   loginUser,
   logoutUser,
   registerUser,
+  requestPasswordReset,
+  resetPassword,
+  updateProfile,
   DEFAULT_AUDIT_CONFIG,
   deleteCountrySchedules,
   deleteSchedule,
@@ -35,9 +45,13 @@ import {
   NeonDiscoveryScheduleRepo,
   NeonJobRepo,
   NeonLeadRepo,
+  NeonPasswordResetRepo,
   NeonSessionRepo,
   NeonWebsiteRepo,
 } from './neon-adapter';
+import { createResendMailerFromEnv } from '@moncha/integrations';
+import { CsvImportError, SOURCE_IMPORT_JOB_TYPES, sourceImportView, startCsvImport } from '../src/csv-import';
+import { workerHealth } from '../src/worker-health';
 
 export class HttpError extends Error {
   constructor(
@@ -54,8 +68,14 @@ type ZodLikeError = Error & { flatten: () => unknown };
 const isZodError = (error: unknown): error is ZodLikeError =>
   error instanceof Error && error.name === 'ZodError' && typeof (error as ZodLikeError).flatten === 'function';
 
+const isCodedError = (error: unknown): error is ScheduleError | AuthError | HttpError | CsvImportError =>
+  error instanceof ScheduleError ||
+  error instanceof AuthError ||
+  error instanceof HttpError ||
+  error instanceof CsvImportError;
+
 function errorStatus(error: unknown): number {
-  if (error instanceof ScheduleError || error instanceof AuthError || error instanceof HttpError) return error.status;
+  if (isCodedError(error)) return error.status;
   return isZodError(error) ? 400 : 500;
 }
 
@@ -64,7 +84,7 @@ function errorResponse(error: unknown, cors: Record<string, string>): Response {
   let body: unknown;
   if (isZodError(error)) {
     body = { error: { code: 'validation_error', message: 'Invalid request', details: error.flatten() } };
-  } else if (error instanceof ScheduleError || error instanceof AuthError || error instanceof HttpError) {
+  } else if (isCodedError(error)) {
     body = { error: { code: error.code, message: error.message } };
   } else {
     body = { error: { code: 'internal_error', message: error instanceof Error ? error.message : String(error) } };
@@ -138,8 +158,10 @@ export async function handleNeonApi(
     // 1. Health check
     if (pathname === '/health' && method === 'GET') {
       let dbStatus = 'up';
+      let worker: { running: boolean; status: string; lastSeenAt: string | null } | null = null;
       try {
-        await sql.query('SELECT 1');
+        const health = await workerHealth(sql, tenantId);
+        worker = { running: health.running, status: health.status, lastSeenAt: health.lastSeenAt };
       } catch (error) {
         dbStatus = `down: ${error instanceof Error ? error.message : String(error)}`;
       }
@@ -149,6 +171,7 @@ export async function handleNeonApi(
           db: dbStatus,
           tenantId: tenantId || 'tenant_moncha_internal',
           countries: supportedCountries(),
+          ...(worker ? { worker } : {}),
         },
         dbStatus === 'up' ? 200 : 503,
         cors
@@ -179,6 +202,55 @@ export async function handleNeonApi(
       if (pathname === '/api/v1/auth/me' && method === 'GET') {
         return jsonResponse({ user: await currentUser(auth, { token }) }, 200, cors);
       }
+      if (pathname === '/api/v1/auth/me' && method === 'PATCH') {
+        const input = updateProfileSchema.parse(await readJson(request));
+        return jsonResponse({ user: await updateProfile(auth, { ...input, token }) }, 200, cors);
+      }
+      if (pathname === '/api/v1/auth/change-password' && method === 'POST') {
+        const input = changePasswordSchema.parse(await readJson(request));
+        return jsonResponse(await changePassword(auth, { ...input, token }), 200, cors);
+      }
+      const resetDeps = {
+        ...auth,
+        resets: new NeonPasswordResetRepo(sql),
+        mailer: createResendMailerFromEnv(env) ?? undefined,
+        logger: createConsoleLogger(),
+      };
+      if (pathname === '/api/v1/auth/forgot-password' && method === 'POST') {
+        const input = forgotPasswordSchema.parse(await readJson(request));
+        const resetUrl = typeof env.RESET_PASSWORD_URL === 'string' ? env.RESET_PASSWORD_URL.trim() : undefined;
+        return jsonResponse(await requestPasswordReset(resetDeps, { ...input, tenantId, resetUrl }), 200, cors);
+      }
+      if (pathname === '/api/v1/auth/reset-password' && method === 'POST') {
+        const input = resetPasswordSchema.parse(await readJson(request));
+        return jsonResponse(await resetPassword(resetDeps, input), 200, cors);
+      }
+    }
+
+    // Background worker liveness
+    if (pathname === '/api/v1/worker/health' && method === 'GET') {
+      return jsonResponse(await workerHealth(sql, tenantId), 200, cors);
+    }
+
+    // CSV import
+    if (pathname === '/api/v1/source-imports' && method === 'POST') {
+      const input = sourceImportSchema.parse(await readJson(request));
+      if (input.source !== 'csv') {
+        throw new HttpError(
+          400,
+          'unsupported_source',
+          'Only source "csv" is imported here. Use POST /api/v1/discovery/country for Google Places discovery.',
+        );
+      }
+      const started = await startCsvImport({ sql, jobs }, { tenantId, csv: input.csv, records: input.records });
+      return jsonResponse(started, 202, cors);
+    }
+
+    const importIdMatch = pathname.match(/^\/api\/v1\/source-imports\/(?<id>[^/]+)$/);
+    if (importIdMatch && method === 'GET') {
+      const job = await jobs.get(tenantId, importIdMatch.groups?.id!);
+      if (!job || !SOURCE_IMPORT_JOB_TYPES.includes(job.type)) throw new HttpError(404, 'not_found', 'Import not found');
+      return jsonResponse(sourceImportView(job), 200, cors);
     }
 
     // 2. Schedules

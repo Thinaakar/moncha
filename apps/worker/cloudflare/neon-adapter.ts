@@ -3,6 +3,8 @@ import type {
   AuthUserCreate,
   AuthUserRecord,
   AuthUserRepo,
+  PasswordResetCreate,
+  PasswordResetRepo,
   SessionCreate,
   SessionRepo,
   CompanyPatch,
@@ -144,10 +146,11 @@ export class NeonJobRepo implements JobRepo {
 
   async create(data: JobCreate): Promise<JobRunRecord> {
     const id = `job_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+    const running = data.status === 'running';
     const rows = await queryRows(
       this.sql,
-      `INSERT INTO "JobRun" (id, "tenantId", type, status, payload, "dedupeKey", "maxAttempts", "runAfter", "createdAt")
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+      `INSERT INTO "JobRun" (id, "tenantId", type, status, payload, "dedupeKey", "maxAttempts", "runAfter", attempts, "startedAt", "lockedAt", "createdAt")
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, NOW())
        RETURNING *`,
       [
         id,
@@ -158,6 +161,8 @@ export class NeonJobRepo implements JobRepo {
         data.dedupeKey ?? null,
         data.maxAttempts ?? 3,
         data.runAfter ? data.runAfter.toISOString() : new Date().toISOString(),
+        running ? 1 : 0,
+        running ? new Date().toISOString() : null,
       ]
     );
     return mapJobRow(rows[0]);
@@ -167,9 +172,16 @@ export class NeonJobRepo implements JobRepo {
     const sets: string[] = [];
     const params: any[] = [tenantId, id];
     let idx = 3;
+    const iso = (d: Date | null) => (d ? d.toISOString() : null);
     if (data.status) { sets.push(`status = $${idx++}`); params.push(data.status); }
     if (data.lastError !== undefined) { sets.push(`"lastError" = $${idx++}`); params.push(data.lastError); }
     if (data.result !== undefined) { sets.push(`result = $${idx++}`); params.push(data.result ? JSON.stringify(data.result) : null); }
+    if (data.attempts !== undefined) { sets.push(`attempts = $${idx++}`); params.push(data.attempts); }
+    if (data.runAfter) { sets.push(`"runAfter" = $${idx++}`); params.push(iso(data.runAfter)); }
+    if (data.lockedAt !== undefined) { sets.push(`"lockedAt" = $${idx++}`); params.push(iso(data.lockedAt)); }
+    if (data.lockedBy !== undefined) { sets.push(`"lockedBy" = $${idx++}`); params.push(data.lockedBy); }
+    if (data.startedAt !== undefined) { sets.push(`"startedAt" = $${idx++}`); params.push(iso(data.startedAt)); }
+    if (data.finishedAt !== undefined) { sets.push(`"finishedAt" = $${idx++}`); params.push(iso(data.finishedAt)); }
     if (!sets.length) return this.get(tenantId, id);
 
     const rows = await queryRows(
@@ -479,6 +491,52 @@ export class NeonAuthUserRepo implements AuthUserRepo {
     );
     return rows.length ? mapUserRow(rows[0]) : null;
   }
+
+  async updateName(userId: string, name: string): Promise<AuthUserRecord | null> {
+    const rows = await queryRows(
+      this.sql,
+      `UPDATE "User" AS u SET name = $2 WHERE u.id = $1 RETURNING ${USER_COLUMNS}`,
+      [userId, name]
+    );
+    return rows.length ? mapUserRow(rows[0]) : null;
+  }
+
+  async setPasswordHash(userId: string, passwordHash: string): Promise<void> {
+    await queryRows(this.sql, 'UPDATE "User" SET "passwordHash" = $2 WHERE id = $1', [userId, passwordHash]);
+  }
+}
+
+export class NeonPasswordResetRepo implements PasswordResetRepo {
+  constructor(private sql: any) {}
+
+  async create(data: PasswordResetCreate): Promise<void> {
+    const id = `pwr_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+    await queryRows(
+      this.sql,
+      `INSERT INTO "PasswordResetToken" (id, "tenantId", "userId", "tokenHash", "expiresAt", "createdAt")
+       VALUES ($1, $2, $3, $4, $5, NOW())`,
+      [id, data.tenantId, data.userId, data.tokenHash, data.expiresAt.toISOString()]
+    );
+  }
+
+  async consume(tokenHash: string, now: Date): Promise<{ userId: string; tenantId: string } | null> {
+    const rows = await queryRows(
+      this.sql,
+      `UPDATE "PasswordResetToken" SET "usedAt" = $2
+       WHERE "tokenHash" = $1 AND "usedAt" IS NULL AND "expiresAt" > $2
+       RETURNING "userId", "tenantId"`,
+      [tokenHash, now.toISOString()]
+    );
+    return rows.length ? { userId: rows[0].userId, tenantId: rows[0].tenantId } : null;
+  }
+
+  async invalidateForUser(userId: string, now: Date): Promise<void> {
+    await queryRows(
+      this.sql,
+      'UPDATE "PasswordResetToken" SET "usedAt" = $2 WHERE "userId" = $1 AND "usedAt" IS NULL',
+      [userId, now.toISOString()]
+    );
+  }
 }
 
 export class NeonSessionRepo implements SessionRepo {
@@ -513,6 +571,17 @@ export class NeonSessionRepo implements SessionRepo {
       [tokenHash, now.toISOString()]
     );
     return rows.length > 0;
+  }
+
+  async revokeAllForUser(userId: string, now: Date, keepTokenHash?: string): Promise<number> {
+    const rows = await queryRows(
+      this.sql,
+      `UPDATE "Session" SET "revokedAt" = $2
+       WHERE "userId" = $1 AND "revokedAt" IS NULL AND ($3::text IS NULL OR "tokenHash" <> $3)
+       RETURNING id`,
+      [userId, now.toISOString(), keepTokenHash ?? null]
+    );
+    return rows.length;
   }
 }
 

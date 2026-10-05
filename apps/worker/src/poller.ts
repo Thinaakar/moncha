@@ -1,7 +1,11 @@
 import './env';
 import { randomUUID } from 'node:crypto';
+import { hostname } from 'node:os';
 import type { Server } from 'node:http';
+import { neon } from '@neondatabase/serverless';
 import { createApiServer } from './api';
+import { runQueuedCsvImport, type CsvSqlClient } from './csv-import';
+import { WORKER_HEARTBEAT_MS } from './worker-health';
 import {
   prisma,
   PrismaAuditLogRepository,
@@ -12,6 +16,7 @@ import {
   PrismaReviewTaskRepository,
   PrismaWebsiteAuditRepository,
   PrismaWebsiteRepository,
+  PrismaWorkerHeartbeatRepository,
   withDbRetry,
 } from '@moncha/db';
 import {
@@ -46,6 +51,9 @@ const STARTED_AT = new Date();
 const logger = createConsoleLogger();
 const jobs = new PrismaJobRunRepository(prisma);
 const schedules = new PrismaDiscoveryScheduleRepository(prisma);
+const heartbeats = new PrismaWorkerHeartbeatRepository(prisma);
+const HOSTNAME = process.env.HOSTNAME || hostname();
+const csvSql = neon(process.env.DATABASE_URL || '') as unknown as CsvSqlClient;
 const crawlAbort = new AbortController();
 let activeCrawl: Promise<void> | null = null;
 const llm = createOpenRouterFromEnv(process.env);
@@ -121,6 +129,19 @@ async function tick() {
 
 async function schedulerTick() {
   await withDbRetry(() => enqueueDueSchedules({ schedules, logger }));
+}
+
+/** GET /api/v1/worker/health reports the worker offline when this row stops updating. */
+async function heartbeatTick() {
+  await withDbRetry(() => heartbeats.touch(WORKER_ID, HOSTNAME));
+}
+
+/** Large CSV files the API queued instead of importing during the request; one at a time. */
+async function csvTick() {
+  const [job] = await withDbRetry(() => jobs.claimJobs(WORKER_ID, 1, 'csv_import'));
+  if (!job) return;
+  const result = await runQueuedCsvImport({ sql: csvSql, jobs }, job);
+  logger.info('csv_import_done', { jobId: job.id, tenantId: job.tenantId, ...result });
 }
 
 /** One country crawl at a time per worker; audits keep running in their own loop. */
@@ -233,10 +254,16 @@ async function main() {
     });
   }
 
+  await heartbeats
+    .prune(new Date(Date.now() - 24 * 60 * 60_000))
+    .catch((error) => logger.error('heartbeat_prune_error', { message: error instanceof Error ? error.message : String(error) }));
+
   await Promise.all([
+    every('heartbeat_tick_error', WORKER_HEARTBEAT_MS, heartbeatTick),
     every('worker_tick_error', POLL_MS, tick),
     every('scheduler_tick_error', SCHEDULER_TICK_MS, schedulerTick),
     every('country_tick_error', POLL_MS, countryTick),
+    every('csv_tick_error', POLL_MS, csvTick),
   ]);
 }
 

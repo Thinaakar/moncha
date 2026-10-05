@@ -1,8 +1,9 @@
 # Moncha Backend API
 
-Every endpoint served by the backend (19 in total). All examples below are real responses captured from the live
-deployment on 2026-10-03 (50 of 50 full test cases, 26 of 26 re-checks after the audit changes, and 22 of 22 auth
-cases passed, see [Test report](#test-report)).
+Every endpoint served by the backend (26 in total). Endpoints 1 to 19 were captured from the live deployment on
+2026-10-03 (50 of 50 full test cases, 26 of 26 re-checks after the audit changes, and 22 of 22 auth cases passed).
+Endpoints 20 to 26 and `queue=ALL` were added on 2026-10-05 and tested against the local API on the dev database
+(34 of 34 cases passed), see [Test report](#test-report).
 
 - **Base URL (deployed):** `https://moncha-backend.vinothjv4-tech.workers.dev`
 - **Base URL (local):** `http://localhost:4000` (`pnpm --filter @moncha/worker api`), see [Local API differences](#local-api-differences)
@@ -18,7 +19,9 @@ cases passed, see [Test report](#test-report)).
 - [Schedules](#schedules): list, create, delete one, delete by country, run history
 - [Discovery and jobs](#discovery-and-jobs): start a country crawl, get job status
 - [Leads](#leads): list, counts, get one, create, re-audit
-- [Auth](#auth): register, login, logout, current user
+- [Auth](#auth): register, login, logout, current user, update profile, change password, forgot and reset password
+- [Source imports](#source-imports): CSV import and import status
+- [Worker health](#worker-health): is the background worker running
 - [How a lead's queue is decided](#how-a-leads-queue-is-decided)
 - [Enums](#enums)
 - [Background processing](#background-processing)
@@ -32,7 +35,7 @@ cases passed, see [Test report](#test-report)).
 | # | Method | Endpoint | CRUD | What it does | Success | Tables |
 |---|---|---|---|---|---|---|
 | 1 | GET | `/` | Read | Service index | 200 | none |
-| 2 | GET | `/health` | Read | Health and database check | 200 | none (`SELECT 1`) |
+| 2 | GET | `/health` | Read | Health, database and worker check | 200 | WorkerHeartbeat, JobRun (read) |
 | 3 | OPTIONS | any path | n/a | CORS preflight | 204 | none |
 | 4 | GET | `/api/v1/schedules` | Read | List daily schedules, grouped by country | 200 | DiscoverySchedule |
 | 5 | POST | `/api/v1/schedules` | Create | Add a daily run time for a country | 201 | DiscoverySchedule |
@@ -50,8 +53,15 @@ cases passed, see [Test report](#test-report)).
 | 17 | POST | `/api/v1/auth/login` | Create | Sign in with email and password, get a token | 200 | User (read), Session |
 | 18 | POST | `/api/v1/auth/logout` | Update | Sign out (revoke the token) | 200 | Session |
 | 19 | GET | `/api/v1/auth/me` | Read | The signed-in user | 200 | Session, User |
+| 20 | PATCH | `/api/v1/auth/me` | Update | Change the signed-in user's name | 200 | Session, User |
+| 21 | POST | `/api/v1/auth/change-password` | Update | Change password (signed in) | 200 | Session, User |
+| 22 | POST | `/api/v1/auth/forgot-password` | Create | Email a password reset link | 200 | User, PasswordResetToken |
+| 23 | POST | `/api/v1/auth/reset-password` | Update | Set a new password with the link's token | 200 | PasswordResetToken, User, Session |
+| 24 | POST | `/api/v1/source-imports` | Create | Import companies from a CSV | 202 | JobRun, Company, SourceRecord, Lead, Website |
+| 25 | GET | `/api/v1/source-imports/:id` | Read | Status and result of an import | 200 | JobRun |
+| 26 | GET | `/api/v1/worker/health` | Read | Is the background worker running | 200 | WorkerHeartbeat, JobRun |
 
-There are no PUT or PATCH endpoints. To change a schedule time, delete the old one (#6) and create the new one (#5).
+The only PATCH is #20. To change a schedule time, delete the old one (#6) and create the new one (#5).
 
 ---
 
@@ -62,7 +72,7 @@ There are no PUT or PATCH endpoints. To change a schedule time, delete the old o
 | Header | Required | Description |
 |---|---|---|
 | `content-type: application/json` | For POST with a body | Body must be valid JSON. An empty body is treated as `{}`. |
-| `authorization: Bearer <token>` | Only for `/api/v1/auth/logout` and `/api/v1/auth/me` | Token from register or login. Other endpoints do not check it yet. |
+| `authorization: Bearer <token>` | Only for `/api/v1/auth/logout`, `/api/v1/auth/me` (GET and PATCH) and `/api/v1/auth/change-password` | Token from register or login. Other endpoints do not check it yet. |
 | `x-tenant-id` | No | Tenant to read and write. Default: `tenant_moncha_internal` (`DEFAULT_TENANT_ID`). |
 | `x-api-key` | Only if `WORKER_API_KEY` is set on the server | Currently **not** set on the deployed backend, so it is not needed. |
 
@@ -84,14 +94,19 @@ Every error has the same shape:
 
 | Status | `code` | When |
 |---|---|---|
-| 400 | `validation_error` | Missing or invalid field, invalid JSON body, unsupported country, unknown time zone |
+| 400 | `validation_error` | Missing or invalid field, invalid JSON body, unsupported country, unknown time zone, CSV without rows |
+| 400 | `invalid_token` | Password reset token is invalid, already used or expired |
+| 400 | `invalid_password` | Change password: the current password is wrong |
+| 400 | `unsupported_source` | Source import with a source other than `csv` |
 | 401 | `unauthorized` | Wrong email or password; missing, expired or logged-out token; or wrong `x-api-key` (only when `WORKER_API_KEY` is set) |
-| 404 | `not_found` | Unknown route, or the schedule, job or lead does not exist |
+| 404 | `not_found` | Unknown route, or the schedule, job, lead or import does not exist |
 | 405 | `method_not_allowed` | Local API only: known path, wrong method (deployed returns 404) |
 | 409 | `conflict` | Schedule already exists for that country and time, or an account with that email already exists |
-| 413 | `payload_too_large` | Local API only: body larger than 1 MB |
+| 413 | `too_many_rows` | CSV with more than 20,000 rows |
+| 413 | `payload_too_large` | Local API only: body larger than 10 MB |
 | 500 | `internal_error` | Unexpected server error |
 | 503 | `configuration_error` | `DATABASE_URL` is not set on the server |
+| 503 | `service_unavailable` | Forgot password when the reset email is not configured (`RESEND_API_KEY` or `RESET_PASSWORD_URL` missing) |
 
 Unknown routes (and unsupported methods on known paths) return:
 
@@ -137,7 +152,19 @@ curl https://moncha-backend.vinothjv4-tech.workers.dev/
 {
   "service": "moncha-backend",
   "status": "ok",
-  "endpoints": ["/health", "/api/v1/auth/login", "/api/v1/schedules", "/api/v1/schedules/runs", "/api/v1/leads"]
+  "endpoints": [
+    "/health",
+    "/api/v1/auth/login",
+    "/api/v1/auth/me",
+    "/api/v1/auth/forgot-password",
+    "/api/v1/auth/reset-password",
+    "/api/v1/auth/change-password",
+    "/api/v1/schedules",
+    "/api/v1/schedules/runs",
+    "/api/v1/leads",
+    "/api/v1/source-imports",
+    "/api/v1/worker/health"
+  ]
 }
 ```
 
@@ -145,7 +172,7 @@ The `endpoints` list is informational only; this document is the full list.
 
 ### 2. GET `/health`
 
-**CRUD:** Read. Checks the backend and database connection.
+**CRUD:** Read. Checks the backend, the database connection and whether the background worker is running.
 
 ```bash
 curl https://moncha-backend.vinothjv4-tech.workers.dev/health
@@ -158,11 +185,12 @@ curl https://moncha-backend.vinothjv4-tech.workers.dev/health
   "ok": true,
   "db": "up",
   "tenantId": "tenant_moncha_internal",
-  "countries": ["Singapore (SG)", "Malaysia (MY)", "Japan (JP)"]
+  "countries": ["Singapore (SG)", "Malaysia (MY)", "Japan (JP)"],
+  "worker": { "running": false, "status": "offline", "lastSeenAt": "2026-10-05T10:41:12.402Z" }
 }
 ```
 
-**503** when the database is down: `"ok": false`, `"db": "down: <reason>"`.
+**503** when the database is down: `"ok": false`, `"db": "down: <reason>"`, and no `worker` field.
 
 | Field | Type | Description |
 |---|---|---|
@@ -170,6 +198,7 @@ curl https://moncha-backend.vinothjv4-tech.workers.dev/health
 | `db` | string | `"up"` or `"down: <reason>"` |
 | `tenantId` | string | Tenant used for this request |
 | `countries` | string[] | Countries the crawler supports |
+| `worker` | object | Short worker status. `ok` does not depend on it. Full details: [`GET /api/v1/worker/health`](#26-get-apiv1workerhealth) |
 
 ---
 
@@ -562,7 +591,7 @@ fields are `null`, and `sourceRecords` is always `[]`.
 
 | Query | Required | Default | Rules |
 |---|---|---|---|
-| `queue` | No | `QUALIFIED` | One of the lead queues |
+| `queue` | No | `QUALIFIED` | One of the lead queues, or `ALL` for every lead whatever its queue (upper case only) |
 | `page` | No | 1 | Integer ≥ 1 |
 | `pageSize` | No | 25 | Integer 1 to 100 |
 | `search` | No | | Matches company name or domain (contains, case-insensitive) |
@@ -585,6 +614,14 @@ curl "https://moncha-backend.vinothjv4-tech.workers.dev/api/v1/leads?queue=QUALI
 ```
 
 `totalPages` is `0` when `total` is `0`.
+
+With `queue=ALL` the list holds leads from every queue (pending, qualified, has assistant, no website, needs review
+and inactive), and `OMIT_CHATBOT_SITES` is not applied. Without `queue` the default is still `QUALIFIED`, so
+existing callers are unchanged.
+
+```bash
+curl "https://moncha-backend.vinothjv4-tech.workers.dev/api/v1/leads?queue=ALL&page=1&pageSize=25"
+```
 
 **400** for an invalid `queue`, `page` below 1, or `pageSize` above 100:
 
@@ -968,6 +1005,313 @@ await fetch(`${API}/api/v1/auth/logout`, {
 localStorage.removeItem('moncha_token');
 ```
 
+### 20. PATCH `/api/v1/auth/me`
+
+**CRUD:** Update. Changes the signed-in user's display name.
+
+| Header | Required |
+|---|---|
+| `authorization: Bearer <token>` | Yes |
+
+**Body**
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `name` | string | Yes | 1 to 100 characters after trimming spaces |
+
+```bash
+curl -X PATCH https://moncha-backend.vinothjv4-tech.workers.dev/api/v1/auth/me \
+  -H "authorization: Bearer 24b3TgV9cK1mQ7zR2xLp8sW4yN6aE0dJ3hU5oFiBtGk" \
+  -H "content-type: application/json" \
+  -d '{ "name": "Ana Tan" }'
+```
+
+**200 OK** (same shape as `GET /api/v1/auth/me`, with the new name)
+
+```json
+{
+  "user": {
+    "id": "user_6aff46d70f004d29",
+    "tenantId": "tenant_moncha_internal",
+    "email": "ana@example.com",
+    "name": "Ana Tan",
+    "role": "operator",
+    "createdAt": "2026-10-03T07:28:41.632Z"
+  }
+}
+```
+
+**Errors:** 400 for an empty or missing `name` or a name over 100 characters; 401 as for `GET /api/v1/auth/me`.
+
+### 21. POST `/api/v1/auth/change-password`
+
+**CRUD:** Update. Changes the password of the signed-in user. The session that made the call stays signed in;
+every other session of the user is logged out.
+
+| Header | Required |
+|---|---|
+| `authorization: Bearer <token>` | Yes |
+
+**Body**
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `currentPassword` | string | Yes | The password in use now |
+| `newPassword` | string | Yes | 8 to 128 characters, different from the current password |
+
+```bash
+curl -X POST https://moncha-backend.vinothjv4-tech.workers.dev/api/v1/auth/change-password \
+  -H "authorization: Bearer 24b3TgV9cK1mQ7zR2xLp8sW4yN6aE0dJ3hU5oFiBtGk" \
+  -H "content-type: application/json" \
+  -d '{ "currentPassword": "Test-pass-2026", "newPassword": "New-pass-2026" }'
+```
+
+**200 OK**
+
+```json
+{ "ok": true, "otherSessionsRevoked": 1 }
+```
+
+`otherSessionsRevoked` is the number of other devices that were logged out.
+
+**Errors**
+
+| Status | Example |
+|---|---|
+| 400 | `{ "error": { "code": "invalid_password", "message": "Current password is incorrect" } }` |
+| 400 | `{ "error": { "code": "validation_error", "message": "New password must be different from the current password" } }` |
+| 400 | `fieldErrors.newPassword: ["Use at least 8 characters"]` |
+| 401 | Missing, expired or logged-out token |
+
+### 22. POST `/api/v1/auth/forgot-password`
+
+**CRUD:** Create. Emails a password reset link (sent with [Resend](https://resend.com)). The link is
+`RESET_PASSWORD_URL?token=<token>`; `RESET_PASSWORD_URL` is the console's reset page, set on the server.
+
+**Body**
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `email` | string | Yes | Valid email (any case) |
+
+```bash
+curl -X POST https://moncha-backend.vinothjv4-tech.workers.dev/api/v1/auth/forgot-password \
+  -H "content-type: application/json" \
+  -d '{ "email": "ana@example.com" }'
+```
+
+**200 OK** (always the same reply)
+
+```json
+{ "ok": true, "message": "If an account exists for this email, a password reset link has been sent." }
+```
+
+**Rules**
+
+- The reply is the same whether or not the email has an account, so it does not reveal which emails are
+  registered. Show the `message` to the user as it is.
+- The link works **once** and expires after **30 minutes**. Asking again makes every older link stop working.
+- If the email service fails, the reply is still `200`; the error is logged on the server.
+
+**Errors**
+
+| Status | Example |
+|---|---|
+| 400 | `fieldErrors.email: ["Invalid email address"]` |
+| 503 | `{ "error": { "code": "service_unavailable", "message": "Password reset email is not configured on the server" } }` when `RESEND_API_KEY` or `RESET_PASSWORD_URL` is not set |
+
+### 23. POST `/api/v1/auth/reset-password`
+
+**CRUD:** Update. Sets a new password using the token from the reset link. On success the token is used up and
+**every** session of the user is logged out, so the user signs in again with the new password.
+
+**Body**
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `token` | string | Yes | The `token` query parameter of the reset link (16 to 256 characters) |
+| `password` | string | Yes | 8 to 128 characters |
+
+```bash
+curl -X POST https://moncha-backend.vinothjv4-tech.workers.dev/api/v1/auth/reset-password \
+  -H "content-type: application/json" \
+  -d '{ "token": "<token from the link>", "password": "Brand-new-2026" }'
+```
+
+**200 OK**
+
+```json
+{ "ok": true }
+```
+
+**Errors**
+
+| Status | Example |
+|---|---|
+| 400 | `{ "error": { "code": "invalid_token", "message": "This reset link is invalid, already used or expired" } }` |
+| 400 | `fieldErrors.password: ["Use at least 8 characters"]` |
+
+**Reset page (console):** read `token` from the page URL, ask for the new password, then POST it here. On `200`
+send the user to the login page; on `invalid_token` offer to request a new link.
+
+---
+
+## Source imports
+
+Imports companies from a CSV as leads. Each new company gets a lead in `PENDING_AUDIT` and a website audit job,
+the same as companies found by discovery.
+
+- **Up to 1,000 rows:** imported during the request. The reply already has `status: "done"` and the `result`.
+- **1,001 to 20,000 rows:** saved as a `csv_import` job (`status: "pending"`) and imported by the background worker.
+  Poll `GET /api/v1/source-imports/:id` until `status` is `done` or `failed`.
+- Companies are matched by domain. A company that already exists is counted as a duplicate; the CSV only fills its
+  empty fields (country, city, phone, address). Rows repeating a domain within the same file are also duplicates.
+- Rows without a name or without a website/domain are skipped.
+
+### 24. POST `/api/v1/source-imports`
+
+**CRUD:** Create.
+
+**Body**
+
+| Field | Type | Required | Rules |
+|---|---|---|---|
+| `source` | string | Yes | `"csv"`. Any other source returns 400 `unsupported_source` |
+| `csv` | string | One of `csv` or `records` | CSV text with a header row. Columns: `name` (required), `website` or `domain` (required), `country`, `city`, `phone`, `address` |
+| `records` | object[] | One of `csv` or `records` | Already-parsed rows with the same fields. Used instead of `csv` when not empty |
+
+```bash
+curl -X POST https://moncha-backend.vinothjv4-tech.workers.dev/api/v1/source-imports \
+  -H "content-type: application/json" \
+  -d '{ "source": "csv", "csv": "name,website,country,city\nAcme Dental,https://acme-dental.sg,Singapore,Singapore\nBright Smiles,brightsmiles.sg,Singapore,Singapore" }'
+```
+
+**202 Accepted** (up to 1,000 rows: imported now)
+
+```json
+{
+  "id": "cmuv3fp2n0009g5s0q7m0d1xk",
+  "status": "done",
+  "mode": "inline",
+  "rows": 2,
+  "result": { "found": 2, "created": 2, "duplicates": 0, "skipped": 0, "auditsEnqueued": 2, "noWebsite": 0 }
+}
+```
+
+**202 Accepted** (more than 1,000 rows: queued for the worker)
+
+```json
+{ "id": "cmuv3h457000fg5s0ymfwh4lt", "status": "pending", "mode": "queued", "rows": 1001 }
+```
+
+| `result` field | Description |
+|---|---|
+| `found` | Rows in the file |
+| `created` | New companies (each with a new lead) |
+| `duplicates` | Rows whose domain already existed, or repeated a domain earlier in the file |
+| `skipped` | Rows without a name or website/domain |
+| `auditsEnqueued` | Website audit jobs created (pending leads already audited today are not queued again) |
+| `noWebsite` | Matched companies whose lead is in `NO_WEBSITE` |
+
+**Errors**
+
+| Status | Example |
+|---|---|
+| 400 | `{ "error": { "code": "validation_error", "message": "No rows found. The CSV needs a header row with a \"name\" column and a \"website\" or \"domain\" column." } }` |
+| 400 | `{ "error": { "code": "unsupported_source", "message": "Only source \"csv\" is imported here. Use POST /api/v1/discovery/country for Google Places discovery." } }` |
+| 400 | `fieldErrors.csv: ["CSV import requires csv text or records"]` |
+| 413 | `{ "error": { "code": "too_many_rows", "message": "CSV has 25000 rows; the limit is 20000." } }` |
+
+### 25. GET `/api/v1/source-imports/:id`
+
+**CRUD:** Read. Status and result of an import (the `id` from #24).
+
+```bash
+curl https://moncha-backend.vinothjv4-tech.workers.dev/api/v1/source-imports/cmuv3h457000fg5s0ymfwh4lt
+```
+
+**200 OK**
+
+```json
+{
+  "id": "cmuv3h457000fg5s0ymfwh4lt",
+  "status": "done",
+  "source": "csv",
+  "type": "csv_import",
+  "mode": "queued",
+  "rows": 1001,
+  "startedAt": "2026-10-05T10:39:02.118Z",
+  "finishedAt": "2026-10-05T10:39:04.870Z",
+  "createdAt": "2026-10-05T10:38:58.533Z",
+  "result": { "found": 1001, "created": 1001, "duplicates": 0, "skipped": 0, "auditsEnqueued": 1001, "noWebsite": 0 },
+  "recordsDiscovered": 1001,
+  "recordsImported": 1001,
+  "error": null
+}
+```
+
+| Field | Description |
+|---|---|
+| `status` | `pending` (waiting for the worker), `running`, `done` or `failed` |
+| `mode` | `inline` or `queued` |
+| `result` | `null` until the import is done |
+| `recordsDiscovered` / `recordsImported` | `result.found` / `result.created` |
+| `error` | Failure reason when `status` is `failed` |
+
+**404** `{ "error": { "code": "not_found", "message": "Import not found" } }` for an unknown id or a job that is not an
+import.
+
+---
+
+## Worker health
+
+The background worker writes a heartbeat to the database every 30 seconds. It counts as offline when no heartbeat
+arrived for 120 seconds.
+
+### 26. GET `/api/v1/worker/health`
+
+**CRUD:** Read.
+
+```bash
+curl https://moncha-backend.vinothjv4-tech.workers.dev/api/v1/worker/health
+```
+
+**200 OK**
+
+```json
+{
+  "running": true,
+  "status": "online",
+  "message": "Background worker is running.",
+  "lastSeenAt": "2026-10-05T10:39:30.114Z",
+  "secondsSinceLastSeen": 12,
+  "staleAfterSeconds": 120,
+  "workers": [
+    {
+      "workerId": "worker-local-3f9c2a1b",
+      "hostname": "DESKTOP-MONCHA",
+      "lastSeenAt": "2026-10-05T10:39:30.114Z",
+      "secondsSinceLastSeen": 12,
+      "online": true
+    }
+  ],
+  "jobs": {
+    "pending": { "website_audit": 3, "country_discovery": 0, "csv_import": 0 },
+    "running": { "website_audit": 1, "country_discovery": 0, "csv_import": 0 }
+  }
+}
+```
+
+When offline: `"running": false`, `"status": "offline"`, and `message` is `"Background worker is offline: discovery,
+schedules, website audits and large CSV imports wait until it starts."`. `lastSeenAt` and `secondsSinceLastSeen` are
+`null` if no worker has ever run.
+
+| Field | Description |
+|---|---|
+| `running` | `true` when the latest heartbeat is at most 120 seconds old |
+| `workers` | Up to 5 most recent workers |
+| `jobs` | This tenant's waiting (`pending`) and active (`running`) jobs per type |
+
 ---
 
 ## How a lead's queue is decided
@@ -1021,25 +1365,28 @@ The API only stores requests. The work is done by the background worker (`apps/w
 | `POST /api/v1/discovery/country` | Run the crawl (job goes `pending` → `running` → `done`) |
 | `POST /api/v1/leads` with a domain | Audit the website (lead leaves `PENDING_AUDIT`) |
 | `POST /api/v1/leads/:id/audit` | Run the re-audit |
+| `POST /api/v1/source-imports` | Import files over 1,000 rows, and audit the imported leads' websites |
 
 On the deployed backend the worker container is not running (the Cloudflare account has no Containers access), so
 these jobs stay `pending` until a worker runs, for example `pnpm --filter @moncha/worker start` locally.
-Poll `GET /api/v1/jobs/:id` until `status` is `done` or `failed`.
+Poll `GET /api/v1/jobs/:id` until `status` is `done` or `failed`. `GET /api/v1/worker/health` shows whether a
+worker is running.
 
 ---
 
 ## Local API differences
 
 The local API (`pnpm --filter @moncha/worker api` on port 4000, or the worker itself on `HEALTH_PORT`) serves the
-same endpoints 2 to 19 with the same payloads. Differences from the deployed backend:
+same endpoints 2 to 26 with the same payloads. Differences from the deployed backend:
 
 | Area | Local API | Deployed backend |
 |---|---|---|
 | `GET /` | Not served (404) | Service index |
 | Wrong method on a known path | 405 `method_not_allowed` | 404 `not_found` |
-| Body over 1 MB | 413 `payload_too_large` | No 1 MB check (Cloudflare's own request size limit applies) |
+| Body over 10 MB | 413 `payload_too_large` | No 10 MB check (Cloudflare's own request size limit applies) |
 | No tenant | 400 if no `x-tenant-id` and no `DEFAULT_TENANT_ID` | `DEFAULT_TENANT_ID`, else `tenant_moncha_internal` |
-| `GET /health` when run by the worker | Adds `"worker": { "workerId", "startedAt", "crawlRunning" }` | No `worker` field |
+| `GET /health` `worker` field | Local API: none. Run by the worker: `{ "workerId", "startedAt", "crawlRunning" }` | `{ "running", "status", "lastSeenAt" }` |
+| Leads `queue=<one queue>` | Hides chatbot sites when `OMIT_CHATBOT_SITES=true` | `OMIT_CHATBOT_SITES` not applied |
 | Lead `company.website` | All website fields filled | Only `id`, `url`, `status`, `title` |
 | Lead `company.sourceRecords` | Filled | Always `[]` |
 | `openReviewTasks` in counts | Real count | Always `0` |
@@ -1047,6 +1394,19 @@ same endpoints 2 to 19 with the same payloads. Differences from the deployed bac
 ---
 
 ## Test report
+
+**New endpoints (2026-10-05, local API on the Neon dev database): 34 passed, 0 failed.** Worker health: 200
+online with job counts. Leads: `queue=ALL` 200, default 200, `queue=all` 400. Auth: register 201; update profile
+200 with the name trimmed, empty name 400, no token 401, `me` shows the new name; change password with a wrong
+current password 400 `invalid_password`, short new password 400, ok 200 with 1 other session logged out, calling
+session still valid, other session 401, old password 401, new password 200; forgot password with a bad email 400
+(a valid email returns 503 `service_unavailable` until `RESEND_API_KEY` and `RESET_PASSWORD_URL` are set); reset
+password with an unknown token 400 `invalid_token`, ok 200 with a real token, same token again 400
+`invalid_token`, old session 401, old password 401, new password 200. Source imports: 4-row CSV imported inline 202
+`done` (4 found, 2 created, 1 duplicate in the file, 1 skipped, 2 audits), import status 200 with the console
+fields, `records` re-import (1 created, 1 duplicate, 1 audit), `queue=ALL` lists the 3 imported leads,
+`google_places` 400 `unsupported_source`, CSV without a name column 400, unknown import 404, 1,001-row CSV queued
+202 `pending` and imported by the worker (1,001 created).
 
 **Auth (2026-10-03, deployed version `a67dc3fb`, and the local API): 22 passed, 0 failed on each.** Register: empty
 body 400, short password 400, bad email 400, invalid JSON 400, ok 201, duplicate email in other case 409. Login:

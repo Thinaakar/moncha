@@ -1,8 +1,8 @@
-import type { Prisma, PrismaClient } from '@prisma/client';
+import { Prisma, type PrismaClient } from '@prisma/client';
 import type { JobCreate, JobPatch, JobRepo, JobRunRecord } from '@moncha/domain';
 
 /** Job types the worker claims from the queue. */
-export const WORKER_JOB_TYPES = ['website_audit', 'country_discovery'] as const;
+export const WORKER_JOB_TYPES = ['website_audit', 'country_discovery', 'csv_import'] as const;
 export type WorkerJobType = (typeof WORKER_JOB_TYPES)[number];
 
 export function mapJob(row: {
@@ -94,13 +94,15 @@ export class PrismaJobRunRepository implements JobRepo {
 
   /**
    * Claim up to `limit` pending jobs of one type using SKIP LOCKED.
-   * places_discovery / csv_import stay with the console in-process runners.
+   * places_discovery stays with the console in-process runner.
    */
   async claimJobs(
     workerId: string,
     limit: number,
     type: WorkerJobType = 'website_audit',
   ): Promise<JobRunRecord[]> {
+    // The console runs its own csv_import jobs in-process; only API-queued ones belong to the worker.
+    const onlyQueuedCsv = type === 'csv_import' ? Prisma.sql`AND payload->>'mode' = 'queued'` : Prisma.empty;
     const rows = await this.db.$queryRaw<
       Array<{
         id: string;
@@ -133,6 +135,7 @@ export class PrismaJobRunRepository implements JobRepo {
         WHERE status = 'pending'
           AND "runAfter" <= NOW()
           AND type = ${type}::"JobType"
+          ${onlyQueuedCsv}
         ORDER BY "runAfter" ASC, "createdAt" ASC
         FOR UPDATE SKIP LOCKED
         LIMIT ${limit}
@@ -145,8 +148,11 @@ export class PrismaJobRunRepository implements JobRepo {
   async recoverStuck(staleBefore: Date) {
     const result = await this.db.jobRun.updateMany({
       where: {
-        // Only types claimJobs hands out; other runners own their own job rows.
-        type: { in: [...WORKER_JOB_TYPES] },
+        // Only jobs claimJobs hands out; other runners own their own job rows.
+        OR: [
+          { type: { in: ['website_audit', 'country_discovery'] } },
+          { type: 'csv_import', payload: { path: ['mode'], equals: 'queued' } },
+        ],
         status: 'running',
         lockedAt: { lt: staleBefore },
       },

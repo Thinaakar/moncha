@@ -21,3 +21,4 @@ export {
   type LiveDiscoverySourceName,
 } from './factory';
 export { OpenRouterLlmProvider, createOpenRouterFromEnv } from './openrouter';
+export { ResendMailer, createResendMailerFromEnv, passwordResetEmailContent } from './resend';

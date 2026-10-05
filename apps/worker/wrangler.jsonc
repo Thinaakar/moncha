@@ -31,7 +31,8 @@
   "triggers": { "crons": ["*/5 * * * *"] },
 
   // Non-secret settings. Secrets (DATABASE_URL, DIRECT_URL, DB_ENV, NEON_BRANCH, PROD_DB_HOST,
-  // GOOGLE_PLACES_API_KEY, OPENROUTER_API_KEY, OPENROUTER_MODEL) go in with `wrangler secret put`
+  // GOOGLE_PLACES_API_KEY, OPENROUTER_API_KEY, OPENROUTER_MODEL, RESEND_API_KEY, EMAIL_FROM,
+  // RESET_PASSWORD_URL) go in with `wrangler secret put`
   // or the dashboard; every var and secret is passed to the container.
   "vars": {
     "DEFAULT_TENANT_ID": "tenant_moncha_internal",
