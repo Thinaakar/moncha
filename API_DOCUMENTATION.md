@@ -812,7 +812,7 @@ curl -X GET http://127.0.0.1:8080/health
 ## 6. Testing with Postman
 
 A preconfigured Postman collection is available at:  
-[`apps/worker/postman/moncha-worker-api.postman_collection.json`](file:///c:/Users/91638/Downloads/moncha/apps/worker/postman/moncha-worker-api.postman_collection.json)
+[`apps/worker/postman/moncha-worker-api.postman_collection.json`](apps/worker/postman/moncha-worker-api.postman_collection.json)
 
 ### Collection Variables
 * `baseUrl`: `http://127.0.0.1:4000`
