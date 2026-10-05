@@ -142,7 +142,11 @@ export const leadListQuerySchema = z.object({
   pageSize: z.coerce.number().int().min(1).max(100).default(25),
   search: z.string().trim().min(1).optional(),
   country: z.string().trim().min(1).optional(),
-  queue: leadQueueSchema.default('QUALIFIED'),
+  /** `ALL` lists every queue; omitted still means QUALIFIED. */
+  queue: z
+    .union([leadQueueSchema, z.literal('ALL')])
+    .default('QUALIFIED')
+    .transform((queue) => (queue === 'ALL' ? undefined : queue)),
   assistantVerdict: assistantVerdictSchema.optional(),
   vendor: z.string().trim().min(1).optional(),
   method: auditMethodSchema.optional(),
@@ -171,6 +175,26 @@ export const registerSchema = z.object({
 export const passwordLoginSchema = z.object({
   email: z.string().trim().toLowerCase().email().max(254),
   password: z.string().min(1).max(128),
+});
+
+const newPasswordSchema = z.string().min(8, 'Use at least 8 characters').max(128);
+
+export const forgotPasswordSchema = z.object({
+  email: z.string().trim().toLowerCase().email().max(254),
+});
+
+export const resetPasswordSchema = z.object({
+  token: z.string().trim().min(16).max(256),
+  password: newPasswordSchema,
+});
+
+export const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1).max(128),
+  newPassword: newPasswordSchema,
+});
+
+export const updateProfileSchema = z.object({
+  name: z.string().trim().min(1).max(100),
 });
 
 export const llmAssistantOutputSchema = z.object({
@@ -205,4 +229,8 @@ export type ResolveReviewInput = z.infer<typeof resolveReviewSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type PasswordLoginInput = z.infer<typeof passwordLoginSchema>;
+export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>;
+export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;
+export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;
+export type UpdateProfileInput = z.infer<typeof updateProfileSchema>;
 export type LlmAssistantOutput = z.infer<typeof llmAssistantOutputSchema>;

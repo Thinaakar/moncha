@@ -107,6 +107,7 @@ model Tenant {
   createdAt        DateTime          @default(now())
   users            User[]
   sessions         Session[]
+  passwordResetTokens PasswordResetToken[]
   companies        Company[]
   leads            Lead[]
   jobs             JobRun[]
@@ -136,8 +137,24 @@ model User {
   createdAt    DateTime  @default(now())
   tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   sessions     Session[]
+  passwordResetTokens PasswordResetToken[]
 
   @@unique([tenantId, email])
+}
+
+/// One-time forgot-password link. Only the SHA-256 of the emailed token is stored.
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  tenantId  String
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 /// Bearer-token login session. Only the SHA-256 of the token is stored.

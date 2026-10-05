@@ -84,6 +84,8 @@ describe('API validation', () => {
 
   it('defaults lead list queue to QUALIFIED', () => {
     expect(leadListQuerySchema.parse({}).queue).toBe('QUALIFIED');
+    expect(leadListQuerySchema.parse({ queue: 'ALL' }).queue).toBeUndefined();
+    expect(leadListQuerySchema.safeParse({ queue: 'all' }).success).toBe(false);
     expect(leadListQuerySchema.safeParse({ pageSize: 1000 }).success).toBe(false);
     expect(
       leadListQuerySchema.parse({

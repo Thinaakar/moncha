@@ -63,6 +63,9 @@ export interface AuthUserRepo {
   findByEmail(tenantId: string, email: string): Promise<AuthUserRecord | null>;
   /** Returns null when the tenant already has a user with this email. */
   create(data: AuthUserCreate): Promise<AuthUserRecord | null>;
+  /** Null when the user no longer exists. */
+  updateName(userId: string, name: string): Promise<AuthUserRecord | null>;
+  setPasswordHash(userId: string, passwordHash: string): Promise<void>;
 }
 
 export type SessionCreate = {
@@ -79,6 +82,35 @@ export interface SessionRepo {
   findActiveUser(tokenHash: string, now: Date): Promise<AuthUserRecord | null>;
   /** Marks the session revoked; false when it was unknown or already revoked. */
   revoke(tokenHash: string, now: Date): Promise<boolean>;
+  /** Revokes every open session of the user except `keepTokenHash`. Returns sessions revoked. */
+  revokeAllForUser(userId: string, now: Date, keepTokenHash?: string): Promise<number>;
+}
+
+export type PasswordResetCreate = {
+  tenantId: string;
+  userId: string;
+  /** SHA-256 hex of the emailed token; the raw token is never stored. */
+  tokenHash: string;
+  expiresAt: Date;
+};
+
+export interface PasswordResetRepo {
+  create(data: PasswordResetCreate): Promise<void>;
+  /** Marks the token used when it is unused and unexpired at `now`; returns its user, else null. */
+  consume(tokenHash: string, now: Date): Promise<{ userId: string; tenantId: string } | null>;
+  /** Marks every unused token of the user used, so older emailed links stop working. */
+  invalidateForUser(userId: string, now: Date): Promise<void>;
+}
+
+export type PasswordResetEmail = {
+  to: string;
+  name: string | null;
+  resetUrl: string;
+  expiresAt: Date;
+};
+
+export interface Mailer {
+  sendPasswordReset(email: PasswordResetEmail): Promise<void>;
 }
 
 export type DiscoveredCompany = {
