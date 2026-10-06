@@ -30,6 +30,7 @@ import {
   PrismaReviewTaskRepository,
   PrismaSessionRepository,
   PrismaWebsiteRepository,
+  withDbRetry,
 } from '@moncha/db';
 import {
   AuthError,
@@ -124,7 +125,7 @@ export function setWorkerStatusProvider(provider: WorkerStatusProvider | null) {
 route('GET', '/health', async ({ tenantId }) => {
   let dbStatus = 'up';
   try {
-    await prisma.$queryRaw`SELECT 1`;
+    await withDbRetry(() => prisma.$queryRaw`SELECT 1`, 2);
   } catch (error) {
     dbStatus = `down: ${error instanceof Error ? error.message : String(error)}`;
   }

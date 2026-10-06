@@ -29,16 +29,56 @@ function createClient() {
   });
 }
 
-export const prisma = globalForPrisma.prisma ?? createClient();
+let current: PrismaClient = globalForPrisma.prisma ?? createClient();
 
 if (process.env.NODE_ENV !== 'production') {
-  globalForPrisma.prisma = prisma;
+  globalForPrisma.prisma = current;
+}
+
+/**
+ * Stable handle that always forwards to the live client, so repositories keep working after
+ * replaceClient() swaps in a fresh engine.
+ */
+export const prisma = new Proxy({} as PrismaClient, {
+  get(_target, prop) {
+    const value = Reflect.get(current, prop);
+    return typeof value === 'function' ? value.bind(current) : value;
+  },
+});
+
+const STALE_CLIENT_GRACE_MS = 30_000;
+let replacing: Promise<void> | null = null;
+
+/**
+ * Once Prisma's engine drops its connection it never recovers: $disconnect() throws "Engine is
+ * not yet connected", $connect() is a no-op and every later query fails. Only a new client works.
+ */
+function replaceClient() {
+  replacing ??= (async () => {
+    const stale = current;
+    current = createClient();
+    if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = current;
+    setTimeout(() => void stale.$disconnect().catch(() => undefined), STALE_CLIENT_GRACE_MS).unref();
+  })().finally(() => {
+    replacing = null;
+  });
+  return replacing;
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function needsFreshClient(error: unknown) {
+  return /Engine is not yet connected|cached plan must not change result type|0A000/i.test(errorMessage(error));
 }
 
 function isTransientDbError(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
-  return /Can't reach database server|P1001|P1017|Connection reset|ECONNRESET|ETIMEDOUT|timed out|cached plan must not change result type|0A000/i.test(
-    message,
+  return (
+    needsFreshClient(error) ||
+    /Can't reach database server|P1001|P1017|P2028|Unable to start a transaction|Connection reset|ECONNRESET|ETIMEDOUT|timed out/i.test(
+      errorMessage(error),
+    )
   );
 }
 
@@ -51,9 +91,8 @@ export async function withDbRetry<T>(fn: () => Promise<T>, attempts = 4): Promis
     } catch (error) {
       last = error;
       if (!isTransientDbError(error) || i === attempts - 1) throw error;
-      await prisma.$disconnect().catch(() => undefined);
+      if (needsFreshClient(error)) await replaceClient();
       await new Promise((resolve) => setTimeout(resolve, 1200 * (i + 1)));
-      await prisma.$connect().catch(() => undefined);
     }
   }
   throw last;
