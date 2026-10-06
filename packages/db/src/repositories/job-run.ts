@@ -92,6 +92,49 @@ export class PrismaJobRunRepository implements JobRepo {
     return this.db.jobRun.findMany({ where: { tenantId }, orderBy: { createdAt: 'desc' } });
   }
 
+  /** Newest first. `payload` drops `records`: a queued CSV import stores up to 20,000 rows there. */
+  async listPage(
+    tenantId: string,
+    query: { page: number; pageSize: number; type?: JobRunRecord['type']; status?: JobRunRecord['status'] },
+  ) {
+    const page = Math.max(1, Math.floor(query.page));
+    const pageSize = Math.min(100, Math.max(1, Math.floor(query.pageSize)));
+    const typeFilter = query.type ? Prisma.sql`AND type = ${query.type}::"JobType"` : Prisma.empty;
+    const statusFilter = query.status ? Prisma.sql`AND status = ${query.status}::"JobStatus"` : Prisma.empty;
+    const [rows, counted] = await Promise.all([
+      this.db.$queryRaw<
+        Array<{
+          id: string;
+          type: JobRunRecord['type'];
+          status: JobRunRecord['status'];
+          payload: unknown;
+          result: unknown;
+          attempts: number;
+          maxAttempts: number;
+          runAfter: Date;
+          lastError: string | null;
+          startedAt: Date | null;
+          finishedAt: Date | null;
+          createdAt: Date;
+        }>
+      >`
+        SELECT id, type, status, payload - 'records' AS payload, result, attempts, "maxAttempts",
+               "runAfter", "lastError", "startedAt", "finishedAt", "createdAt"
+        FROM "JobRun"
+        WHERE "tenantId" = ${tenantId} ${typeFilter} ${statusFilter}
+        ORDER BY "createdAt" DESC, id DESC
+        OFFSET ${(page - 1) * pageSize}
+        LIMIT ${pageSize}
+      `,
+      this.db.$queryRaw<Array<{ n: number }>>`
+        SELECT count(*)::int AS n FROM "JobRun"
+        WHERE "tenantId" = ${tenantId} ${typeFilter} ${statusFilter}
+      `,
+    ]);
+    const total = Number(counted[0]?.n ?? 0);
+    return { items: rows, total, page, pageSize, totalPages: total === 0 ? 0 : Math.ceil(total / pageSize) };
+  }
+
   /**
    * Claim up to `limit` pending jobs of one type using SKIP LOCKED.
    * places_discovery stays with the console in-process runner.

@@ -45,7 +45,9 @@ API on the dev database (27 of 27 cases passed), see [Test report](#test-report)
 | 7 | DELETE | `/api/v1/schedules?country=` | Delete | Remove all schedule times of a country | 200 | DiscoverySchedule |
 | 8 | GET | `/api/v1/schedules/runs` | Read | Country crawl run history | 200 | JobRun |
 | 9 | POST | `/api/v1/discovery/country` | Create | Queue a country crawl now | 202 | JobRun |
+| 9a | GET | `/api/v1/discovery/options` | Read | Supported countries, search areas, industries and defaults | 200 | none |
 | 10 | GET | `/api/v1/jobs/:id` | Read | Status of any background job | 200 | JobRun |
+| 10a | GET | `/api/v1/jobs` | Read | Paginated list of background jobs | 200 | JobRun |
 | 11 | GET | `/api/v1/leads` | Read | Paginated lead list with filters | 200 | Lead, Company, Website |
 | 12 | GET | `/api/v1/leads/counts` | Read | Number of leads per queue | 200 | Lead |
 | 13 | GET | `/api/v1/leads/:id` | Read | One lead with company and website | 200 | Lead, Company, Website |
@@ -474,6 +476,38 @@ curl -X POST https://moncha-backend.vinothjv4-tech.workers.dev/api/v1/discovery/
 ```
 
 **400** when `country` is missing or unsupported, or `maxPages` is above 3.
+
+### 9a. GET `/api/v1/discovery/options`
+
+**CRUD:** Read. Everything a client needs to build the country crawl and schedule forms. No database access.
+
+**200 OK**
+
+```json
+{
+  "countries": [{ "code": "SG", "name": "Singapore", "cities": ["Bedok", "Jurong West", "..."] }],
+  "industries": ["dental clinic", "..."],
+  "defaults": { "source": "google_places", "maxPages": 3, "timezone": "Asia/Kuala_Lumpur" }
+}
+```
+
+### 10a. GET `/api/v1/jobs`
+
+**CRUD:** Read. Background jobs of the tenant, newest first.
+
+| Query | Type | Default | Rules |
+|---|---|---|---|
+| `page` | number | 1 | Integer ≥ 1 |
+| `pageSize` | number | 25 | Integer 1 to 100 |
+| `type` | string | all | `country_discovery`, `website_audit`, `csv_import`, `places_discovery` |
+| `status` | string | all | `pending`, `running`, `done`, `failed` |
+
+**200 OK** `{ "items": Job[], "total": 2, "page": 1, "pageSize": 25, "totalPages": 1 }`
+
+Each item has `id, type, status, payload, result, attempts, maxAttempts, runAfter, lastError, startedAt,
+finishedAt, createdAt`. A queued CSV import's `payload.records` (the raw rows) is left out to keep the list small.
+
+**400** when `type`, `status`, `page` or `pageSize` is invalid.
 
 ### 10. GET `/api/v1/jobs/:id`
 

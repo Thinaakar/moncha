@@ -14,5 +14,3 @@
 .cursor
 .agents
 .neon
-apps/console/*
-!apps/console/package.json

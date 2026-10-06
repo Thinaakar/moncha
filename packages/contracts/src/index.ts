@@ -152,6 +152,17 @@ export const leadListQuerySchema = z.object({
   method: auditMethodSchema.optional(),
 });
 
+export const jobTypeSchema = z.enum(['places_discovery', 'csv_import', 'website_audit', 'country_discovery']);
+
+export const jobStatusSchema = z.enum(['pending', 'running', 'done', 'failed']);
+
+export const jobListQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(25),
+  type: jobTypeSchema.optional(),
+  status: jobStatusSchema.optional(),
+});
+
 export const enqueueAuditSchema = z.object({
   force: z.boolean().optional(),
 });
@@ -237,6 +248,9 @@ export type ScheduleCreateRequest = z.infer<typeof scheduleCreateSchema>;
 export type ScheduleRunsQuery = z.infer<typeof scheduleRunsQuerySchema>;
 export type ManualLeadInput = z.infer<typeof manualLeadSchema>;
 export type LeadListQueryInput = z.infer<typeof leadListQuerySchema>;
+export type JobType = z.infer<typeof jobTypeSchema>;
+export type JobStatus = z.infer<typeof jobStatusSchema>;
+export type JobListQuery = z.infer<typeof jobListQuerySchema>;
 export type ResolveReviewInput = z.infer<typeof resolveReviewSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
 export type RegisterInput = z.infer<typeof registerSchema>;

@@ -5,6 +5,7 @@ import {
   changePasswordSchema,
   countryDiscoverySchema,
   forgotPasswordSchema,
+  jobListQuerySchema,
   leadListQuerySchema,
   manualLeadSchema,
   passwordLoginSchema,
@@ -46,7 +47,10 @@ import {
   requestPasswordReset,
   resetPassword,
   updateProfile,
+  COUNTRY_PROFILES,
   DEFAULT_AUDIT_CONFIG,
+  DEFAULT_INDUSTRIES,
+  DEFAULT_SCHEDULE_TIMEZONE,
   deleteCountrySchedules,
   deleteSchedule,
   listReviewTasks,
@@ -187,6 +191,20 @@ route('POST', '/api/v1/discovery/country', async ({ tenantId, body }) => {
   };
   const job = await jobs.create({ tenantId, type: 'country_discovery', payload, maxAttempts: 1 });
   return { status: 202, json: { id: job.id, status: job.status, type: job.type } };
+});
+
+// Form options for the country crawl and schedules.
+route('GET', '/api/v1/discovery/options', async () => ({
+  json: {
+    countries: COUNTRY_PROFILES.map((p) => ({ code: p.code, name: p.name, cities: [...p.cities] })),
+    industries: [...DEFAULT_INDUSTRIES],
+    defaults: { source: 'google_places', maxPages: 3, timezone: DEFAULT_SCHEDULE_TIMEZONE },
+  },
+}));
+
+route('GET', '/api/v1/jobs', async ({ tenantId, url }) => {
+  const q = jobListQuerySchema.parse(query(url, 'page', 'pageSize', 'type', 'status'));
+  return { json: await jobs.listPage(tenantId, q) };
 });
 
 route('GET', '/api/v1/jobs/:id', async ({ tenantId, params }) => {

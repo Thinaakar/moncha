@@ -1,27 +1,25 @@
 ---
-description: Backend-only work. Never modify the frontend (apps/console).
+description: Backend + console work. The console talks to the backend over HTTP only.
 alwaysApply: true
 ---
 
-# Rule 1: Backend only — do not touch the frontend
+# Rule 1: Backend and console boundaries
 
-The user works on the backend only. The frontend is off-limits.
+The user works on the backend (`apps/worker`, `packages/**`) and the console (`apps/console`).
 
-## Never edit, create, delete or reformat
-- `apps/console/**` (Next.js pages, components, API routes, `lib/`, `next.config.ts`, `tsconfig.json`, `package.json`)
-- Frontend dependencies (never `pnpm --filter @moncha/console add|remove`)
-
-## Allowed (backend)
+## Backend
 - `apps/worker/**`
 - `packages/**` (`db`, `domain`, `contracts`, `integrations`, `crawling`, `config`)
 - Prisma schema/migrations (Neon **dev** branch only; never prod)
+- Keep shared contracts backward compatible.
 
-## If a backend change seems to need a frontend change
-Stop and tell the user what the console would need. Do not make the change.
-Keep shared contracts backward compatible so the console keeps working unchanged.
+## Console (`apps/console`)
+- Next.js App Router + Tailwind + shadcn-style UI kit + TanStack Query.
+- Talks to the backend only through its server-side proxy (`app/api/proxy/[...path]`), never directly from the browser.
+- May import `@moncha/contracts` (zod schemas and types). Never import `@moncha/db`, `@moncha/domain`, `@moncha/crawling` or `@moncha/integrations`, and never connect to the database.
+- If a screen needs data the API does not return, add the endpoint to the backend first.
 
 ## Environment
-- Backend env lives in `apps/worker/.env` (template: `apps/worker/.env.example`).
-- `apps/worker/.env` is the only env file the backend reads: the worker (`apps/worker/src/env.ts`), the Prisma CLI (`packages/db/prisma.config.ts`) and the guarded db scripts (`packages/db/scripts/guarded.cjs`).
-- Put new backend keys in `apps/worker/.env`. Do not edit the repo-root `.env` (the console reads it).
+- Backend env lives in `apps/worker/.env` (template: `apps/worker/.env.example`). It is the only env file the backend reads: the worker (`apps/worker/src/env.ts`), the Prisma CLI (`packages/db/prisma.config.ts`) and the guarded db scripts (`packages/db/scripts/guarded.cjs`).
+- Console env lives in `apps/console/.env.local` (template: `apps/console/.env.example`).
 - Never print secret values; show keys only.
