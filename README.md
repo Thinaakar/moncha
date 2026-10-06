@@ -16,7 +16,7 @@ The plan explicitly makes Google Places auto discovery the main path, with CSV/m
 
 ## Run
 1. `pnpm install`
-2. Copy `.env.example` to `.env` and set `DATABASE_URL` and `GOOGLE_PLACES_API_KEY`.
+2. Copy `apps/worker/.env.example` to `apps/worker/.env` (backend: `DATABASE_URL`, `GOOGLE_PLACES_API_KEY`, ...) and `apps/console/.env.example` to `apps/console/.env.local` (console: `BACKEND_URL`, `TENANT_ID`).
 3. `pnpm db:generate`
 4. `pnpm db:push`
 5. `pnpm db:seed`
