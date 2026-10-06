@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-import { prisma, PrismaJobRunRepository } from '@moncha/db';
 import { authFromRequest } from '@/lib/auth';
 import { jsonError } from '@/lib/errors';
 import { notFound } from '@/lib/api-error';
@@ -7,7 +6,14 @@ import { notFound } from '@/lib/api-error';
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const auth = authFromRequest(req);
+    if (!process.env.DATABASE_URL) {
+      return NextResponse.json(
+        { error: { code: 'internal_error', message: 'Import job status requires DATABASE_URL' } },
+        { status: 503 },
+      );
+    }
     const { id } = await params;
+    const { prisma, PrismaJobRunRepository } = await import('@moncha/db');
     const job = await new PrismaJobRunRepository(prisma).get(auth.tenantId, id);
     if (!job) throw notFound('Job not found');
     const result = (job.result ?? null) as Record<string, unknown> | null;

@@ -20,6 +20,7 @@ function forceRootDbEnv() {
     'GOOGLE_PLACES_API_KEY',
     'SESSION_SECRET',
     'DEFAULT_TENANT_ID',
+    'WORKER_API_BASE_URL',
     'OMIT_CHATBOT_SITES',
     'omit_chatbot_sites',
   ]);
@@ -44,6 +45,7 @@ function forceRootDbEnv() {
 forceRootDbEnv();
 
 const config: NextConfig = {
+  devIndicators: { position: 'bottom-right' },
   transpilePackages: [
     '@moncha/db',
     '@moncha/domain',
