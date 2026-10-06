@@ -18,7 +18,6 @@ import {
   Radar,
   Settings,
   Sun,
-  UserPlus,
   Users,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -54,7 +53,6 @@ const NAV: Array<{ title: string; items: NavItem[] }> = [
     items: [
       { href: '/leads', label: 'Leads', icon: Users, badge: 'qualified' },
       { href: '/reviews', label: 'Review queue', icon: ClipboardCheck, badge: 'reviews' },
-      { href: '/leads/new', label: 'Add lead', icon: UserPlus },
     ],
   },
   {
@@ -76,7 +74,6 @@ const NAV: Array<{ title: string; items: NavItem[] }> = [
 
 function isActive(pathname: string, href: string) {
   if (href === '/') return pathname === '/';
-  if (href === '/leads') return pathname === '/leads' || (pathname.startsWith('/leads/') && pathname !== '/leads/new');
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 

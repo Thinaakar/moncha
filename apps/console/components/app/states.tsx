@@ -3,7 +3,7 @@
 import { AlertTriangle, Inbox, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { errorMessage } from '@/lib/api';
+import { ApiError, errorMessage } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
 export function EmptyState({
@@ -34,7 +34,7 @@ export function EmptyState({
 export function ErrorState({
   error,
   onRetry,
-  title = 'Could not load data',
+  title,
   className,
 }: {
   error: unknown;
@@ -42,6 +42,8 @@ export function ErrorState({
   title?: string;
   className?: string;
 }) {
+  const unavailable = error instanceof ApiError && [502, 503, 504].includes(error.status);
+  title ??= unavailable ? 'Service temporarily unavailable' : 'Could not load data';
   return (
     <div className={cn('flex flex-col items-center justify-center px-6 py-14 text-center', className)}>
       <div className="mb-4 flex size-12 items-center justify-center rounded-full bg-destructive/10 text-destructive ring-8 ring-destructive/5">

@@ -73,7 +73,7 @@ function needsFreshClient(error: unknown) {
   return /Engine is not yet connected|cached plan must not change result type|0A000/i.test(errorMessage(error));
 }
 
-function isTransientDbError(error: unknown) {
+export function isTransientDbError(error: unknown) {
   return (
     needsFreshClient(error) ||
     /Can't reach database server|P1001|P1017|P2028|Unable to start a transaction|Connection reset|ECONNRESET|ETIMEDOUT|timed out/i.test(

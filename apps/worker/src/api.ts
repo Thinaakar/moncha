@@ -20,6 +20,7 @@ import {
   updateProfileSchema,
 } from '@moncha/contracts';
 import {
+  isTransientDbError,
   prisma,
   PrismaAuditLogRepository,
   PrismaAuthUserRepository,
@@ -77,6 +78,9 @@ const PORT = Number(process.env.WORKER_API_PORT || 4000);
 const HOST = process.env.WORKER_API_HOST || '127.0.0.1';
 const API_KEY = process.env.WORKER_API_KEY || '';
 const MAX_BODY_BYTES = 10_000_000;
+// Below the console proxy's 60s timeout, so readers get a 503 envelope instead of a gateway timeout
+// while Prisma waits out connect_timeout / pool_timeout on an unreachable database.
+const READ_DEADLINE_MS = 25_000;
 
 const logger = createConsoleLogger();
 const schedules = new PrismaDiscoveryScheduleRepository(prisma);
@@ -423,9 +427,21 @@ const isCodedError = (error: unknown): error is ScheduleError | AuthError | Revi
   error instanceof HttpError ||
   error instanceof CsvImportError;
 
+const databaseUnavailable = () =>
+  new HttpError(503, 'database_unavailable', 'The database is not responding right now. Try again in a moment.');
+
+function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(databaseUnavailable()), ms);
+  });
+  return Promise.race([work, deadline]).finally(() => clearTimeout(timer));
+}
+
 function errorStatus(error: unknown): number {
   if (isCodedError(error)) return error.status;
-  return isZodError(error) ? 400 : 500;
+  if (isZodError(error)) return 400;
+  return isTransientDbError(error) ? 503 : 500;
 }
 
 function sendError(res: ServerResponse, error: unknown) {
@@ -435,6 +451,11 @@ function sendError(res: ServerResponse, error: unknown) {
   }
   if (isCodedError(error)) {
     return send(res, error.status, { error: { code: error.code, message: error.message } });
+  }
+  if (isTransientDbError(error)) {
+    logger.error('worker_api_db_unavailable', { message: error instanceof Error ? error.message : String(error) });
+    const { status, code, message } = databaseUnavailable();
+    return send(res, status, { error: { code, message } });
   }
   logger.error('worker_api_error', { message: error instanceof Error ? error.message : String(error) });
   return send(res, 500, { error: { code: 'internal_error', message: 'Internal server error' } });
@@ -471,7 +492,8 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
         : new HttpError(404, 'not_found', `No route for ${method} ${url.pathname}`);
     }
     const params = { ...(url.pathname.match(match.pattern)?.groups ?? {}) };
-    const result = await match.handler({ req, url, tenantId: tenantId || '', params, body: () => readBody(req) });
+    const work = match.handler({ req, url, tenantId: tenantId || '', params, body: () => readBody(req) });
+    const result = await (method === 'GET' ? withDeadline(work, READ_DEADLINE_MS) : work);
     status = result.status ?? 200;
     send(res, status, result.json);
   } catch (error) {
