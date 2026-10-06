@@ -1,4 +1,4 @@
-# Console (Next.js) image for Railway (apps/console/railway.json). Build context is the repository root.
+# Console (Next.js) image for Railway (.railway/railway.ts). Build context is the repository root.
 FROM node:22-alpine AS base
 ENV PNPM_HOME=/pnpm \
     PATH=/pnpm:$PATH \

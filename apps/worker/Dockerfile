@@ -1,4 +1,4 @@
-# Backend worker image for Railway (railway.json) and Cloudflare Containers. Build context is the
+# Backend worker image for Railway (.railway/railway.ts) and Cloudflare Containers. Build context is the
 # repository root. The Playwright tag must match the playwright version in packages/crawling so the
 # preinstalled Chromium is used.
 FROM mcr.microsoft.com/playwright:v1.63.0-noble
