@@ -7,6 +7,10 @@ const PUBLIC_PATHS = new Set(['auth/forgot-password', 'auth/reset-password']);
 /** Session-issuing routes go through /api/auth/* so the token stays in the httpOnly cookie. */
 const BLOCKED_PATHS = new Set(['auth/login', 'auth/register']);
 const MAX_BODY_BYTES = 10_000_000;
+/** Reads just above the worker's 25s read deadline, so its 503 wins over our 504. */
+const READ_TIMEOUT_MS = 30_000;
+const WRITE_TIMEOUT_MS = 60_000;
+const IMPORT_TIMEOUT_MS = 120_000;
 
 async function forward(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
   const { path } = await ctx.params;
@@ -29,7 +33,7 @@ async function forward(req: NextRequest, ctx: { params: Promise<{ path: string[]
     token,
     body: body || null,
     contentType: body ? (req.headers.get('content-type') ?? 'application/json') : null,
-    timeoutMs: joined === 'source-imports' ? 120_000 : 60_000,
+    timeoutMs: joined === 'source-imports' ? IMPORT_TIMEOUT_MS : hasBody ? WRITE_TIMEOUT_MS : READ_TIMEOUT_MS,
   });
 
   const response = NextResponse.json(res.json, { status: res.status });

@@ -7,6 +7,9 @@ const config: NextConfig = {
   outputFileTracingRoot: path.join(__dirname, '../..'),
   transpilePackages: ['@moncha/contracts'],
   poweredByHeader: false,
+  async rewrites() {
+    return [{ source: '/favicon.ico', destination: '/icon.svg' }];
+  },
   async headers() {
     return [
       {
