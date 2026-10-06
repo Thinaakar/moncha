@@ -13,9 +13,12 @@ export async function callBackend(
 ) {
   const headers = backendHeaders(init.token);
   if (init.contentType) headers.set('content-type', init.contentType);
+  const method = init.method ?? 'GET';
+  const route = path.split('?')[0];
+  const started = Date.now();
   try {
     const res = await fetch(`${backendConfig().baseUrl}${path}`, {
-      method: init.method ?? 'GET',
+      method,
       headers,
       body: init.body ?? undefined,
       cache: 'no-store',
@@ -28,9 +31,19 @@ export async function callBackend(
     } catch {
       json = { error: { code: 'bad_gateway', message: 'Backend returned a non-JSON response' } };
     }
+    if (res.status >= 500) {
+      const code = (json as { error?: { code?: string } } | null)?.error?.code;
+      console.error('backend_error', { method, path: route, status: res.status, code, ms: Date.now() - started });
+    }
     return { ok: res.ok, status: res.status, json };
   } catch (error) {
     const timedOut = error instanceof Error && error.name === 'TimeoutError';
+    console.error(timedOut ? 'backend_timeout' : 'backend_unreachable', {
+      method,
+      path: route,
+      ms: Date.now() - started,
+      ...(timedOut ? {} : { message: error instanceof Error ? error.message : String(error) }),
+    });
     return {
       ok: false,
       status: timedOut ? 504 : 502,

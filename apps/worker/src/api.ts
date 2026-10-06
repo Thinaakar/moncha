@@ -430,10 +430,13 @@ const isCodedError = (error: unknown): error is ScheduleError | AuthError | Revi
 const databaseUnavailable = () =>
   new HttpError(503, 'database_unavailable', 'The database is not responding right now. Try again in a moment.');
 
-function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
+function withDeadline<T>(work: Promise<T>, ms: number, path: string): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   const deadline = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(databaseUnavailable()), ms);
+    timer = setTimeout(() => {
+      logger.error('worker_api_deadline', { path, ms });
+      reject(databaseUnavailable());
+    }, ms);
   });
   return Promise.race([work, deadline]).finally(() => clearTimeout(timer));
 }
@@ -493,7 +496,7 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
     }
     const params = { ...(url.pathname.match(match.pattern)?.groups ?? {}) };
     const work = match.handler({ req, url, tenantId: tenantId || '', params, body: () => readBody(req) });
-    const result = await (method === 'GET' ? withDeadline(work, READ_DEADLINE_MS) : work);
+    const result = await (method === 'GET' ? withDeadline(work, READ_DEADLINE_MS, url.pathname) : work);
     status = result.status ?? 200;
     send(res, status, result.json);
   } catch (error) {
