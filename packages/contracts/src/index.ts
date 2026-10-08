@@ -152,7 +152,13 @@ export const leadListQuerySchema = z.object({
   method: auditMethodSchema.optional(),
 });
 
-export const jobTypeSchema = z.enum(['places_discovery', 'csv_import', 'website_audit', 'country_discovery']);
+export const jobTypeSchema = z.enum([
+  'places_discovery',
+  'csv_import',
+  'website_audit',
+  'country_discovery',
+  'site_snapshot',
+]);
 
 export const jobStatusSchema = z.enum(['pending', 'running', 'done', 'failed']);
 
@@ -229,6 +235,86 @@ export const llmAssistantOutputSchema = z.object({
   evidenceRefs: z.array(z.string()),
 });
 
+const hexColorSchema = z
+  .string()
+  .trim()
+  .transform((v) => v.toLowerCase())
+  .pipe(z.string().regex(/^#[0-9a-f]{6}$/));
+
+const nullableText = (max: number) =>
+  z
+    .string()
+    .trim()
+    .max(max)
+    .nullish()
+    .transform((v) => (v ? v : null));
+
+const nullableHex = hexColorSchema.nullish().catch(null).transform((v) => v ?? null);
+
+/** Brand details for one website copy (Gemini output, validated). Gemini never returns HTML. */
+export const siteBrandSchema = z.object({
+  businessName: nullableText(200),
+  logo: z
+    .object({ assetId: z.string().trim().min(1).max(64) })
+    .nullish()
+    .transform((v) => v ?? null),
+  colors: z
+    .object({
+      primary: nullableHex,
+      secondary: nullableHex,
+      accent: nullableHex,
+      background: nullableHex,
+      text: nullableHex,
+    })
+    .default({ primary: null, secondary: null, accent: null, background: null, text: null }),
+  fonts: z
+    .object({ heading: nullableText(100), body: nullableText(100) })
+    .default({ heading: null, body: null }),
+  contact: z
+    .object({
+      phones: z.array(z.string().trim().min(1).max(50)).max(5).default([]),
+      emails: z.array(z.string().trim().min(3).max(254)).max(5).default([]),
+      address: nullableText(300),
+      whatsapp: nullableText(200),
+    })
+    .default({ phones: [], emails: [], address: null, whatsapp: null }),
+  services: z.array(z.string().trim().min(1).max(120)).max(20).default([]),
+  hours: z
+    .array(
+      z.object({
+        days: z.string().trim().min(1).max(60),
+        opens: z.string().trim().min(1).max(20),
+        closes: z.string().trim().min(1).max(20),
+      }),
+    )
+    .max(14)
+    .default([]),
+  hoursText: nullableText(300),
+  socialLinks: z
+    .array(z.object({ platform: z.string().trim().min(1).max(40), url: z.string().trim().min(1).max(500) }))
+    .max(12)
+    .default([]),
+  language: nullableText(20),
+  tone: nullableText(200),
+  chatbot: z.object({
+    greeting: z.string().trim().min(1).max(300),
+    faqs: z
+      .array(z.object({ question: z.string().trim().min(1).max(200), answer: z.string().trim().min(1).max(600) }))
+      .max(8)
+      .default([]),
+  }),
+  confidence: z.coerce.number().min(0).max(1).catch(0.5),
+  notes: nullableText(500),
+  source: z.enum(['llm', 'evidence']).default('llm'),
+});
+
+export const siteSnapshotListQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(25),
+  status: jobStatusSchema.optional(),
+  search: z.string().trim().min(1).optional(),
+});
+
 /** Derived: a lead is qualified iff its queue is QUALIFIED. */
 export function isLeadQualified(queue: z.infer<typeof leadQueueSchema>): boolean {
   return queue === 'QUALIFIED';
@@ -260,3 +346,95 @@ export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;
 export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;
 export type UpdateProfileInput = z.infer<typeof updateProfileSchema>;
 export type LlmAssistantOutput = z.infer<typeof llmAssistantOutputSchema>;
+export type SiteBrand = z.infer<typeof siteBrandSchema>;
+export type SiteSnapshotListQuery = z.infer<typeof siteSnapshotListQuerySchema>;
+
+export type SiteAssetKind = 'image' | 'css' | 'js' | 'font' | 'icon' | 'media' | 'manifest' | 'other';
+
+export type SiteManifestAsset = {
+  id: string;
+  url: string;
+  storedPath: string;
+  contentType: string;
+  bytes: number;
+  sha256: string;
+  kind: SiteAssetKind;
+  discoveredBy: Array<'network' | 'html' | 'css'>;
+};
+
+export type SiteManifestSkipped = { url: string; reason: string; detail?: string };
+
+export type SiteManifestException = { file: string; kind: string; detail?: string };
+
+export type SiteManifest = {
+  version: 1;
+  snapshotId: string;
+  sourceUrl: string;
+  finalUrl: string;
+  redirects: string[];
+  capturedAt: string;
+  source: { bytes: number; sha256: string; charset: string; charsetSource: string };
+  assets: SiteManifestAsset[];
+  skipped: SiteManifestSkipped[];
+  rewrites: { index: number; css: number; unresolved: number };
+  exceptions: SiteManifestException[];
+  limits: { maxAssets: number; maxFileBytes: number; maxTotalBytes: number };
+};
+
+/** API shape of one snapshot row (dates as ISO strings). */
+export type SiteSnapshotSummary = {
+  id: string;
+  leadId: string;
+  jobId: string | null;
+  status: JobStatus;
+  sourceUrl: string;
+  finalUrl: string | null;
+  httpStatus: number | null;
+  sourceHash: string | null;
+  sourceBytes: number | null;
+  sourceCharset: string | null;
+  assetCount: number;
+  skippedAssetCount: number;
+  totalBytes: number;
+  llmModel: string | null;
+  llmPromptTokens: number | null;
+  llmCompletionTokens: number | null;
+  warnings: string[];
+  failureReason: string | null;
+  createdAt: string;
+  finishedAt: string | null;
+  company?: { id: string; name: string; domain: string | null };
+  /** Proxy-relative path (`site-files/<token>/screenshot-desktop.png`) once done. */
+  thumbnailPath: string | null;
+};
+
+export type SiteSnapshotFiles = {
+  index: string;
+  demo: string;
+  source: string;
+  rendered: string;
+  desktop: string;
+  mobile: string;
+};
+
+export type SiteSnapshotDetail = SiteSnapshotSummary & {
+  brand: SiteBrand | null;
+  previewBase: string | null;
+  files: SiteSnapshotFiles | null;
+  manifest: SiteManifest | null;
+};
+
+export type SiteSnapshotSource = {
+  text: string;
+  charset: string;
+  bytes: number;
+  sha256: string;
+  truncated: boolean;
+};
+
+export type SiteSnapshotQueued = {
+  snapshotId: string;
+  jobId: string;
+  status: JobStatus;
+  deduped?: boolean;
+};

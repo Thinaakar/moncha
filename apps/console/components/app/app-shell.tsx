@@ -16,6 +16,7 @@ import {
   Monitor,
   Moon,
   Radar,
+  ScanEye,
   Settings,
   Sun,
   Users,
@@ -53,6 +54,7 @@ const NAV: Array<{ title: string; items: NavItem[] }> = [
     items: [
       { href: '/leads', label: 'Leads', icon: Users, badge: 'qualified' },
       { href: '/reviews', label: 'Review queue', icon: ClipboardCheck, badge: 'reviews' },
+      { href: '/sites', label: 'Website copies', icon: ScanEye },
     ],
   },
   {

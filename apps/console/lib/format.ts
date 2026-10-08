@@ -4,6 +4,19 @@ export function formatNumber(value: number | null | undefined) {
   return value === null || value === undefined ? '—' : numberFmt.format(value);
 }
 
+export function formatBytes(value: number | null | undefined) {
+  if (value === null || value === undefined) return '—';
+  if (value < 1024) return `${value} B`;
+  const units = ['KB', 'MB', 'GB'];
+  let n = value / 1024;
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) {
+    n /= 1024;
+    i += 1;
+  }
+  return `${n >= 100 ? Math.round(n) : n.toFixed(1)} ${units[i]}`;
+}
+
 export function formatDateTime(value: string | Date | null | undefined) {
   if (!value) return '—';
   const date = typeof value === 'string' ? new Date(value) : value;

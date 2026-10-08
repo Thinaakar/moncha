@@ -14,3 +14,4 @@ export * from './repositories/discovery-schedule';
 export * from './repositories/worker-heartbeat';
 export * from './repositories/user';
 export * from './repositories/auth';
+export * from './repositories/site-snapshot';

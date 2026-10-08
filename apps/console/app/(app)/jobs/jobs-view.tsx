@@ -16,8 +16,8 @@ import { JOB_TYPES, JobStatusBadge, jobTypeLabel } from '@/components/app/status
 import { CopyButton, DetailRow, JsonView } from '@/components/app/widgets';
 import { useJob, useJobs, useWorkerHealth } from '@/lib/queries';
 import { useUrlState } from '@/lib/use-url-state';
-import { formatDateTime, formatDuration, formatNumber, formatRelative } from '@/lib/format';
-import type { Job, JobStatus, JobType } from '@/lib/types';
+import { formatBytes, formatDateTime, formatDuration, formatNumber, formatRelative } from '@/lib/format';
+import type { Job, JobStatus, JobType, SiteSnapshotJobResult } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
 const STATUSES: Array<{ value: JobStatus; label: string }> = [
@@ -46,11 +46,45 @@ function jobTarget(job: Job): { text: string; href?: string } {
       const rows = typeof p.rows === 'number' ? p.rows : null;
       return { text: rows === null ? 'CSV file' : `${formatNumber(rows)} rows` };
     }
+    case 'site_snapshot':
+      return {
+        text: str(p.url)?.replace(/^https?:\/\//, '') ?? '—',
+        href: str(p.snapshotId) ? `/sites/${p.snapshotId}` : undefined,
+      };
     default: {
       const query = str(p.query) ?? str(p.textQuery);
       return { text: query ?? '—' };
     }
   }
+}
+
+function SiteSnapshotSummary({ result }: { result: SiteSnapshotJobResult }) {
+  if (result.skipped) return null;
+  const items = [
+    { label: 'Assets', value: formatNumber(result.assetCount) },
+    { label: 'Skipped', value: formatNumber(result.skippedAssetCount) },
+    { label: 'Size', value: formatBytes(result.totalBytes) },
+    { label: 'Brand', value: result.brandSource === 'evidence' ? 'Page data' : result.brandSource ? 'AI' : '—' },
+  ];
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {items.map((i) => (
+          <div key={i.label} className="rounded-lg border bg-muted/30 px-3 py-2">
+            <p className="text-xs text-muted-foreground">{i.label}</p>
+            <p className="text-sm font-semibold tabular-nums">{i.value}</p>
+          </div>
+        ))}
+      </div>
+      {result.snapshotId && (
+        <Button variant="outline" size="sm" asChild>
+          <Link href={`/sites/${result.snapshotId}`}>
+            Open website copy <ExternalLink />
+          </Link>
+        </Button>
+      )}
+    </div>
+  );
 }
 
 function WorkerStrip() {
@@ -139,6 +173,7 @@ function JobDetail({ id, onClose }: { id: string; onClose: () => void }) {
                 {job.attempts} of {job.maxAttempts}
               </DetailRow>
             </dl>
+            {job.type === 'site_snapshot' && job.result && <SiteSnapshotSummary result={job.result as SiteSnapshotJobResult} />}
             <Separator />
             <div className="space-y-2">
               <h3 className="text-sm font-semibold">Result</h3>
@@ -173,7 +208,7 @@ export function JobsView() {
     <div>
       <PageHeader
         title="Jobs"
-        description="Every background task the worker runs: website audits, country crawls and CSV imports."
+        description="Every background task the worker runs: website audits, country crawls, CSV imports and website copies."
       />
 
       <WorkerStrip />

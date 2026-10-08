@@ -5,7 +5,7 @@ export const WORKER_HEARTBEAT_MS = 30_000;
 /** No heartbeat for this long means the worker is offline. */
 export const WORKER_STALE_SECONDS = 120;
 
-const QUEUED_TYPES = ['website_audit', 'country_discovery', 'csv_import'] as const;
+const QUEUED_TYPES = ['website_audit', 'country_discovery', 'csv_import', 'site_snapshot'] as const;
 type QueuedType = (typeof QUEUED_TYPES)[number];
 const emptyCounts = () => Object.fromEntries(QUEUED_TYPES.map((t) => [t, 0])) as Record<QueuedType, number>;
 
@@ -60,7 +60,7 @@ export async function workerHealth(sql: Pick<CsvSqlClient, 'query'>, tenantId: s
     status: running ? 'online' : 'offline',
     message: running
       ? 'Background worker is running.'
-      : 'Background worker is offline: discovery, schedules, website audits and large CSV imports wait until it starts.',
+      : 'Background worker is offline: discovery, schedules, website audits, website copies and large CSV imports wait until it starts.',
     lastSeenAt: latest?.lastSeenAt ?? null,
     secondsSinceLastSeen: latest?.secondsSinceLastSeen ?? null,
     staleAfterSeconds: WORKER_STALE_SECONDS,

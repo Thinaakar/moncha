@@ -2,7 +2,7 @@ import { Prisma, type PrismaClient } from '@prisma/client';
 import type { JobCreate, JobPatch, JobRepo, JobRunRecord } from '@moncha/domain';
 
 /** Job types the worker claims from the queue. */
-export const WORKER_JOB_TYPES = ['website_audit', 'country_discovery', 'csv_import'] as const;
+export const WORKER_JOB_TYPES = ['website_audit', 'country_discovery', 'csv_import', 'site_snapshot'] as const;
 export type WorkerJobType = (typeof WORKER_JOB_TYPES)[number];
 
 export function mapJob(row: {
@@ -193,7 +193,7 @@ export class PrismaJobRunRepository implements JobRepo {
       where: {
         // Only jobs claimJobs hands out; other runners own their own job rows.
         OR: [
-          { type: { in: ['website_audit', 'country_discovery'] } },
+          { type: { in: ['website_audit', 'country_discovery', 'site_snapshot'] } },
           { type: 'csv_import', payload: { path: ['mode'], equals: 'queued' } },
         ],
         status: 'running',

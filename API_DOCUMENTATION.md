@@ -95,6 +95,12 @@ Common error codes:
 | **12** | `/api/v1/leads/:id` | `GET` | **READ** | Detailed view of a lead, company, website, and audits |
 | **13** | `/api/v1/leads/:id/audit` | `POST` | **CREATE** | Triggers or dedupes a fresh 3-pass website audit job |
 | **14** | `/health` *(Port 8080)* | `GET` | **READ** | Cloudflare container / worker daemon liveness probe |
+| **15** | `/api/v1/leads/:id/site-snapshots` | `POST` | **CREATE** | Queues a website copy for one lead (signed-in editor) |
+| **16** | `/api/v1/leads/:id/site-snapshots` | `GET` | **READ** | Website copies of one lead, newest first (max 20) |
+| **17** | `/api/v1/site-snapshots` | `GET` | **READ** | Paginated website copies across all leads |
+| **18** | `/api/v1/site-snapshots/:id` | `GET` | **READ** | One website copy: status, brand, file links, manifest |
+| **19** | `/api/v1/site-snapshots/:id/source` | `GET` | **READ** | `source.html` decoded with its charset (View source) |
+| **20** | `/api/v1/site-files/:token/*path` | `GET` | **READ** | Token-gated raw file from the copy (preview iframe) |
 
 ---
 
@@ -805,6 +811,58 @@ Exposed by the long-running worker poller process (`apps/worker/src/poller.ts`) 
 #### cURL Example
 ```bash
 curl -X GET http://127.0.0.1:8080/health
+```
+
+---
+
+### 15–20. Website copies (Website Copy Agent)
+One run copies a lead's homepage for offline viewing and builds a chatbot demo of it. The worker
+(`site_snapshot` job) stores everything in the private R2 bucket under `sites/{tenantId}/{snapshotId}/`:
+`source.html` (exact bytes as served), `rendered.html`, `index.html` (source with only asset URLs rewritten),
+`demo.html` (index plus the MonCha widget), `brand.json`, `manifest.json`, `screenshot-desktop.png`,
+`screenshot-mobile.png`, `moncha-widget.js` and `assets/...`.
+
+These routes need `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` and `SITE_PREVIEW_SECRET`;
+otherwise they answer `503 site_agent_not_configured`. On Cloudflare they always go to the container.
+
+#### 15. `POST /api/v1/leads/:id/site-snapshots`
+* **Headers**: `Authorization: Bearer <token>` (**required**, role `admin` or `operator`), `x-tenant-id` *(optional)*.
+* **`202 Accepted`**: `{ "snapshotId": "cm…", "jobId": "cm…", "status": "pending" }`
+* **`200 OK`** (a copy is already pending or running): same body plus `"deduped": true`.
+* **`401`** no or invalid token · **`403`** viewer or other tenant · **`404`** lead not found · **`409 no_website`** lead has no website · **`503 site_agent_not_configured`**.
+
+```bash
+curl -X POST http://127.0.0.1:4000/api/v1/leads/<leadId>/site-snapshots \
+  -H "Authorization: Bearer <token>" -H "x-tenant-id: tenant_moncha_internal"
+```
+
+#### 16. `GET /api/v1/leads/:id/site-snapshots`
+`{ "items": SiteSnapshotSummary[] }`. A summary has `id, leadId, jobId, status, sourceUrl, finalUrl, httpStatus,
+sourceHash, sourceBytes, sourceCharset, assetCount, skippedAssetCount, totalBytes, llmModel, llmPromptTokens,
+llmCompletionTokens, warnings[], failureReason, createdAt, finishedAt, thumbnailPath`.
+`thumbnailPath` is `site-files/<token>/screenshot-desktop.png` once the copy is `done`.
+
+#### 17. `GET /api/v1/site-snapshots?page=&pageSize=&status=&search=`
+`{ items, total, page, pageSize, totalPages }`; each item also has `company { id, name, domain }`. `search` matches
+the source URL, company name and domain.
+
+#### 18. `GET /api/v1/site-snapshots/:id`
+The summary plus `brand` (see `siteBrandSchema` in `@moncha/contracts`), `previewBase` (`site-files/<token>/`),
+`files { index, demo, source, rendered, desktop, mobile }` and `manifest` (`assets[]`, `skipped[]`, `exceptions[]`,
+`redirects[]`, `rewrites`, `limits`). `previewBase`, `files` and `manifest` are `null` until the copy is `done`.
+
+#### 19. `GET /api/v1/site-snapshots/:id/source`
+`{ "text": "<!DOCTYPE html>…", "charset": "utf-8", "bytes": 48213, "sha256": "…", "truncated": false }`.
+The text is decoded for display only (first 3 MB); the stored bytes never change. `409 not_ready` before `done`.
+
+#### 20. `GET /api/v1/site-files/:token/*path`
+Streams one stored file. The token (HMAC-SHA256 with `SITE_PREVIEW_SECRET`, valid `SITE_PREVIEW_TTL_SEC`, default
+1 hour) names the tenant and snapshot, so no `x-tenant-id` is needed. `source.html` and `rendered.html` are served as
+`text/plain`. `?download=1` adds `Content-Disposition: attachment`.
+* **`403 invalid_token`** bad or expired token · **`400 invalid_path`** traversal attempt · **`404`** missing file.
+
+```bash
+curl -O http://127.0.0.1:4000/api/v1/site-files/<token>/source.html?download=1
 ```
 
 ---

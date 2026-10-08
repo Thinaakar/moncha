@@ -17,7 +17,26 @@ export {
   renderPassToAuditResult,
   closeRenderBrowser,
   pickExtraPageUrls,
+  getRenderBrowser,
+  looksBlocked,
 } from './render-pass';
+export {
+  MonchaSiteCapturer,
+  DEFAULT_SITE_LIMITS,
+  MONCHA_WIDGET_JS,
+  assetStoragePath,
+  relativeStoredPath,
+  detectCharset,
+  decodeText,
+  rewriteHtml,
+  rewriteCss,
+  collectHtmlUrls,
+  isTrackingUrl,
+  safeFetch,
+  SafeFetchError,
+  SITE_USER_AGENT,
+} from './site-capture';
+export type { SiteCaptureLimits, MonchaSiteCapturerOptions } from './site-capture';
 export type { RenderPassResult } from './render-pass';
 export { MonchaWebsiteAuditor } from './auditor';
 export type { MonchaWebsiteAuditorOptions } from './auditor';

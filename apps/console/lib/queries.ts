@@ -14,6 +14,10 @@ import type {
   ReviewTask,
   ScheduleGroup,
   ScheduleRun,
+  SiteSnapshotDetail,
+  SiteSnapshotQueued,
+  SiteSnapshotSource,
+  SiteSnapshotSummary,
   SourceImport,
   SystemHealth,
   WorkerHealth,
@@ -32,6 +36,11 @@ export const qk = {
   options: ['discovery', 'options'] as const,
   worker: ['worker', 'health'] as const,
   health: ['health'] as const,
+  sites: ['site-snapshots'] as const,
+  siteList: (q: object) => ['site-snapshots', 'list', q] as const,
+  leadSites: (leadId: string) => ['site-snapshots', 'lead', leadId] as const,
+  site: (id: string) => ['site-snapshots', 'detail', id] as const,
+  siteSource: (id: string) => ['site-snapshots', 'source', id] as const,
 };
 
 const isTerminal = (status: JobStatus | undefined) => status === 'done' || status === 'failed';
@@ -136,6 +145,60 @@ export function useWorkerHealth() {
 
 export function useSystemHealth() {
   return useQuery({ queryKey: qk.health, queryFn: () => api<SystemHealth>('health'), refetchInterval: 60_000 });
+}
+
+export type SiteListParams = { page: number; pageSize: number; status?: JobStatus; search?: string };
+
+/** Paginated website copies; polls while any copy is still being made. */
+export function useSiteSnapshots(params: SiteListParams) {
+  return useQuery({
+    queryKey: qk.siteList(params),
+    queryFn: () => api<Paginated<SiteSnapshotSummary>>('site-snapshots', { query: params }),
+    placeholderData: keepPreviousData,
+    refetchInterval: (q) => (q.state.data?.items.some((s) => !isTerminal(s.status)) ? 4_000 : 60_000),
+  });
+}
+
+export function useLeadSiteSnapshots(leadId: string) {
+  return useQuery({
+    queryKey: qk.leadSites(leadId),
+    queryFn: async () => (await api<{ items: SiteSnapshotSummary[] }>(`leads/${leadId}/site-snapshots`)).items,
+    refetchInterval: (q) => (q.state.data?.some((s) => !isTerminal(s.status)) ? 4_000 : false),
+  });
+}
+
+/**
+ * One website copy. Polls while it is being made, and refreshes every 30 minutes once done so the
+ * signed file links (valid 1 hour) never expire on an open page.
+ */
+export function useSiteSnapshot(id: string) {
+  return useQuery({
+    queryKey: qk.site(id),
+    queryFn: () => api<SiteSnapshotDetail>(`site-snapshots/${id}`),
+    staleTime: (q) => (isTerminal(q.state.data?.status) ? 20 * 60_000 : 0),
+    refetchInterval: (q) => (isTerminal(q.state.data?.status) ? 30 * 60_000 : 3_000),
+  });
+}
+
+export function useSiteSource(id: string, enabled: boolean) {
+  return useQuery({
+    queryKey: qk.siteSource(id),
+    queryFn: () => api<SiteSnapshotSource>(`site-snapshots/${id}/source`),
+    enabled,
+    staleTime: Infinity,
+  });
+}
+
+export function useCreateSiteSnapshot(leadId: string) {
+  return useApiMutation(
+    () => api<SiteSnapshotQueued>(`leads/${leadId}/site-snapshots`, { method: 'POST' }),
+    [qk.sites, ['jobs']],
+  );
+}
+
+/** Proxy URL for a backend-relative website copy path (`site-files/<token>/...`). */
+export function siteFileUrl(path: string, download = false) {
+  return `/api/proxy/${path}${download ? '?download=1' : ''}`;
 }
 
 /** Mutation that refreshes the given query prefixes on success. */

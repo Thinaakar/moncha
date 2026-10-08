@@ -80,6 +80,7 @@ export const JOB_TYPES: Array<{ value: JobType; label: string }> = [
   { value: 'country_discovery', label: 'Country discovery' },
   { value: 'website_audit', label: 'Website audit' },
   { value: 'csv_import', label: 'CSV import' },
+  { value: 'site_snapshot', label: 'Website copy' },
   { value: 'places_discovery', label: 'Places discovery' },
 ];
 

@@ -9,7 +9,7 @@ export type LeadQueue =
   | 'NEEDS_REVIEW'
   | 'INACTIVE';
 export type JobStatus = 'pending' | 'running' | 'done' | 'failed';
-export type JobType = 'places_discovery' | 'csv_import' | 'website_audit' | 'country_discovery';
+export type JobType = 'places_discovery' | 'csv_import' | 'website_audit' | 'country_discovery' | 'site_snapshot';
 export type AuditMethod = 'html' | 'render' | 'llm';
 export type EvidenceType =
   | 'script_src'
@@ -714,3 +714,5 @@ export function websiteAuditDedupeKey(leadId: string, classifierVersion: string,
 export function utcDay(date = new Date()): string {
   return date.toISOString().slice(0, 10);
 }
+
+export * from './site';

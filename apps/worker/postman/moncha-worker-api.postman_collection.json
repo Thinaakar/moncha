@@ -12,7 +12,9 @@
     { "key": "jobId", "value": "" },
     { "key": "leadId", "value": "" },
     { "key": "reviewId", "value": "" },
-    { "key": "authToken", "value": "" }
+    { "key": "authToken", "value": "" },
+    { "key": "snapshotId", "value": "" },
+    { "key": "previewBase", "value": "" }
   ],
   "event": [
     {
@@ -320,6 +322,109 @@
               "raw": "{\n  \"action\": \"request_reaudit\",\n  \"note\": \"Site was down during the audit\"\n}"
             }
           }
+        }
+      ]
+    },
+    {
+      "name": "Website copies",
+      "description": "Website Copy Agent. Needs R2_* and SITE_PREVIEW_SECRET in apps/worker/.env (otherwise 503 site_agent_not_configured). Creating a copy needs authToken from login (admin or operator). Run the worker so the site_snapshot job runs, then poll Get website copy until status is done.",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const token = pm.collectionVariables.get('authToken');",
+              "if (token) pm.request.headers.upsert({ key: 'Authorization', value: `Bearer ${token}` });"
+            ]
+          }
+        }
+      ],
+      "item": [
+        {
+          "name": "Copy lead website",
+          "request": { "method": "POST", "url": "{{baseUrl}}/api/v1/leads/{{leadId}}/site-snapshots" },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 202 or 200 (deduped)', () => pm.expect(pm.response.code).to.be.oneOf([200, 202]));",
+                  "const body = pm.response.json();",
+                  "if (body.snapshotId) pm.collectionVariables.set('snapshotId', body.snapshotId);",
+                  "if (body.jobId) pm.collectionVariables.set('jobId', body.jobId);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Website copies of lead",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/leads/{{leadId}}/site-snapshots" }
+        },
+        {
+          "name": "List website copies",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/site-snapshots?page=1&pageSize=25",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "site-snapshots"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "pageSize", "value": "25" },
+                { "key": "status", "value": "done", "disabled": true },
+                { "key": "search", "value": "clinic", "disabled": true }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get website copy",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/site-snapshots/{{snapshotId}}" },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "if (body.previewBase) pm.collectionVariables.set('previewBase', body.previewBase);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "View source (decoded)",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/site-snapshots/{{snapshotId}}/source" }
+        },
+        {
+          "name": "File - index.html (offline copy)",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/{{previewBase}}index.html" }
+        },
+        {
+          "name": "File - demo.html (with widget)",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/{{previewBase}}demo.html" }
+        },
+        {
+          "name": "File - source.html download",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/{{previewBase}}source.html?download=1" }
+        },
+        {
+          "name": "File - path traversal (expect 400)",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/{{previewBase}}%2e%2e/secret" },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('rejected', () => pm.expect(pm.response.code).to.be.oneOf([400, 403, 404]));"]
+              }
+            }
+          ]
         }
       ]
     }

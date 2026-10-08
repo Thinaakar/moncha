@@ -5,10 +5,46 @@ import type {
   JobStatus,
   JobType,
   LeadQueue,
+  SiteAssetKind,
+  SiteBrand,
+  SiteManifest,
+  SiteManifestAsset,
+  SiteManifestException,
+  SiteManifestSkipped,
+  SiteSnapshotDetail,
+  SiteSnapshotFiles,
+  SiteSnapshotQueued,
+  SiteSnapshotSource,
+  SiteSnapshotSummary,
   WebsiteStatus,
 } from '@moncha/contracts';
 
 export type { AssistantKind, AssistantVerdict, AuditMethod, JobStatus, JobType, LeadQueue, WebsiteStatus };
+export type {
+  SiteAssetKind,
+  SiteBrand,
+  SiteManifest,
+  SiteManifestAsset,
+  SiteManifestException,
+  SiteManifestSkipped,
+  SiteSnapshotDetail,
+  SiteSnapshotFiles,
+  SiteSnapshotQueued,
+  SiteSnapshotSource,
+  SiteSnapshotSummary,
+};
+
+/** Result the worker stores on a finished `site_snapshot` job. */
+export type SiteSnapshotJobResult = {
+  snapshotId?: string;
+  finalUrl?: string;
+  skipped?: string;
+  assetCount?: number;
+  skippedAssetCount?: number;
+  totalBytes?: number;
+  brandSource?: 'llm' | 'evidence';
+  warnings?: number;
+};
 
 export type Paginated<T> = {
   items: T[];
@@ -226,7 +262,7 @@ export type SourceImport = {
   error: string | null;
 };
 
-type QueuedTypeCounts = Record<'website_audit' | 'country_discovery' | 'csv_import', number>;
+type QueuedTypeCounts = Record<'website_audit' | 'country_discovery' | 'csv_import', number> & { site_snapshot?: number };
 
 export type WorkerHealth = {
   running: boolean;

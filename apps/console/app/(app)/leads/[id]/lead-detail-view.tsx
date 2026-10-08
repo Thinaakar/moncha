@@ -26,6 +26,7 @@ import { EmptyState, ErrorState, InlineAlert } from '@/components/app/states';
 import { JobStatusBadge, QueueBadge, VerdictBadge, WebsiteStatusBadge } from '@/components/app/status';
 import { CopyButton, DetailRow, JsonView } from '@/components/app/widgets';
 import { useCanEdit } from '@/components/app/user-context';
+import { WebsiteCopyCard } from '@/components/sites/website-copy-card';
 import { api, ApiError, errorMessage } from '@/lib/api';
 import { qk, useJob, useLead } from '@/lib/queries';
 import { formatDateTime, formatRelative, humanize } from '@/lib/format';
@@ -297,6 +298,8 @@ export function LeadDetailView({ id }: { id: string }) {
         </div>
 
         <div className="space-y-6">
+          <WebsiteCopyCard leadId={lead.id} hasWebsite={Boolean(siteUrl)} />
+
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">

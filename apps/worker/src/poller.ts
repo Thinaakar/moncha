@@ -13,7 +13,9 @@ import {
   PrismaHostAuditCacheRepository,
   PrismaJobRunRepository,
   PrismaLeadRepository,
+  PrismaLlmUsageRepository,
   PrismaReviewTaskRepository,
+  PrismaSiteSnapshotRepository,
   PrismaWebsiteAuditRepository,
   PrismaWebsiteRepository,
   PrismaWorkerHeartbeatRepository,
@@ -24,6 +26,7 @@ import {
   enqueueDueSchedules,
   resolveCountry,
   runCountryDiscoveryJob,
+  runSiteSnapshotJob,
   runWebsiteAuditJob,
   type CountryDiscoveryJobPayload,
   type JobRunRecord,
@@ -32,10 +35,13 @@ import {
   closeRenderBrowser,
   defaultEvidenceRoot,
   LocalDiskEvidenceStore,
+  MONCHA_WIDGET_JS,
+  MonchaSiteCapturer,
   MonchaWebsiteAuditor,
 } from '@moncha/crawling';
-import { createOpenRouterFromEnv } from '@moncha/integrations';
+import { createOpenRouterFromEnv, GeminiBrandExtractor } from '@moncha/integrations';
 import { countryCrawlDeps, discoveryBudget, liveCountryCrawls } from './country-crawls';
+import { siteAgentConfig } from './site-agent';
 
 const WORKER_ID = `worker-${process.env.HOSTNAME || 'local'}-${randomUUID().slice(0, 8)}`;
 const CONCURRENCY = Math.max(1, Number(process.env.WORKER_CONCURRENCY || 3));
@@ -65,6 +71,13 @@ const auditor = new MonchaWebsiteAuditor({
   enableLlm: Boolean(llm),
   logger,
 });
+
+const siteAgent = siteAgentConfig();
+const siteCapturer = new MonchaSiteCapturer({ limits: siteAgent.limits });
+const siteBrandExtractor = llm
+  ? new GeminiBrandExtractor({ client: llm, model: siteAgent.model, timeoutMs: siteAgent.llmTimeoutMs })
+  : null;
+let activeSiteSnapshot: Promise<void> | null = null;
 
 function auditDeps() {
   return {
@@ -194,6 +207,37 @@ async function runCrawl(job: JobRunRecord) {
   }
 }
 
+/** One website copy at a time per worker (Chromium memory); audits keep running in their own loop. */
+async function siteTick() {
+  if (!siteAgent.ready || !siteAgent.store || activeSiteSnapshot || crawlAbort.signal.aborted) return;
+  const [job] = await withDbRetry(() => jobs.claimJobs(WORKER_ID, 1, 'site_snapshot'));
+  if (!job) return;
+  const store = siteAgent.store;
+  activeSiteSnapshot = runSiteSnapshotJob(
+    {
+      jobs,
+      snapshots: new PrismaSiteSnapshotRepository(prisma),
+      leads: new PrismaLeadRepository(prisma),
+      capturer: siteCapturer,
+      brandExtractor: siteBrandExtractor,
+      store,
+      llmUsage: new PrismaLlmUsageRepository(prisma),
+      maxLlmCallsPerDay: Number(process.env.LLM_MAX_CALLS_PER_DAY || 0) || undefined,
+      widgetJs: MONCHA_WIDGET_JS,
+      logger,
+    },
+    { job, timeoutMs: siteAgent.jobTimeoutMs, signal: crawlAbort.signal },
+  )
+    .then((outcome) => logger.info('site_snapshot_outcome', { jobId: job.id, ...outcome }))
+    .catch((error) =>
+      logger.error('site_snapshot_error', { jobId: job.id, message: error instanceof Error ? error.message : String(error) }),
+    )
+    .finally(() => {
+      activeSiteSnapshot = null;
+    });
+  await activeSiteSnapshot;
+}
+
 async function every(errorEvent: string, ms: number, fn: () => Promise<void>) {
   for (;;) {
     try {
@@ -213,6 +257,7 @@ async function main() {
     concurrency: CONCURRENCY,
     llm: Boolean(llm),
     render: true,
+    siteAgent: siteAgent.ready,
     schedulerTickMs: SCHEDULER_TICK_MS,
     ...discoveryBudget(),
   });
@@ -227,8 +272,9 @@ async function main() {
       apiServer.close();
     }
     crawlAbort.abort();
-    if (activeCrawl) {
-      await Promise.race([activeCrawl, new Promise((r) => setTimeout(r, SHUTDOWN_WAIT_MS))]);
+    const running = [activeCrawl, activeSiteSnapshot].filter(Boolean);
+    if (running.length) {
+      await Promise.race([Promise.all(running), new Promise((r) => setTimeout(r, SHUTDOWN_WAIT_MS))]);
     }
     await closeRenderBrowser();
     process.exit(0);
@@ -264,6 +310,7 @@ async function main() {
     every('scheduler_tick_error', SCHEDULER_TICK_MS, schedulerTick),
     every('country_tick_error', POLL_MS, countryTick),
     every('csv_tick_error', POLL_MS, csvTick),
+    every('site_tick_error', POLL_MS, siteTick),
   ]);
 }
 

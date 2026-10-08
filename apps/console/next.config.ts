@@ -13,7 +13,8 @@ const config: NextConfig = {
   async headers() {
     return [
       {
-        source: '/:path*',
+        // Website copy files set their own headers in the proxy (they are framed by the preview).
+        source: '/:path((?!api/proxy/site-files/).*)',
         headers: [
           { key: 'X-Frame-Options', value: 'DENY' },
           { key: 'X-Content-Type-Options', value: 'nosniff' },

@@ -16,8 +16,14 @@ import {
   scheduleCreateSchema,
   scheduleDeleteCountrySchema,
   scheduleRunsQuerySchema,
+  siteSnapshotListQuerySchema,
   sourceImportSchema,
   updateProfileSchema,
+  type SiteManifest,
+  type SiteSnapshotDetail,
+  type SiteSnapshotQueued,
+  type SiteSnapshotSource,
+  type SiteSnapshotSummary,
 } from '@moncha/contracts';
 import {
   isTransientDbError,
@@ -31,6 +37,7 @@ import {
   PrismaPasswordResetRepository,
   PrismaReviewTaskRepository,
   PrismaSessionRepository,
+  PrismaSiteSnapshotRepository,
   PrismaWebsiteRepository,
   withDbRetry,
 } from '@moncha/db';
@@ -64,10 +71,19 @@ import {
   ScheduleError,
   supportedCountries,
   websiteAuditDedupeKey,
+  normalizeSiteFilePath,
+  queueSiteSnapshot,
+  signPreviewToken,
+  siteStoragePrefix,
+  SiteSnapshotRequestError,
+  verifyPreviewToken,
   type CountryDiscoveryJobPayload,
+  type SiteSnapshotListItem,
+  type SiteSnapshotRecord,
 } from '@moncha/domain';
 import { createResendMailerFromEnv } from '@moncha/integrations';
 import { CsvImportError, SOURCE_IMPORT_JOB_TYPES, sourceImportView, startCsvImport, type CsvSqlClient } from './csv-import';
+import { siteAgentConfig } from './site-agent';
 import { workerHealth } from './worker-health';
 
 // Local test API for Postman: exposes the same use cases the console routes call.
@@ -107,12 +123,19 @@ type Ctx = {
   params: Record<string, string>;
   body: () => Promise<unknown>;
 };
-type Result = { status?: number; json: unknown };
+type RawBody = {
+  body: AsyncIterable<Uint8Array>;
+  contentType: string;
+  contentLength?: number;
+  headers?: Record<string, string>;
+};
+type Result = { status?: number; json: unknown } | { status?: number; raw: RawBody };
 type Handler = (ctx: Ctx) => Promise<Result>;
 
 const routes: Array<{ method: string; pattern: RegExp; handler: Handler }> = [];
+/** `:name` matches one path segment, `*name` the rest of the path. */
 function route(method: string, path: string, handler: Handler) {
-  const pattern = new RegExp(`^${path.replace(/:(\w+)/g, '(?<$1>[^/]+)')}$`);
+  const pattern = new RegExp(`^${path.replace(/:(\w+)/g, '(?<$1>[^/]+)').replace(/\*(\w+)/g, '(?<$1>.+)')}$`);
   routes.push({ method, pattern, handler });
 }
 
@@ -378,6 +401,182 @@ route('GET', '/api/v1/source-imports/:id', async ({ tenantId, params }) => {
   return { json: sourceImportView(job) };
 });
 
+// Website copies (site_snapshot jobs run by the worker; files live in R2).
+const siteSnapshots = new PrismaSiteSnapshotRepository(prisma);
+const SOURCE_VIEW_MAX_BYTES = 3 * 1024 * 1024;
+
+function requireSiteAgent() {
+  const config = siteAgentConfig();
+  if (!config.ready || !config.store || !config.previewSecret) {
+    throw new HttpError(503, 'site_agent_not_configured', 'Website copies need R2_* and SITE_PREVIEW_SECRET in apps/worker/.env');
+  }
+  return { ...config, store: config.store, previewSecret: config.previewSecret };
+}
+
+/** Proxy-relative base for a finished snapshot's files: `site-files/{token}/`. */
+async function previewBaseFor(snapshot: SiteSnapshotRecord): Promise<string | null> {
+  const config = siteAgentConfig();
+  if (snapshot.status !== 'done' || !config.previewSecret) return null;
+  const token = await signPreviewToken(
+    { snapshotId: snapshot.id, tenantId: snapshot.tenantId },
+    config.previewSecret,
+    config.previewTtlSec,
+  );
+  return `site-files/${token}/`;
+}
+
+const summarize = async (snapshot: SiteSnapshotRecord | SiteSnapshotListItem) =>
+  siteSummary(snapshot, await previewBaseFor(snapshot));
+
+function siteSummary(snapshot: SiteSnapshotRecord | SiteSnapshotListItem, previewBase: string | null): SiteSnapshotSummary {
+  return {
+    id: snapshot.id,
+    leadId: snapshot.leadId,
+    jobId: snapshot.jobId,
+    status: snapshot.status,
+    sourceUrl: snapshot.sourceUrl,
+    finalUrl: snapshot.finalUrl,
+    httpStatus: snapshot.httpStatus,
+    sourceHash: snapshot.sourceHash,
+    sourceBytes: snapshot.sourceBytes,
+    sourceCharset: snapshot.sourceCharset,
+    assetCount: snapshot.assetCount,
+    skippedAssetCount: snapshot.skippedAssetCount,
+    totalBytes: snapshot.totalBytes,
+    llmModel: snapshot.llmModel,
+    llmPromptTokens: snapshot.llmPromptTokens,
+    llmCompletionTokens: snapshot.llmCompletionTokens,
+    warnings: snapshot.warnings,
+    failureReason: snapshot.failureReason,
+    createdAt: snapshot.createdAt.toISOString(),
+    finishedAt: snapshot.finishedAt?.toISOString() ?? null,
+    ...('company' in snapshot ? { company: snapshot.company } : {}),
+    thumbnailPath: previewBase ? `${previewBase}screenshot-desktop.png` : null,
+  };
+}
+
+async function getSnapshotOr404(tenantId: string, id: string) {
+  const snapshot = await siteSnapshots.get(tenantId, id);
+  if (!snapshot) throw new HttpError(404, 'not_found', 'Website copy not found');
+  return snapshot;
+}
+
+// Each run costs crawl time and LLM budget, so it needs a signed-in user who is not a viewer.
+route('POST', '/api/v1/leads/:id/site-snapshots', async ({ req, tenantId, params }) => {
+  requireSiteAgent();
+  const token = tokenOf(req);
+  if (!token) throw new HttpError(401, 'unauthorized', 'Sign in to create a website copy');
+  const user = await currentUser(auth, { token });
+  if (user.tenantId !== tenantId) throw new HttpError(403, 'forbidden', 'Signed-in user belongs to another tenant');
+  if (user.role === 'viewer') throw new HttpError(403, 'forbidden', 'Viewers cannot create website copies');
+  try {
+    const queued = await queueSiteSnapshot({ leads, snapshots: siteSnapshots }, { tenantId, leadId: params.id! });
+    const json: SiteSnapshotQueued = {
+      snapshotId: queued.snapshot.id,
+      jobId: queued.job?.id ?? queued.snapshot.jobId ?? '',
+      status: queued.snapshot.status,
+      ...(queued.deduped ? { deduped: true } : {}),
+    };
+    return { status: queued.deduped ? 200 : 202, json };
+  } catch (error) {
+    if (error instanceof SiteSnapshotRequestError) {
+      throw error.code === 'lead_not_found'
+        ? new HttpError(404, 'not_found', 'Lead not found')
+        : new HttpError(409, 'no_website', 'This lead has no website to copy');
+    }
+    throw error;
+  }
+});
+
+route('GET', '/api/v1/leads/:id/site-snapshots', async ({ tenantId, params }) => {
+  const items = await siteSnapshots.listForLead(tenantId, params.id!, 20);
+  return { json: { items: await Promise.all(items.map(summarize)) } };
+});
+
+route('GET', '/api/v1/site-snapshots', async ({ tenantId, url }) => {
+  const q = siteSnapshotListQuerySchema.parse(query(url, 'page', 'pageSize', 'status', 'search'));
+  const page = await siteSnapshots.list(tenantId, q);
+  return { json: { ...page, items: await Promise.all(page.items.map(summarize)) } };
+});
+
+route('GET', '/api/v1/site-snapshots/:id', async ({ tenantId, params }) => {
+  const snapshot = await getSnapshotOr404(tenantId, params.id!);
+  const previewBase = await previewBaseFor(snapshot);
+  let manifest: SiteManifest | null = null;
+  const store = siteAgentConfig().store;
+  if (snapshot.status === 'done' && store) {
+    const bytes = await store.getBytes(`${snapshot.storagePrefix}manifest.json`);
+    if (bytes) manifest = JSON.parse(Buffer.from(bytes).toString('utf8')) as SiteManifest;
+  }
+  const json: SiteSnapshotDetail = {
+    ...siteSummary(snapshot, previewBase),
+    brand: snapshot.brand,
+    previewBase,
+    files: previewBase
+      ? {
+          index: `${previewBase}index.html`,
+          demo: `${previewBase}demo.html`,
+          source: `${previewBase}source.html`,
+          rendered: `${previewBase}rendered.html`,
+          desktop: `${previewBase}screenshot-desktop.png`,
+          mobile: `${previewBase}screenshot-mobile.png`,
+        }
+      : null,
+    manifest,
+  };
+  return { json };
+});
+
+// source.html decoded with its detected charset, for the View source tab (bytes are unchanged in R2).
+route('GET', '/api/v1/site-snapshots/:id/source', async ({ tenantId, params }) => {
+  const { store } = requireSiteAgent();
+  const snapshot = await getSnapshotOr404(tenantId, params.id!);
+  if (snapshot.status !== 'done') throw new HttpError(409, 'not_ready', 'The website copy is not finished yet');
+  const bytes = await store.getBytes(`${snapshot.storagePrefix}source.html`);
+  if (!bytes) throw new HttpError(404, 'not_found', 'source.html not found');
+  const charset = snapshot.sourceCharset || 'utf-8';
+  const truncated = bytes.byteLength > SOURCE_VIEW_MAX_BYTES;
+  let text: string;
+  try {
+    text = new TextDecoder(charset).decode(truncated ? bytes.subarray(0, SOURCE_VIEW_MAX_BYTES) : bytes);
+  } catch {
+    text = new TextDecoder('utf-8').decode(truncated ? bytes.subarray(0, SOURCE_VIEW_MAX_BYTES) : bytes);
+  }
+  const json: SiteSnapshotSource = {
+    text,
+    charset,
+    bytes: bytes.byteLength,
+    sha256: snapshot.sourceHash ?? '',
+    truncated,
+  };
+  return { json };
+});
+
+const PLAIN_TEXT_FILES = new Set(['source.html', 'rendered.html']);
+
+// Token-gated file access for the sandboxed preview iframe (no cookies reach it). The tenant and
+// snapshot come only from the signed token; the path is normalized against the snapshot root.
+route('GET', '/api/v1/site-files/:token/*path', async ({ url, params }) => {
+  const { store, previewSecret } = requireSiteAgent();
+  const claims = await verifyPreviewToken(params.token!, previewSecret);
+  if (!claims) throw new HttpError(403, 'invalid_token', 'Preview link is invalid or expired');
+  const path = normalizeSiteFilePath(params.path!);
+  if (!path) throw new HttpError(400, 'invalid_path', 'Invalid file path');
+  const object = await store.get(`${siteStoragePrefix(claims.tenantId, claims.snapshotId)}${path}`);
+  if (!object) throw new HttpError(404, 'not_found', 'File not found');
+
+  let contentType = object.contentType;
+  if (PLAIN_TEXT_FILES.has(path)) {
+    const charset = /charset=([^;]+)/i.exec(object.contentType)?.[1]?.trim() || 'utf-8';
+    contentType = `text/plain; charset=${charset}`;
+  }
+  const headers: Record<string, string> = { 'cache-control': 'private, max-age=300' };
+  if (url.searchParams.get('download') === '1') {
+    headers['content-disposition'] = `attachment; filename="${path.split('/').pop()!.replace(/[^\w.~-]/g, '_')}"`;
+  }
+  return { raw: { body: object.body, contentType, contentLength: object.contentLength, headers } };
+});
+
 function readBody(req: IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -414,6 +613,21 @@ function send(res: ServerResponse, status: number, json: unknown) {
   setCorsHeaders(res);
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(json, null, 2));
+}
+
+/** Streams raw bytes (website-copy files). Fonts and module scripts need CORS from the sandboxed origin. */
+async function sendBytes(res: ServerResponse, status: number, raw: RawBody) {
+  setCorsHeaders(res);
+  res.writeHead(status, {
+    'content-type': raw.contentType,
+    ...(raw.contentLength !== undefined ? { 'content-length': String(raw.contentLength) } : {}),
+    'x-content-type-options': 'nosniff',
+    ...raw.headers,
+  });
+  for await (const chunk of raw.body) {
+    if (!res.write(chunk)) await new Promise<void>((resolve) => res.once('drain', () => resolve()));
+  }
+  res.end();
 }
 
 type ZodLikeError = Error & { flatten: () => unknown };
@@ -483,7 +697,8 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
     }
     const tenantHeader = req.headers['x-tenant-id'];
     const tenantId = (Array.isArray(tenantHeader) ? tenantHeader[0] : tenantHeader) || process.env.DEFAULT_TENANT_ID;
-    if (!tenantId && url.pathname !== '/health') {
+    // Website-copy files carry their tenant inside the signed token.
+    if (!tenantId && url.pathname !== '/health' && !url.pathname.startsWith('/api/v1/site-files/')) {
       throw new HttpError(400, 'validation_error', 'Send x-tenant-id or set DEFAULT_TENANT_ID');
     }
 
@@ -498,10 +713,12 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
     const work = match.handler({ req, url, tenantId: tenantId || '', params, body: () => readBody(req) });
     const result = await (method === 'GET' ? withDeadline(work, READ_DEADLINE_MS, url.pathname) : work);
     status = result.status ?? 200;
-    send(res, status, result.json);
+    if ('raw' in result) await sendBytes(res, status, result.raw);
+    else send(res, status, result.json);
   } catch (error) {
     status = errorStatus(error);
-    sendError(res, error);
+    if (res.headersSent) res.destroy(error instanceof Error ? error : undefined);
+    else sendError(res, error);
   } finally {
     logger.info('worker_api_request', { method, path: url.pathname, status, ms: Date.now() - started });
   }

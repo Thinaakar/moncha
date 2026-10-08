@@ -6,6 +6,31 @@ export function errorResponse(status: number, code: string, message: string) {
   return NextResponse.json({ error: { code, message } }, { status });
 }
 
+/**
+ * Raw GET to the backend for streamed bodies (website copy files). Returns the backend response
+ * untouched, or null when the backend is unreachable or too slow to answer.
+ */
+export async function streamBackend(path: string, init: { timeoutMs?: number } = {}) {
+  const headers = backendHeaders();
+  headers.set('accept', '*/*');
+  const started = Date.now();
+  try {
+    return await fetch(`${backendConfig().baseUrl}${path}`, {
+      headers,
+      cache: 'no-store',
+      signal: AbortSignal.timeout(init.timeoutMs ?? 60_000),
+    });
+  } catch (error) {
+    const timedOut = error instanceof Error && error.name === 'TimeoutError';
+    console.error(timedOut ? 'backend_timeout' : 'backend_unreachable', {
+      method: 'GET',
+      path: path.split('?')[0]!.replace(/\/site-files\/[^/]+/, '/site-files/<token>'),
+      ms: Date.now() - started,
+    });
+    return null;
+  }
+}
+
 /** JSON call to the backend; network failures become a 502 envelope instead of throwing. */
 export async function callBackend(
   path: string,

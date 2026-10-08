@@ -59,6 +59,8 @@ enum JobType {
   website_audit
   /// Country-wide crawl slice (worker): scheduled or started from the discover CLI.
   country_discovery
+  /// Website copy of one lead's homepage (worker), stored in R2.
+  site_snapshot
 }
 
 enum AuditMethod {
@@ -124,6 +126,7 @@ model Tenant {
   discoveryTargets   DiscoveryTarget[]
   discoveryUsages    DiscoveryUsage[]
   discoverySchedules DiscoverySchedule[]
+  siteSnapshots      SiteSnapshot[]
 }
 
 model User {
@@ -215,6 +218,7 @@ model Lead {
   websiteAudits       WebsiteAudit[]
   reviewTasks         ReviewTask[]
   auditLogs           AuditLog[]
+  siteSnapshots       SiteSnapshot[]
 
   @@unique([tenantId, companyId])
   @@index([tenantId, queue])
@@ -506,4 +510,41 @@ model DiscoverySchedule {
   @@unique([tenantId, countryCode, timeOfDay])
   @@index([enabled, nextRunAt])
   @@index([tenantId, countryCode])
+}
+
+/// Website copy of one lead's homepage. Files live in R2 under storagePrefix; the row tracks
+/// progress, counts and the extracted brand. Updated by the site_snapshot job while it runs.
+model SiteSnapshot {
+  id                  String    @id @default(cuid())
+  tenantId            String
+  leadId              String
+  jobId               String?   @unique
+  status              JobStatus @default(pending)
+  sourceUrl           String
+  finalUrl            String?
+  httpStatus          Int?
+  /// sites/{tenantId}/{id}/
+  storagePrefix       String
+  /// SHA-256 hex of source.html bytes.
+  sourceHash          String?
+  sourceBytes         Int?
+  sourceCharset       String?
+  assetCount          Int       @default(0)
+  skippedAssetCount   Int       @default(0)
+  totalBytes          Int       @default(0)
+  brand               Json?
+  llmModel            String?
+  llmPromptTokens     Int?
+  llmCompletionTokens Int?
+  /// Non-fatal notes, e.g. llm_skipped:budget_exhausted, base_href_neutralized.
+  warnings            Json?
+  failureReason       String?
+  createdAt           DateTime  @default(now())
+  finishedAt          DateTime?
+  tenant              Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lead                Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, leadId, createdAt])
+  @@index([tenantId, createdAt])
+  @@index([tenantId, status])
 }

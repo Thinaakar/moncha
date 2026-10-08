@@ -83,11 +83,20 @@ async function launchBrowser(): Promise<Browser> {
     : new Error('playwright_launch_failed');
 }
 
+let launching: Promise<Browser> | null = null;
+
 async function getBrowser(): Promise<Browser> {
   if (sharedBrowser && sharedBrowser.isConnected()) return sharedBrowser;
-  sharedBrowser = await launchBrowser();
+  // Audit and site-snapshot loops run concurrently; share one launch instead of starting two browsers.
+  launching ??= launchBrowser().finally(() => {
+    launching = null;
+  });
+  sharedBrowser = await launching;
   return sharedBrowser;
 }
+
+/** Shared Chromium instance (also used by the site capturer). */
+export const getRenderBrowser = getBrowser;
 
 /** Close shared browser (tests / worker shutdown). */
 export async function closeRenderBrowser(): Promise<void> {
@@ -316,7 +325,7 @@ const BLOCKED_RE =
   /just a moment|attention required|cf-browser-verification|challenge-platform|verify you are human|are you a robot|access denied|captcha/;
 
 /** Bot-challenge / captcha interstitial — an empty "no assistant" result would be wrong. */
-async function looksBlocked(page: Page): Promise<boolean> {
+export async function looksBlocked(page: Page): Promise<boolean> {
   const title = (await page.title().catch(() => '')).toLowerCase();
   const body = ((await page.locator('body').innerText({ timeout: 2_000 }).catch(() => '')) || '')
     .slice(0, 4_000)

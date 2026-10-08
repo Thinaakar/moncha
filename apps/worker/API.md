@@ -1,10 +1,11 @@
 # Moncha Backend API
 
-Every endpoint served by the backend (29 in total). Endpoints 1 to 19 were captured from the live deployment on
+Every endpoint served by the backend (35 in total). Endpoints 1 to 19 were captured from the live deployment on
 2026-10-03 (50 of 50 full test cases, 26 of 26 re-checks after the audit changes, and 22 of 22 auth cases passed).
 Endpoints 20 to 26 and `queue=ALL` were added on 2026-10-05 and tested against the local API on the dev database
 (34 of 34 cases passed). Endpoints 27 to 29 (review actions) were added on 2026-10-05 and tested against the local
-API on the dev database (27 of 27 cases passed), see [Test report](#test-report).
+API on the dev database (27 of 27 cases passed), see [Test report](#test-report). Endpoints 30 to 35 (website
+copies) were added on 2026-10-08.
 
 - **Base URL (deployed):** `https://moncha-backend.vinothjv4-tech.workers.dev`
 - **Base URL (local):** `http://localhost:4000` (`pnpm --filter @moncha/worker api`), see [Local API differences](#local-api-differences)
@@ -24,6 +25,7 @@ API on the dev database (27 of 27 cases passed), see [Test report](#test-report)
 - [Source imports](#source-imports): CSV import and import status
 - [Worker health](#worker-health): is the background worker running
 - [Reviews](#reviews): list review tasks, get one, resolve one (confirm, mark chatbot, re-audit)
+- [Website copies](#website-copies): copy a lead's homepage, list copies, get one, view source, stored files
 - [How a lead's queue is decided](#how-a-leads-queue-is-decided)
 - [Enums](#enums)
 - [Background processing](#background-processing)
@@ -67,6 +69,12 @@ API on the dev database (27 of 27 cases passed), see [Test report](#test-report)
 | 27 | GET | `/api/v1/reviews` | Read | Review tasks (default: open) with lead, company and audit | 200 | ReviewTask, Lead, Company, Website, WebsiteAudit |
 | 28 | GET | `/api/v1/reviews/:id` | Read | One review task | 200 | ReviewTask |
 | 29 | POST | `/api/v1/reviews/:id/resolve` | Update | Apply a human decision to a `NEEDS_REVIEW` lead | 200 | ReviewTask, Lead, AuditLog, Website, JobRun |
+| 30 | POST | `/api/v1/leads/:id/site-snapshots` | Create | Queue a website copy of a lead's homepage (editor session) | 202 / 200 | SiteSnapshot, JobRun |
+| 31 | GET | `/api/v1/leads/:id/site-snapshots` | Read | Website copies of one lead | 200 | SiteSnapshot |
+| 32 | GET | `/api/v1/site-snapshots` | Read | Paginated website copies | 200 | SiteSnapshot, Lead, Company |
+| 33 | GET | `/api/v1/site-snapshots/:id` | Read | One website copy with brand, file links and manifest | 200 | SiteSnapshot (+ R2) |
+| 34 | GET | `/api/v1/site-snapshots/:id/source` | Read | `source.html` decoded for View source | 200 | SiteSnapshot (+ R2) |
+| 35 | GET | `/api/v1/site-files/:token/*path` | Read | One stored file, token-gated (preview iframe) | 200 | none (R2) |
 
 The only PATCH is #20. To change a schedule time, delete the old one (#6) and create the new one (#5).
 
@@ -1336,14 +1344,14 @@ curl https://moncha-backend.vinothjv4-tech.workers.dev/api/v1/worker/health
     }
   ],
   "jobs": {
-    "pending": { "website_audit": 3, "country_discovery": 0, "csv_import": 0 },
-    "running": { "website_audit": 1, "country_discovery": 0, "csv_import": 0 }
+    "pending": { "website_audit": 3, "country_discovery": 0, "csv_import": 0, "site_snapshot": 0 },
+    "running": { "website_audit": 1, "country_discovery": 0, "csv_import": 0, "site_snapshot": 0 }
   }
 }
 ```
 
 When offline: `"running": false`, `"status": "offline"`, and `message` is `"Background worker is offline: discovery,
-schedules, website audits and large CSV imports wait until it starts."`. `lastSeenAt` and `secondsSinceLastSeen` are
+schedules, website audits, website copies and large CSV imports wait until it starts."`. `lastSeenAt` and `secondsSinceLastSeen` are
 `null` if no worker has ever run.
 
 | Field | Description |
@@ -1559,6 +1567,85 @@ For `request_reaudit`, `job` is the queued audit, for example `{ "id": "cmuvr9..
 
 ---
 
+## Website copies
+
+The Website Copy Agent copies one lead's homepage. The worker runs a `site_snapshot` job and stores the files in the
+private R2 bucket under `sites/{tenantId}/{snapshotId}/`:
+
+| File | What it is |
+|---|---|
+| `source.html` | The HTML exactly as served (same bytes, charset and SHA-256 as view-source) |
+| `rendered.html` | The DOM after the browser ran the page's scripts |
+| `index.html` | `source.html` with only asset URLs rewritten to the local copies, for offline viewing |
+| `demo.html` | `index.html` plus the MonCha chatbot widget (`moncha-widget.js`) |
+| `brand.json` | Business name, logo, colors, fonts, contact, services, hours, greeting and FAQs (Gemini via OpenRouter, checked against the page) |
+| `manifest.json` | Assets, skipped assets with reasons, redirects, rewrite counts, exceptions and limits |
+| `screenshot-desktop.png`, `screenshot-mobile.png` | 1440 px and 390 px screenshots |
+| `assets/{host}/...` | Images, CSS, JS, fonts and media (400 files, 10 MB per file, 80 MB per copy) |
+
+Needs `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` and `SITE_PREVIEW_SECRET`; without
+them every route here returns 503 `site_agent_not_configured`. The deployed edge forwards these paths to the
+container.
+
+### 30. POST `/api/v1/leads/:id/site-snapshots`
+
+**CRUD:** Create. **Headers:** `authorization: Bearer <token>` is required (role `admin` or `operator`).
+
+```bash
+curl -X POST http://localhost:4000/api/v1/leads/cmuv6c3vp016bt30uhaiwsu6a/site-snapshots \
+  -H "authorization: Bearer <token>"
+```
+
+**202 Accepted** `{ "snapshotId": "cmw1...", "jobId": "cmw1...", "status": "pending" }`. When a copy of this lead
+is already pending or running: **200 OK** with the same fields and `"deduped": true`.
+
+| Status | `code` | When |
+|---|---|---|
+| 401 | `unauthorized` | No bearer token, or an invalid one |
+| 403 | `forbidden` | Viewer role, or a user of another tenant |
+| 404 | `not_found` | Unknown lead |
+| 409 | `no_website` | The lead has no website |
+| 503 | `site_agent_not_configured` | R2 or `SITE_PREVIEW_SECRET` missing |
+
+### 31. GET `/api/v1/leads/:id/site-snapshots`
+
+**200 OK** `{ "items": [ <summary>, ... ] }`, newest first, at most 20. A summary has `id`, `leadId`, `jobId`,
+`status`, `sourceUrl`, `finalUrl`, `httpStatus`, `sourceHash`, `sourceBytes`, `sourceCharset`, `assetCount`,
+`skippedAssetCount`, `totalBytes`, `llmModel`, `llmPromptTokens`, `llmCompletionTokens`, `warnings`,
+`failureReason`, `createdAt`, `finishedAt` and `thumbnailPath` (`site-files/<token>/screenshot-desktop.png` once
+`done`, else `null`).
+
+### 32. GET `/api/v1/site-snapshots`
+
+Query: `page` (default 1), `pageSize` (1 to 100, default 25), `status`, `search` (source URL, company name or
+domain). **200 OK** `{ "items", "total", "page", "pageSize", "totalPages" }`; each item is a summary plus
+`company { id, name, domain }`.
+
+### 33. GET `/api/v1/site-snapshots/:id`
+
+**200 OK**: the summary plus `brand`, `previewBase` (`site-files/<token>/`), `files` (`index`, `demo`, `source`,
+`rendered`, `desktop`, `mobile`) and `manifest`. The last three are `null` until the copy is `done`. **404** for an
+unknown copy or one in another tenant.
+
+### 34. GET `/api/v1/site-snapshots/:id/source`
+
+**200 OK** `{ "text": "<!DOCTYPE html>...", "charset": "shift_jis", "bytes": 48213, "sha256": "...", "truncated": false }`.
+The text is decoded with the stored charset for display only (first 3 MB). **409** `not_ready` before `done`.
+
+### 35. GET `/api/v1/site-files/:token/*path`
+
+Streams one stored file. No `x-tenant-id` needed: the token (HMAC-SHA256 with `SITE_PREVIEW_SECRET`, valid for
+`SITE_PREVIEW_TTL_SEC`, default 1 hour) names the tenant and the copy. `source.html` and `rendered.html` are served
+as `text/plain`; `?download=1` adds `content-disposition: attachment`.
+
+| Status | `code` | When |
+|---|---|---|
+| 400 | `invalid_path` | `..`, `.`, empty segments, backslashes or encoded traversal |
+| 403 | `invalid_token` | Bad or expired token |
+| 404 | `not_found` | No such file in this copy |
+
+---
+
 ## How a lead's queue is decided
 
 The worker audits the lead's website in up to three passes and stops at the first clear answer:
@@ -1598,7 +1685,7 @@ can still be `QUALIFIED`.
 | Assistant verdict | `NO_ASSISTANT`, `HAS_ASSISTANT`, `UNCERTAIN`, `NOT_APPLICABLE` |
 | Website status | `UNCHECKED`, `ACTIVE`, `INACTIVE`, `PARKED`, `INACCESSIBLE`, `MISSING` |
 | Job status | `pending`, `running`, `done`, `failed` |
-| Job type | `country_discovery`, `website_audit`, `places_discovery`, `csv_import` |
+| Job type | `country_discovery`, `website_audit`, `places_discovery`, `csv_import`, `site_snapshot` |
 | Schedule run trigger | `schedule`, `manual` |
 | User role | `admin`, `operator`, `viewer` |
 
@@ -1616,6 +1703,7 @@ The API only stores requests. The work is done by the background worker (`apps/w
 | `POST /api/v1/leads/:id/audit` | Run the re-audit |
 | `POST /api/v1/reviews/:id/resolve` with `request_reaudit` | Run the re-audit |
 | `POST /api/v1/source-imports` | Import files over 1,000 rows, and audit the imported leads' websites |
+| `POST /api/v1/leads/:id/site-snapshots` | Capture the homepage, extract the brand and upload the copy to R2 |
 
 On the deployed backend the worker container is not running (the Cloudflare account has no Containers access), so
 these jobs stay `pending` until a worker runs, for example `pnpm --filter @moncha/worker start` locally.

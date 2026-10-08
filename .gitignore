@@ -11,6 +11,8 @@ coverage
 *.tsbuildinfo
 # Worker audit evidence (screenshots, DOM snapshots)
 apps/worker/.data/
+# Local website-copy smoke captures
+.site-smoke/
 # Wrangler (Cloudflare) local state and secrets
 .wrangler
 .dev.vars*

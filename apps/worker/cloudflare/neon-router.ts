@@ -121,11 +121,16 @@ async function readJson(request: Request): Promise<unknown> {
   }
 }
 
+const SITE_ROUTE_RE = /^\/api\/v1\/(site-snapshots|site-files)(\/|$)|^\/api\/v1\/leads\/[^/]+\/site-snapshots$/;
+
 export async function handleNeonApi(
   request: Request,
   env: { DATABASE_URL?: string; DEFAULT_TENANT_ID?: string; WORKER_API_KEY?: string; [key: string]: unknown },
   cors: Record<string, string>
 ): Promise<Response | null> {
+  // Website copies need R2, Playwright output and raw byte streaming: always served by the container.
+  if (SITE_ROUTE_RE.test(new URL(request.url).pathname)) return null;
+
   const databaseUrl = typeof env.DATABASE_URL === 'string' ? env.DATABASE_URL : '';
   if (!databaseUrl) {
     return jsonResponse(
