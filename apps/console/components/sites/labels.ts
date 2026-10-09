@@ -13,6 +13,7 @@ const FAILURES: Record<string, string> = {
   worker_shutdown: 'The worker restarted during the copy; it will be retried.',
   snapshot_missing: 'The copy record was removed before the job ran.',
   invalid_payload: 'The job was queued without a URL.',
+  cancelled: 'Cancelled before it started.',
 };
 
 export function failureText(reason: string | null | undefined) {

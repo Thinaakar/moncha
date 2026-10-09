@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { InlineAlert } from '@/components/app/states';
 import { Segmented } from '@/components/sites/tabs';
 import { siteFileUrl } from '@/lib/queries';
+import { useUrlState } from '@/lib/use-url-state';
 import type { SiteSnapshotFiles } from '@/lib/types';
 
 type Mode = 'original' | 'demo';
@@ -36,8 +37,12 @@ function useWidth<T extends HTMLElement>() {
  * read console cookies or storage, and the proxy CSP blocks every network call and nested frame.
  */
 export function PreviewFrame({ files, warnings }: { files: SiteSnapshotFiles; warnings: string[] }) {
-  const [mode, setMode] = useState<Mode>('original');
-  const [device, setDevice] = useState<Device>('desktop');
+  const url = useUrlState();
+  const mode: Mode = url.get('view') === 'demo' ? 'demo' : 'original';
+  const requestedDevice = url.get('device') as Device;
+  const device: Device = Object.hasOwn(DEVICES, requestedDevice) ? requestedDevice : 'desktop';
+  const setMode = (value: Mode) => url.set({ view: value === 'original' ? null : value });
+  const setDevice = (value: Device) => url.set({ device: value === 'desktop' ? null : value });
   const [reloads, setReloads] = useState(0);
   const [loading, setLoading] = useState(true);
   const [containerRef, containerWidth] = useWidth<HTMLDivElement>();

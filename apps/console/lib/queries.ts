@@ -14,6 +14,11 @@ import type {
   ReviewTask,
   ScheduleGroup,
   ScheduleRun,
+  SiteAutomationCrawl,
+  SiteAutomationState,
+  SiteAutomationUpdate,
+  SiteCopyOrigin,
+  SiteQueue,
   SiteSnapshotDetail,
   SiteSnapshotQueued,
   SiteSnapshotSource,
@@ -41,9 +46,22 @@ export const qk = {
   leadSites: (leadId: string) => ['site-snapshots', 'lead', leadId] as const,
   site: (id: string) => ['site-snapshots', 'detail', id] as const,
   siteSource: (id: string) => ['site-snapshots', 'source', id] as const,
+  siteQueue: ['site-snapshots', 'queue'] as const,
+  automation: ['site-automation'] as const,
+  automationCrawls: (limit: number) => ['site-automation', 'crawls', limit] as const,
 };
 
 const isTerminal = (status: JobStatus | undefined) => status === 'done' || status === 'failed';
+
+/** Poll a finished copy while its GitHub push is running or about to retry. */
+function githubPollMs(snapshot: SiteSnapshotSummary | undefined): number | null {
+  const github = snapshot?.github;
+  if (!github) return null;
+  if (github.status === 'pushing') return 3_000;
+  if (github.status !== 'pending') return null;
+  const wait = github.nextAt ? new Date(github.nextAt).getTime() - Date.now() : 0;
+  return wait < 2 * 60_000 ? 5_000 : 60_000;
+}
 
 export function useQueueCounts() {
   return useQuery({ queryKey: qk.counts, queryFn: () => api<QueueCounts>('leads/counts'), refetchInterval: 30_000 });
@@ -85,7 +103,7 @@ export function useReviews(params: ReviewListParams) {
   });
 }
 
-export type JobListParams = { page: number; pageSize: number; type?: JobType; status?: JobStatus };
+export type JobListParams = { page: number; pageSize: number; type?: JobType; status?: JobStatus; origin?: SiteCopyOrigin };
 
 export function useJobs(params: JobListParams) {
   return useQuery({
@@ -147,7 +165,7 @@ export function useSystemHealth() {
   return useQuery({ queryKey: qk.health, queryFn: () => api<SystemHealth>('health'), refetchInterval: 60_000 });
 }
 
-export type SiteListParams = { page: number; pageSize: number; status?: JobStatus; search?: string };
+export type SiteListParams = { page: number; pageSize: number; status?: JobStatus; search?: string; origin?: SiteCopyOrigin };
 
 /** Paginated website copies; polls while any copy is still being made. */
 export function useSiteSnapshots(params: SiteListParams) {
@@ -175,9 +193,18 @@ export function useSiteSnapshot(id: string) {
   return useQuery({
     queryKey: qk.site(id),
     queryFn: () => api<SiteSnapshotDetail>(`site-snapshots/${id}`),
-    staleTime: (q) => (isTerminal(q.state.data?.status) ? 20 * 60_000 : 0),
-    refetchInterval: (q) => (isTerminal(q.state.data?.status) ? 30 * 60_000 : 3_000),
+    staleTime: (q) => (isTerminal(q.state.data?.status) && !githubPollMs(q.state.data) ? 20 * 60_000 : 0),
+    refetchInterval: (q) =>
+      isTerminal(q.state.data?.status) ? (githubPollMs(q.state.data) ?? 30 * 60_000) : 3_000,
   });
+}
+
+/** Queues a GitHub push of a finished copy (first push of an older copy, or a retry). */
+export function useGithubPushSiteSnapshot() {
+  return useApiMutation(
+    (id: string) => api<{ queued: true }>(`site-snapshots/${id}/github-push`, { method: 'POST' }),
+    [qk.sites],
+  );
 }
 
 export function useSiteSource(id: string, enabled: boolean) {
@@ -194,6 +221,51 @@ export function useCreateSiteSnapshot(leadId: string) {
     () => api<SiteSnapshotQueued>(`leads/${leadId}/site-snapshots`, { method: 'POST' }),
     [qk.sites, ['jobs']],
   );
+}
+
+/** The website copy queue in the order the worker runs it; polls fast while anything is queued. */
+export function useSiteQueue(enabled = true) {
+  return useQuery({
+    queryKey: qk.siteQueue,
+    queryFn: () => api<SiteQueue>('site-snapshots/queue'),
+    enabled,
+    refetchInterval: (q) => (q.state.data && q.state.data.running.length + q.state.data.waiting.length > 0 ? 5_000 : 30_000),
+  });
+}
+
+export function useCancelSiteSnapshot() {
+  return useApiMutation(
+    (id: string) => api<{ cancelled: true }>(`site-snapshots/${id}/cancel`, { method: 'POST' }),
+    [qk.sites, ['jobs'], qk.automation],
+  );
+}
+
+export function useSiteAutomation() {
+  return useQuery({
+    queryKey: qk.automation,
+    queryFn: () => api<SiteAutomationState>('site-automation'),
+    refetchInterval: 30_000,
+  });
+}
+
+export function useUpdateSiteAutomation() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (input: SiteAutomationUpdate) => api<SiteAutomationState>('site-automation', { method: 'PUT', body: input }),
+    onSuccess: (state) => {
+      client.setQueryData(qk.automation, state);
+      void client.invalidateQueries({ queryKey: ['site-automation', 'crawls'] });
+    },
+  });
+}
+
+/** Crawls followed by the copy automation, newest first; polls while any is still open. */
+export function useSiteAutomationCrawls(limit = 50) {
+  return useQuery({
+    queryKey: qk.automationCrawls(limit),
+    queryFn: async () => (await api<{ items: SiteAutomationCrawl[] }>('site-automation/crawls', { query: { limit } })).items,
+    refetchInterval: (q) => (q.state.data?.some((c) => c.status !== 'complete') ? 15_000 : 60_000),
+  });
 }
 
 /** Proxy URL for a backend-relative website copy path (`site-files/<token>/...`). */

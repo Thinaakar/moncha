@@ -16,10 +16,16 @@ import {
   scheduleCreateSchema,
   scheduleDeleteCountrySchema,
   scheduleRunsQuerySchema,
+  siteAutomationCrawlsQuerySchema,
+  siteAutomationUpdateSchema,
   siteSnapshotListQuerySchema,
   sourceImportSchema,
   updateProfileSchema,
+  type SiteAutomationCrawl,
+  type SiteAutomationState,
   type SiteManifest,
+  type SiteQueue,
+  type SiteQueueItem,
   type SiteSnapshotDetail,
   type SiteSnapshotQueued,
   type SiteSnapshotSource,
@@ -37,6 +43,7 @@ import {
   PrismaPasswordResetRepository,
   PrismaReviewTaskRepository,
   PrismaSessionRepository,
+  PrismaSiteAutomationRepository,
   PrismaSiteSnapshotRepository,
   PrismaWebsiteRepository,
   withDbRetry,
@@ -72,7 +79,16 @@ import {
   supportedCountries,
   websiteAuditDedupeKey,
   normalizeSiteFilePath,
+  cancelSiteSnapshot,
+  getSiteAutomationStatus,
+  getSiteQueue,
   queueSiteSnapshot,
+  SiteAutomationError,
+  SiteCancelError,
+  requestSiteGithubPush,
+  SITE_GITHUB_MAX_ATTEMPTS,
+  SiteGithubRequestError,
+  updateSiteAutomationSettings,
   signPreviewToken,
   siteStoragePrefix,
   SiteSnapshotRequestError,
@@ -83,7 +99,7 @@ import {
 } from '@moncha/domain';
 import { createResendMailerFromEnv } from '@moncha/integrations';
 import { CsvImportError, SOURCE_IMPORT_JOB_TYPES, sourceImportView, startCsvImport, type CsvSqlClient } from './csv-import';
-import { siteAgentConfig } from './site-agent';
+import { siteAgentConfig, siteAutoCopyEnabled, siteGithubPublisher } from './site-agent';
 import { workerHealth } from './worker-health';
 
 // Local test API for Postman: exposes the same use cases the console routes call.
@@ -230,7 +246,7 @@ route('GET', '/api/v1/discovery/options', async () => ({
 }));
 
 route('GET', '/api/v1/jobs', async ({ tenantId, url }) => {
-  const q = jobListQuerySchema.parse(query(url, 'page', 'pageSize', 'type', 'status'));
+  const q = jobListQuerySchema.parse(query(url, 'page', 'pageSize', 'type', 'status', 'origin'));
   return { json: await jobs.listPage(tenantId, q) };
 });
 
@@ -448,10 +464,25 @@ function siteSummary(snapshot: SiteSnapshotRecord | SiteSnapshotListItem, previe
     llmCompletionTokens: snapshot.llmCompletionTokens,
     warnings: snapshot.warnings,
     failureReason: snapshot.failureReason,
+    origin: snapshot.origin,
+    crawlJobId: snapshot.crawlJobId,
     createdAt: snapshot.createdAt.toISOString(),
     finishedAt: snapshot.finishedAt?.toISOString() ?? null,
     ...('company' in snapshot ? { company: snapshot.company } : {}),
     thumbnailPath: previewBase ? `${previewBase}screenshot-desktop.png` : null,
+    github: snapshot.githubStatus
+      ? {
+          status: snapshot.githubStatus,
+          attempts: snapshot.githubAttempts,
+          maxAttempts: SITE_GITHUB_MAX_ATTEMPTS,
+          nextAt: snapshot.githubNextAt?.toISOString() ?? null,
+          commitSha: snapshot.githubCommitSha,
+          commitUrl: snapshot.githubCommitUrl,
+          folderUrl: snapshot.githubFolderUrl,
+          error: snapshot.githubError,
+          pushedAt: snapshot.githubPushedAt?.toISOString() ?? null,
+        }
+      : null,
   };
 }
 
@@ -461,14 +492,20 @@ async function getSnapshotOr404(tenantId: string, id: string) {
   return snapshot;
 }
 
+/** Signed-in admin or operator of this tenant; `action` completes "Sign in to …" and "Viewers cannot …". */
+async function requireEditor(req: IncomingMessage, tenantId: string, action: string) {
+  const token = tokenOf(req);
+  if (!token) throw new HttpError(401, 'unauthorized', `Sign in to ${action}`);
+  const user = await currentUser(auth, { token });
+  if (user.tenantId !== tenantId) throw new HttpError(403, 'forbidden', 'Signed-in user belongs to another tenant');
+  if (user.role === 'viewer') throw new HttpError(403, 'forbidden', `Viewers cannot ${action}`);
+  return user;
+}
+
 // Each run costs crawl time and LLM budget, so it needs a signed-in user who is not a viewer.
 route('POST', '/api/v1/leads/:id/site-snapshots', async ({ req, tenantId, params }) => {
   requireSiteAgent();
-  const token = tokenOf(req);
-  if (!token) throw new HttpError(401, 'unauthorized', 'Sign in to create a website copy');
-  const user = await currentUser(auth, { token });
-  if (user.tenantId !== tenantId) throw new HttpError(403, 'forbidden', 'Signed-in user belongs to another tenant');
-  if (user.role === 'viewer') throw new HttpError(403, 'forbidden', 'Viewers cannot create website copies');
+  await requireEditor(req, tenantId, 'create website copies');
   try {
     const queued = await queueSiteSnapshot({ leads, snapshots: siteSnapshots }, { tenantId, leadId: params.id! });
     const json: SiteSnapshotQueued = {
@@ -494,9 +531,108 @@ route('GET', '/api/v1/leads/:id/site-snapshots', async ({ tenantId, params }) =>
 });
 
 route('GET', '/api/v1/site-snapshots', async ({ tenantId, url }) => {
-  const q = siteSnapshotListQuerySchema.parse(query(url, 'page', 'pageSize', 'status', 'search'));
+  const q = siteSnapshotListQuerySchema.parse(query(url, 'page', 'pageSize', 'status', 'search', 'origin'));
   const page = await siteSnapshots.list(tenantId, q);
   return { json: { ...page, items: await Promise.all(page.items.map(summarize)) } };
+});
+
+// Registered before /site-snapshots/:id so "queue" is not read as an id.
+route('GET', '/api/v1/site-snapshots/queue', async ({ tenantId }) => {
+  const view = await getSiteQueue({ snapshots: siteSnapshots }, { tenantId });
+  const toItem = (item: (typeof view.running)[number]): SiteQueueItem => ({
+    ...siteSummary(item, null),
+    position: item.position,
+    estimatedAt: item.estimatedAt.toISOString(),
+    retrying: item.retrying,
+    attempts: item.job?.attempts ?? 0,
+    maxAttempts: item.job?.maxAttempts ?? 0,
+    runAfter: item.job?.runAfter.toISOString() ?? null,
+    startedAt: (item.job?.lockedAt ?? item.job?.startedAt)?.toISOString() ?? null,
+    lastError: item.job?.lastError ?? null,
+  });
+  const json: SiteQueue = {
+    running: view.running.map(toItem),
+    waiting: view.waiting.map(toItem),
+    averageRunMs: view.averageRunMs,
+    measured: view.measured,
+  };
+  return { json };
+});
+
+route('POST', '/api/v1/site-snapshots/:id/cancel', async ({ req, tenantId, params }) => {
+  await requireEditor(req, tenantId, 'cancel website copies');
+  try {
+    return { json: await cancelSiteSnapshot({ snapshots: siteSnapshots }, { tenantId, id: params.id! }) };
+  } catch (error) {
+    if (error instanceof SiteCancelError) {
+      throw error.code === 'not_found'
+        ? new HttpError(404, 'not_found', 'Website copy not found')
+        : new HttpError(409, 'not_pending', 'Only copies that have not started can be cancelled');
+    }
+    throw error;
+  }
+});
+
+// Copy automation: after each country crawl, its new qualified leads are queued for website copies.
+const siteAutomation = new PrismaSiteAutomationRepository(prisma);
+
+async function automationState(tenantId: string): Promise<SiteAutomationState> {
+  const status = await getSiteAutomationStatus({ automation: siteAutomation }, { tenantId });
+  return {
+    enabled: status.settings.enabled,
+    dailyCap: status.settings.dailyCap,
+    enabledAt: status.settings.enabledAt?.toISOString() ?? null,
+    updatedAt: status.settings.updatedAt?.toISOString() ?? null,
+    updatedBy: status.settings.updatedBy,
+    today: { ...status.today, resetsAt: status.today.resetsAt.toISOString() },
+    carriedOver: status.carriedOver,
+    waitingCrawls: status.waitingCrawls,
+    agentReady: siteAgentConfig().ready,
+    workerEnabled: siteAutoCopyEnabled(),
+  };
+}
+
+route('GET', '/api/v1/site-automation', async ({ tenantId }) => ({ json: await automationState(tenantId) }));
+
+route('PUT', '/api/v1/site-automation', async ({ req, tenantId, body }) => {
+  const user = await requireEditor(req, tenantId, 'change copy automation');
+  const input = siteAutomationUpdateSchema.parse(await body());
+  try {
+    await updateSiteAutomationSettings(
+      { automation: siteAutomation },
+      { tenantId, enabled: input.enabled, dailyCap: input.dailyCap, updatedBy: user.email },
+    );
+  } catch (error) {
+    if (error instanceof SiteAutomationError) throw new HttpError(400, error.code, error.message);
+    throw error;
+  }
+  logger.info('site_automation.settings_updated', { tenantId, userId: user.id, ...input });
+  return { json: await automationState(tenantId) };
+});
+
+route('GET', '/api/v1/site-automation/crawls', async ({ tenantId, url }) => {
+  const { limit } = siteAutomationCrawlsQuerySchema.parse(query(url, 'limit'));
+  const crawls = await siteAutomation.listCrawls(tenantId, limit);
+  const items: SiteAutomationCrawl[] = crawls.map((c) => ({
+    crawlJobId: c.crawlJobId,
+    country: c.country,
+    countryCode: c.countryCode,
+    trigger: c.trigger,
+    crawlStatus: c.crawlStatus,
+    status: c.status,
+    crawlFinishedAt: c.crawlFinishedAt.toISOString(),
+    lastCheckedAt: c.lastCheckedAt.toISOString(),
+    completedAt: c.completedAt?.toISOString() ?? null,
+    leadsCreated: c.leadsCreated,
+    auditsEnqueued: c.auditsEnqueued,
+    auditsTotal: c.auditsTotal,
+    auditsPending: c.auditsPending,
+    qualified: c.qualified,
+    queued: c.queued,
+    carriedOver: c.carriedOver,
+    copies: c.copies,
+  }));
+  return { json: { items } };
 });
 
 route('GET', '/api/v1/site-snapshots/:id', async ({ tenantId, params }) => {
@@ -523,8 +659,30 @@ route('GET', '/api/v1/site-snapshots/:id', async ({ tenantId, params }) => {
         }
       : null,
     manifest,
+    githubConfigured: Boolean(siteGithubPublisher()),
+    githubRepo: siteGithubPublisher()?.repo ?? null,
   };
   return { json };
+});
+
+// Pushes a done copy to the sites repo now: first push of an older copy, or a retry after a failure.
+route('POST', '/api/v1/site-snapshots/:id/github-push', async ({ req, tenantId, params }) => {
+  await requireEditor(req, tenantId, 'push website copies to GitHub');
+  if (!siteGithubPublisher()) {
+    throw new HttpError(503, 'github_not_configured', 'GitHub push needs GITHUB_TOKEN and GITHUB_SITES_REPO in apps/worker/.env');
+  }
+  try {
+    const result = await requestSiteGithubPush({ snapshots: siteSnapshots }, { tenantId, id: params.id! });
+    logger.info('site_github.push_requested', { tenantId, snapshotId: params.id });
+    return { status: 202, json: result };
+  } catch (error) {
+    if (error instanceof SiteGithubRequestError) {
+      if (error.code === 'not_found') throw new HttpError(404, 'not_found', 'Website copy not found');
+      if (error.code === 'not_done') throw new HttpError(409, 'not_ready', 'Only finished copies can be pushed');
+      throw new HttpError(409, 'push_in_progress', 'This copy is being pushed right now');
+    }
+    throw error;
+  }
 });
 
 // source.html decoded with its detected charset, for the View source tab (bytes are unchanged in R2).

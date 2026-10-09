@@ -162,11 +162,16 @@ export const jobTypeSchema = z.enum([
 
 export const jobStatusSchema = z.enum(['pending', 'running', 'done', 'failed']);
 
+/** Who started a website copy: by hand from the console, or the copy automation after a crawl. */
+export const siteCopyOriginSchema = z.enum(['manual', 'auto']);
+
 export const jobListQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(25),
   type: jobTypeSchema.optional(),
   status: jobStatusSchema.optional(),
+  /** Website copy jobs only. */
+  origin: siteCopyOriginSchema.optional(),
 });
 
 export const enqueueAuditSchema = z.object({
@@ -313,6 +318,18 @@ export const siteSnapshotListQuerySchema = z.object({
   pageSize: z.coerce.number().int().min(1).max(100).default(25),
   status: jobStatusSchema.optional(),
   search: z.string().trim().min(1).optional(),
+  origin: siteCopyOriginSchema.optional(),
+});
+
+export const siteAutomationUpdateSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    dailyCap: z.number().int().min(0).max(500).optional(),
+  })
+  .refine((v) => v.enabled !== undefined || v.dailyCap !== undefined, { message: 'Nothing to update' });
+
+export const siteAutomationCrawlsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).default(50),
 });
 
 /** Derived: a lead is qualified iff its queue is QUALIFIED. */
@@ -348,6 +365,9 @@ export type UpdateProfileInput = z.infer<typeof updateProfileSchema>;
 export type LlmAssistantOutput = z.infer<typeof llmAssistantOutputSchema>;
 export type SiteBrand = z.infer<typeof siteBrandSchema>;
 export type SiteSnapshotListQuery = z.infer<typeof siteSnapshotListQuerySchema>;
+export type SiteCopyOrigin = z.infer<typeof siteCopyOriginSchema>;
+export type SiteAutomationUpdate = z.infer<typeof siteAutomationUpdateSchema>;
+export type SiteAutomationCrawlsQuery = z.infer<typeof siteAutomationCrawlsQuerySchema>;
 
 export type SiteAssetKind = 'image' | 'css' | 'js' | 'font' | 'icon' | 'media' | 'manifest' | 'other';
 
@@ -401,11 +421,37 @@ export type SiteSnapshotSummary = {
   llmCompletionTokens: number | null;
   warnings: string[];
   failureReason: string | null;
+  /** Older API versions omit it; treat missing as `manual`. */
+  origin?: SiteCopyOrigin;
+  /** Country crawl that queued an automatic copy. */
+  crawlJobId?: string | null;
   createdAt: string;
   finishedAt: string | null;
   company?: { id: string; name: string; domain: string | null };
   /** Proxy-relative path (`site-files/<token>/screenshot-desktop.png`) once done. */
   thumbnailPath: string | null;
+  /** GitHub push of the code files; null when never queued. Older API versions omit it. */
+  github?: SiteGithubPush | null;
+};
+
+/**
+ * pending = waiting for the worker (first try or a retry after `error`), pushing = in progress,
+ * pushed = committed, failed = gave up after repeated errors until someone retries.
+ */
+export type SiteGithubStatus = 'pending' | 'pushing' | 'pushed' | 'failed';
+
+export type SiteGithubPush = {
+  status: SiteGithubStatus;
+  attempts: number;
+  maxAttempts: number;
+  /** Next try while `pending`. */
+  nextAt: string | null;
+  commitSha: string | null;
+  commitUrl: string | null;
+  folderUrl: string | null;
+  /** Last GitHub error; kept while a retry is waiting. */
+  error: string | null;
+  pushedAt: string | null;
 };
 
 export type SiteSnapshotFiles = {
@@ -422,6 +468,10 @@ export type SiteSnapshotDetail = SiteSnapshotSummary & {
   previewBase: string | null;
   files: SiteSnapshotFiles | null;
   manifest: SiteManifest | null;
+  /** The worker has GITHUB_TOKEN and GITHUB_SITES_REPO, so copies can be pushed. */
+  githubConfigured?: boolean;
+  /** `owner/name` of the sites repo when configured. */
+  githubRepo?: string | null;
 };
 
 export type SiteSnapshotSource = {
@@ -437,4 +487,70 @@ export type SiteSnapshotQueued = {
   jobId: string;
   status: JobStatus;
   deduped?: boolean;
+};
+
+/** One copy in the website copy queue (`GET /api/v1/site-snapshots/queue`). */
+export type SiteQueueItem = SiteSnapshotSummary & {
+  /** 1-based place among copies that have not started; null while running. */
+  position: number | null;
+  /** Expected start (waiting) or finish (running), ISO. */
+  estimatedAt: string;
+  /** Waiting for a retry after a failed attempt. */
+  retrying: boolean;
+  attempts: number;
+  maxAttempts: number;
+  runAfter: string | null;
+  /** When the current attempt started (running copies). */
+  startedAt: string | null;
+  lastError: string | null;
+};
+
+export type SiteQueue = {
+  running: SiteQueueItem[];
+  waiting: SiteQueueItem[];
+  averageRunMs: number;
+  /** True when the average comes from finished copies; false means a default guess. */
+  measured: boolean;
+};
+
+export type SiteAutomationCrawlStatus = 'waiting_audits' | 'queuing' | 'complete';
+
+/** `GET /api/v1/site-automation`. */
+export type SiteAutomationState = {
+  enabled: boolean;
+  dailyCap: number;
+  enabledAt: string | null;
+  updatedAt: string | null;
+  updatedBy: string | null;
+  /** UTC day; the allowance resets at `resetsAt`. */
+  today: { day: string; used: number; cap: number; remaining: number; resetsAt: string };
+  /** Qualified leads still waiting for daily allowance. */
+  carriedOver: number;
+  /** Finished crawls whose website audits are still running. */
+  waitingCrawls: number;
+  /** False when website copies are not configured on the worker (R2), so nothing will be queued. */
+  agentReady: boolean;
+  /** False when the worker has automation switched off with SITE_AUTO_COPY=false. */
+  workerEnabled: boolean;
+};
+
+/** One crawl followed by the copy automation (`GET /api/v1/site-automation/crawls`). */
+export type SiteAutomationCrawl = {
+  crawlJobId: string;
+  country: string | null;
+  countryCode: string | null;
+  trigger: 'schedule' | 'manual';
+  crawlStatus: JobStatus;
+  status: SiteAutomationCrawlStatus;
+  crawlFinishedAt: string;
+  lastCheckedAt: string;
+  completedAt: string | null;
+  leadsCreated: number;
+  auditsEnqueued: number;
+  auditsTotal: number;
+  auditsPending: number;
+  qualified: number;
+  queued: number;
+  carriedOver: number;
+  copies: { pending: number; running: number; done: number; failed: number };
 };

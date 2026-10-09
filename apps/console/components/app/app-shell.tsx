@@ -44,7 +44,7 @@ type NavItem = {
   href: string;
   label: string;
   icon: React.ComponentType<{ className?: string }>;
-  badge?: 'reviews' | 'qualified';
+  badge?: 'reviews' | 'qualified' | 'copies';
 };
 
 const NAV: Array<{ title: string; items: NavItem[] }> = [
@@ -54,7 +54,7 @@ const NAV: Array<{ title: string; items: NavItem[] }> = [
     items: [
       { href: '/leads', label: 'Leads', icon: Users, badge: 'qualified' },
       { href: '/reviews', label: 'Review queue', icon: ClipboardCheck, badge: 'reviews' },
-      { href: '/sites', label: 'Website copies', icon: ScanEye },
+      { href: '/sites', label: 'Website copies', icon: ScanEye, badge: 'copies' },
     ],
   },
   {
@@ -82,8 +82,16 @@ function isActive(pathname: string, href: string) {
 function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
   const { data: counts } = useQueueCounts();
+  const { data: worker } = useWorkerHealth();
+  const copiesQueued = worker ? (worker.jobs.pending.site_snapshot ?? 0) + (worker.jobs.running.site_snapshot ?? 0) : undefined;
   const badgeValue = (badge?: NavItem['badge']) =>
-    badge === 'reviews' ? counts?.openReviewTasks : badge === 'qualified' ? counts?.QUALIFIED : undefined;
+    badge === 'reviews'
+      ? counts?.openReviewTasks
+      : badge === 'qualified'
+        ? counts?.QUALIFIED
+        : badge === 'copies'
+          ? copiesQueued
+          : undefined;
 
   return (
     <nav className="flex-1 space-y-6 overflow-y-auto px-3 py-4 scrollbar-thin">
@@ -116,9 +124,14 @@ function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
                     <span className="flex-1">{item.label}</span>
                     {badge !== undefined && badge > 0 && (
                       <span
+                        title={item.badge === 'copies' ? 'Website copies queued or running' : undefined}
                         className={cn(
                           'rounded-full px-1.5 py-px text-[11px] font-semibold tabular-nums',
-                          item.badge === 'reviews' ? 'bg-amber-400/20 text-amber-300' : 'bg-white/10 text-white/80',
+                          item.badge === 'reviews'
+                            ? 'bg-amber-400/20 text-amber-300'
+                            : item.badge === 'copies'
+                              ? 'bg-sky-400/20 text-sky-300'
+                              : 'bg-white/10 text-white/80',
                         )}
                       >
                         {formatNumber(badge)}

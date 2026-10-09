@@ -8,10 +8,13 @@ import {
   CheckCircle2,
   ClipboardCheck,
   Hourglass,
+  Loader2,
   Radar,
+  ScanEye,
   ServerOff,
   UserPlus,
 } from 'lucide-react';
+import { CrawlCopiesCell, formatEta, OriginBadge } from '@/components/sites/automation';
 import { Button } from '@/components/ui/button';
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -21,7 +24,15 @@ import { EmptyState, ErrorState, InlineAlert, TableSkeleton } from '@/components
 import { JobStatusBadge, QUEUES } from '@/components/app/status';
 import { StatCard } from '@/components/app/widgets';
 import { useUser } from '@/components/app/user-context';
-import { useQueueCounts, useScheduleRuns, useSchedules, useWorkerHealth } from '@/lib/queries';
+import {
+  useQueueCounts,
+  useScheduleRuns,
+  useSchedules,
+  useSiteAutomation,
+  useSiteAutomationCrawls,
+  useSiteQueue,
+  useWorkerHealth,
+} from '@/lib/queries';
 import { formatDateTime, formatNumber, formatRelative, humanize } from '@/lib/format';
 import { cn } from '@/lib/utils';
 
@@ -113,6 +124,8 @@ function PipelineCard() {
 
 function RecentRunsCard() {
   const { data, isLoading, error, refetch } = useScheduleRuns(8);
+  const crawls = useSiteAutomationCrawls(50);
+  const copiesByRun = new Map((crawls.data ?? []).map((c) => [c.crawlJobId, c]));
   return (
     <Card className="overflow-hidden">
       <CardHeader className="flex-row items-start pb-4">
@@ -152,6 +165,7 @@ function RecentRunsCard() {
               <TableHead>Status</TableHead>
               <TableHead className="text-right">Found</TableHead>
               <TableHead className="text-right">Saved</TableHead>
+              <TableHead>Copies</TableHead>
               <TableHead>Started</TableHead>
             </TableRow>
           </TableHeader>
@@ -169,6 +183,9 @@ function RecentRunsCard() {
                 </TableCell>
                 <TableCell className="text-right tabular-nums">{formatNumber(run.found)}</TableCell>
                 <TableCell className="text-right font-medium tabular-nums">{formatNumber(run.saved)}</TableCell>
+                <TableCell>
+                  <CrawlCopiesCell crawl={copiesByRun.get(run.id)} finished={run.status === 'done' || run.status === 'failed'} />
+                </TableCell>
                 <TableCell className="text-muted-foreground">{formatRelative(run.startedAt)}</TableCell>
               </TableRow>
             ))}
@@ -185,6 +202,7 @@ function QueueActivityCard() {
     { key: 'website_audit', label: 'Website audits' },
     { key: 'country_discovery', label: 'Country crawls' },
     { key: 'csv_import', label: 'CSV imports' },
+    { key: 'site_snapshot', label: 'Website copies' },
   ] as const;
   return (
     <Card>
@@ -196,8 +214,8 @@ function QueueActivityCard() {
         {isLoading || !data
           ? Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-10" />)
           : rows.map((row) => {
-              const running = data.jobs.running[row.key];
-              const pending = data.jobs.pending[row.key];
+              const running = data.jobs.running[row.key] ?? 0;
+              const pending = data.jobs.pending[row.key] ?? 0;
               return (
                 <div key={row.key} className="flex items-center justify-between rounded-lg bg-muted/50 px-3 py-2.5 text-sm">
                   <span className="font-medium">{row.label}</span>
@@ -211,6 +229,100 @@ function QueueActivityCard() {
         <Button variant="outline" size="sm" className="w-full" asChild>
           <Link href="/jobs">Open job monitor</Link>
         </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+function WebsiteCopiesCard() {
+  const queue = useSiteQueue();
+  const automation = useSiteAutomation();
+  const q = queue.data;
+  const a = automation.data;
+  const current = q?.running[0];
+  const next = q?.waiting.slice(0, 3) ?? [];
+  const usedPct = a && a.today.cap > 0 ? Math.min(100, (a.today.used / a.today.cap) * 100) : 0;
+  return (
+    <Card>
+      <CardHeader className="flex-row items-start">
+        <div className="space-y-1">
+          <CardTitle className="flex items-center gap-2">
+            <ScanEye className="size-4 text-primary" /> Website copies
+          </CardTitle>
+          <CardDescription>{q ? `${q.running.length} copying · ${q.waiting.length} waiting` : 'The copy queue'}</CardDescription>
+        </div>
+        <CardAction>
+          <Button variant="ghost" size="sm" asChild>
+            <Link href="/sites?tab=queue">
+              Queue <ArrowRight />
+            </Link>
+          </Button>
+        </CardAction>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {queue.isLoading || automation.isLoading ? (
+          <div className="space-y-2">
+            <Skeleton className="h-12" />
+            <Skeleton className="h-8" />
+          </div>
+        ) : (
+          <>
+            {current ? (
+              <Link
+                href={`/sites/${current.id}`}
+                className="flex items-center gap-3 rounded-lg border border-info/30 bg-info/[0.05] px-3 py-2.5 transition hover:border-info/50"
+              >
+                <Loader2 className="size-4 shrink-0 animate-spin text-info" />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium">{current.company?.name ?? 'Copying…'}</p>
+                  <p className="text-xs text-muted-foreground">Done {formatEta(current.estimatedAt)}</p>
+                </div>
+                <OriginBadge origin={current.origin} />
+              </Link>
+            ) : (
+              <p className="rounded-lg border border-dashed px-3 py-3 text-center text-sm text-muted-foreground">Nothing copying right now</p>
+            )}
+            {next.length > 0 && (
+              <ul className="space-y-1.5">
+                {next.map((item) => (
+                  <li key={item.id} className="flex items-center gap-2 text-sm">
+                    <span className="flex size-5 items-center justify-center rounded-full bg-muted text-[11px] font-semibold tabular-nums text-muted-foreground">
+                      {item.position}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate">{item.company?.name ?? item.sourceUrl}</span>
+                    <span className="text-xs text-muted-foreground">{formatEta(item.estimatedAt)}</span>
+                  </li>
+                ))}
+                {q && q.waiting.length > next.length && (
+                  <li className="pl-7 text-xs text-muted-foreground">+{q.waiting.length - next.length} more</li>
+                )}
+              </ul>
+            )}
+            {a && (
+              <Link href="/sites?tab=automation" className="block rounded-lg bg-muted/50 px-3 py-2.5 transition hover:bg-muted">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="flex items-center gap-1.5 font-medium">
+                    <span className={cn('size-2 rounded-full', a.enabled ? 'bg-success' : 'bg-muted-foreground/40')} />
+                    Automation {a.enabled ? 'on' : 'off'}
+                  </span>
+                  {a.enabled && (
+                    <span className="tabular-nums text-muted-foreground">
+                      {a.today.used} / {a.today.cap} today
+                    </span>
+                  )}
+                </div>
+                {a.enabled && (
+                  <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-background">
+                    <div className="h-full rounded-full bg-primary" style={{ width: `${usedPct}%` }} />
+                  </div>
+                )}
+                {a.enabled && a.carriedOver > 0 && (
+                  <p className="mt-1.5 text-xs text-warning">{a.carriedOver} qualified leads wait for tomorrow</p>
+                )}
+              </Link>
+            )}
+          </>
+        )}
       </CardContent>
     </Card>
   );
@@ -340,6 +452,7 @@ export function DashboardView() {
         </div>
         <div className="space-y-6">
           <QueueActivityCard />
+          <WebsiteCopiesCard />
           <UpcomingCard />
           <Card className="overflow-hidden border-primary/20 bg-gradient-to-br from-primary/[0.07] to-transparent">
             <CardContent className="space-y-3">

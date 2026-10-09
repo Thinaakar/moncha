@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { AlertTriangle, ArrowRight, Download, FileText, Info, ListChecks } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -7,6 +8,8 @@ import { InlineAlert } from '@/components/app/states';
 import { JobStatusBadge } from '@/components/app/status';
 import { CopyButton, DetailRow, JsonView } from '@/components/app/widgets';
 import { failureText, warningText } from '@/components/sites/labels';
+import { OriginBadge } from '@/components/sites/automation';
+import { GithubDetailsCard } from '@/components/sites/github-push';
 import { siteFileUrl, useJob } from '@/lib/queries';
 import { formatBytes, formatDateTime, formatDuration, formatNumber, humanize } from '@/lib/format';
 import type { SiteSnapshotDetail } from '@/lib/types';
@@ -49,6 +52,16 @@ export function SnapshotDetails({ snapshot }: { snapshot: SiteSnapshotDetail }) 
             <dl className="divide-y">
               <DetailRow label="Status">
                 <JobStatusBadge status={snapshot.status} />
+              </DetailRow>
+              <DetailRow label="Started by">
+                <span className="flex flex-wrap items-center gap-2">
+                  <OriginBadge origin={snapshot.origin} />
+                  {snapshot.origin === 'auto' && snapshot.crawlJobId && (
+                    <Link href={`/jobs?job=${snapshot.crawlJobId}`} className="text-xs text-primary hover:underline">
+                      Country crawl
+                    </Link>
+                  )}
+                </span>
               </DetailRow>
               <DetailRow label="Requested">{formatDateTime(snapshot.createdAt)}</DetailRow>
               <DetailRow label="Started">{formatDateTime(job?.startedAt)}</DetailRow>
@@ -198,6 +211,8 @@ export function SnapshotDetails({ snapshot }: { snapshot: SiteSnapshotDetail }) 
             )}
           </CardContent>
         </Card>
+
+        <GithubDetailsCard snapshot={snapshot} />
 
         {snapshot.previewBase && (
           <Card>

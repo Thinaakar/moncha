@@ -95,12 +95,22 @@ export class PrismaJobRunRepository implements JobRepo {
   /** Newest first. `payload` drops `records`: a queued CSV import stores up to 20,000 rows there. */
   async listPage(
     tenantId: string,
-    query: { page: number; pageSize: number; type?: JobRunRecord['type']; status?: JobRunRecord['status'] },
+    query: {
+      page: number;
+      pageSize: number;
+      type?: JobRunRecord['type'];
+      status?: JobRunRecord['status'];
+      /** Website copies only: who started them. Copies made before automation existed count as manual. */
+      origin?: 'auto' | 'manual';
+    },
   ) {
     const page = Math.max(1, Math.floor(query.page));
     const pageSize = Math.min(100, Math.max(1, Math.floor(query.pageSize)));
     const typeFilter = query.type ? Prisma.sql`AND type = ${query.type}::"JobType"` : Prisma.empty;
     const statusFilter = query.status ? Prisma.sql`AND status = ${query.status}::"JobStatus"` : Prisma.empty;
+    const originFilter = query.origin
+      ? Prisma.sql`AND type = 'site_snapshot' AND COALESCE(payload->>'origin', 'manual') = ${query.origin}`
+      : Prisma.empty;
     const [rows, counted] = await Promise.all([
       this.db.$queryRaw<
         Array<{
@@ -121,14 +131,14 @@ export class PrismaJobRunRepository implements JobRepo {
         SELECT id, type, status, payload - 'records' AS payload, result, attempts, "maxAttempts",
                "runAfter", "lastError", "startedAt", "finishedAt", "createdAt"
         FROM "JobRun"
-        WHERE "tenantId" = ${tenantId} ${typeFilter} ${statusFilter}
+        WHERE "tenantId" = ${tenantId} ${typeFilter} ${statusFilter} ${originFilter}
         ORDER BY "createdAt" DESC, id DESC
         OFFSET ${(page - 1) * pageSize}
         LIMIT ${pageSize}
       `,
       this.db.$queryRaw<Array<{ n: number }>>`
         SELECT count(*)::int AS n FROM "JobRun"
-        WHERE "tenantId" = ${tenantId} ${typeFilter} ${statusFilter}
+        WHERE "tenantId" = ${tenantId} ${typeFilter} ${statusFilter} ${originFilter}
       `,
     ]);
     const total = Number(counted[0]?.n ?? 0);

@@ -17,7 +17,8 @@ import { CopyButton, DetailRow, JsonView } from '@/components/app/widgets';
 import { useJob, useJobs, useWorkerHealth } from '@/lib/queries';
 import { useUrlState } from '@/lib/use-url-state';
 import { formatBytes, formatDateTime, formatDuration, formatNumber, formatRelative } from '@/lib/format';
-import type { Job, JobStatus, JobType, SiteSnapshotJobResult } from '@/lib/types';
+import { OriginBadge } from '@/components/sites/automation';
+import type { Job, JobStatus, JobType, SiteCopyOrigin, SiteSnapshotJobResult } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
 const STATUSES: Array<{ value: JobStatus; label: string }> = [
@@ -200,9 +201,11 @@ export function JobsView() {
   const pageSize = url.getNumber('pageSize', 25);
   const type = (url.get('type') || undefined) as JobType | undefined;
   const status = (url.get('status') || undefined) as JobStatus | undefined;
+  const origin = type === 'site_snapshot' ? ((url.get('origin') || undefined) as SiteCopyOrigin | undefined) : undefined;
   const selected = url.get('job') || null;
-  const jobs = useJobs({ page, pageSize, type, status });
-  const filtered = Boolean(type || status);
+  const jobs = useJobs({ page, pageSize, type, status, origin });
+  const filtered = Boolean(type || status || origin);
+  const clear = () => url.set({ type: null, status: null, origin: null }, { resetPage: true });
 
   return (
     <div>
@@ -215,7 +218,10 @@ export function JobsView() {
 
       <Card className="overflow-hidden">
         <div className="flex flex-col gap-3 border-b p-4 sm:flex-row sm:items-center">
-          <Select value={type ?? 'any'} onValueChange={(v) => url.set({ type: v === 'any' ? null : v }, { resetPage: true })}>
+          <Select
+            value={type ?? 'any'}
+            onValueChange={(v) => url.set({ type: v === 'any' ? null : v, origin: null }, { resetPage: true })}
+          >
             <SelectTrigger className="sm:w-52">
               <SelectValue placeholder="Type" />
             </SelectTrigger>
@@ -241,8 +247,20 @@ export function JobsView() {
               ))}
             </SelectContent>
           </Select>
+          {type === 'site_snapshot' && (
+            <Select value={origin ?? 'any'} onValueChange={(v) => url.set({ origin: v === 'any' ? null : v }, { resetPage: true })}>
+              <SelectTrigger className="sm:w-44">
+                <SelectValue placeholder="Started by" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="any">Automatic and manual</SelectItem>
+                <SelectItem value="auto">Automatic</SelectItem>
+                <SelectItem value="manual">Manual</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
           {filtered && (
-            <Button variant="ghost" size="sm" onClick={() => url.set({ type: null, status: null }, { resetPage: true })}>
+            <Button variant="ghost" size="sm" onClick={clear}>
               Clear filters
             </Button>
           )}
@@ -266,7 +284,7 @@ export function JobsView() {
             }
             action={
               filtered ? (
-                <Button variant="outline" onClick={() => url.set({ type: null, status: null }, { resetPage: true })}>
+                <Button variant="outline" onClick={clear}>
                   Clear filters
                 </Button>
               ) : (
@@ -297,7 +315,12 @@ export function JobsView() {
                     data-state={selected === job.id ? 'selected' : undefined}
                     onClick={() => url.set({ job: job.id })}
                   >
-                    <TableCell className="font-medium">{jobTypeLabel(job.type)}</TableCell>
+                    <TableCell className="font-medium">
+                      <span className="flex items-center gap-2">
+                        {jobTypeLabel(job.type)}
+                        {job.type === 'site_snapshot' && <OriginBadge origin={job.payload?.origin === 'auto' ? 'auto' : 'manual'} />}
+                      </span>
+                    </TableCell>
                     <TableCell className="max-w-[280px] truncate text-muted-foreground">{jobTarget(job).text}</TableCell>
                     <TableCell>
                       <JobStatusBadge status={job.status} />

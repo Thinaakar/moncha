@@ -27,3 +27,9 @@ export type { GeminiBrandExtractorOptions } from './site-brand';
 export { ResendMailer, createResendMailerFromEnv, passwordResetEmailContent } from './resend';
 export { R2SiteStore, createR2SiteStoreFromEnv, r2ConfigFromEnv, type R2Config } from './r2';
 export { MemorySiteStore } from './memory-site-store';
+export {
+  GitHubSitePublisher,
+  createGitHubSitePublisherFromEnv,
+  githubSitesConfigFromEnv,
+  type GitHubSitesConfig,
+} from './github';

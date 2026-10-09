@@ -127,6 +127,8 @@ model Tenant {
   discoveryUsages    DiscoveryUsage[]
   discoverySchedules DiscoverySchedule[]
   siteSnapshots      SiteSnapshot[]
+  siteAutomation     SiteAutomationSettings?
+  siteAutomationCrawls SiteAutomationCrawl[]
 }
 
 model User {
@@ -539,6 +541,21 @@ model SiteSnapshot {
   /// Non-fatal notes, e.g. llm_skipped:budget_exhausted, base_href_neutralized.
   warnings            Json?
   failureReason       String?
+  /// manual = started from the console; auto = queued by the copy automation after a crawl.
+  origin              SiteCopyOrigin @default(manual)
+  /// country_discovery job that found the lead (automatic copies only).
+  crawlJobId          String?
+  /// GitHub push of the code files: null (not pushed), pending, pushing, pushed or failed (gave up).
+  githubStatus        String?
+  githubAttempts      Int       @default(0)
+  /// Earliest time the worker may (re)try the push.
+  githubNextAt        DateTime?
+  githubLockedAt      DateTime?
+  githubCommitSha     String?
+  githubCommitUrl     String?
+  githubFolderUrl     String?
+  githubError         String?
+  githubPushedAt      DateTime?
   createdAt           DateTime  @default(now())
   finishedAt          DateTime?
   tenant              Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -547,4 +564,49 @@ model SiteSnapshot {
   @@index([tenantId, leadId, createdAt])
   @@index([tenantId, createdAt])
   @@index([tenantId, status])
+  @@index([tenantId, origin, createdAt])
+  @@index([crawlJobId])
+  @@index([githubStatus, githubNextAt])
+}
+
+enum SiteCopyOrigin {
+  manual
+  auto
+}
+
+/// Per-tenant switch and daily cap for automatic website copies.
+model SiteAutomationSettings {
+  tenantId  String    @id
+  enabled   Boolean   @default(false)
+  /// Automatic copies per UTC day. Manual copies never count.
+  dailyCap  Int       @default(20)
+  /// Only crawls that finish after this moment are swept, so turning automation on never floods old crawls.
+  enabledAt DateTime?
+  updatedBy String?
+  updatedAt DateTime  @updatedAt
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+/// Copy automation progress for one finished country crawl.
+model SiteAutomationCrawl {
+  /// The country_discovery JobRun id.
+  crawlJobId      String    @id
+  tenantId        String
+  /// waiting_audits | queuing | complete
+  status          String    @default("waiting_audits")
+  auditsTotal     Int       @default(0)
+  auditsPending   Int       @default(0)
+  /// Qualified leads from this crawl that had no copy when the sweep looked.
+  qualified       Int       @default(0)
+  queued          Int       @default(0)
+  /// Qualified leads still waiting for daily allowance.
+  carriedOver     Int       @default(0)
+  crawlFinishedAt DateTime
+  lastCheckedAt   DateTime  @default(now())
+  completedAt     DateTime?
+  createdAt       DateTime  @default(now())
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status, crawlFinishedAt])
+  @@index([tenantId, crawlFinishedAt])
 }

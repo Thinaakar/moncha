@@ -1,10 +1,11 @@
 /**
  * Checks the website-copy agent configuration without printing secrets:
  *   pnpm --filter @moncha/worker exec tsx src/check-site-agent.ts
- * Reports which keys are set, round-trips one object through R2 and checks the model slug on OpenRouter.
+ * Reports which keys are set, round-trips one object through R2, checks the model slug on OpenRouter and
+ * checks (read-only) that the GitHub token can reach the sites repo and branch.
  */
 import './env';
-import { createR2SiteStoreFromEnv } from '@moncha/integrations';
+import { createGitHubSitePublisherFromEnv, createR2SiteStoreFromEnv } from '@moncha/integrations';
 
 const KEYS = [
   'R2_ACCOUNT_ID',
@@ -14,6 +15,9 @@ const KEYS = [
   'SITE_PREVIEW_SECRET',
   'OPENROUTER_API_KEY',
   'SITE_AGENT_MODEL',
+  'GITHUB_TOKEN',
+  'GITHUB_SITES_REPO',
+  'GITHUB_SITES_BRANCH',
 ] as const;
 
 async function main() {
@@ -45,6 +49,9 @@ async function main() {
   } catch (error) {
     console.log('model: lookup failed', error instanceof Error ? error.message : error);
   }
+
+  const github = createGitHubSitePublisherFromEnv();
+  console.log('github:', github ? await github.check() : 'not configured (copies are not pushed)');
 }
 
 main().catch((error) => {

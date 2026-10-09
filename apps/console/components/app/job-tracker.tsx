@@ -1,15 +1,17 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
+import Link from 'next/link';
 import { useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, Clock, X } from 'lucide-react';
+import { AlertTriangle, Clock, ScanEye, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { JobStatusBadge, jobTypeLabel } from '@/components/app/status';
 import { CopyButton } from '@/components/app/widgets';
-import { useJob } from '@/lib/queries';
+import { CrawlCopiesCell } from '@/components/sites/automation';
+import { useJob, useSiteAutomation, useSiteAutomationCrawls } from '@/lib/queries';
 import { formatDuration, formatNumber, formatRelative, humanize } from '@/lib/format';
 import type { CountryDiscoveryResult } from '@/lib/types';
 
@@ -111,9 +113,47 @@ export function JobTracker({ jobId, onDismiss }: { jobId: string; onDismiss?: ()
                   : 'Crawling — results appear here when the run finishes.'}
               </p>
             )}
+            {job.type === 'country_discovery' && (job.status === 'done' || job.status === 'failed') && (
+              <CrawlCopiesStrip crawlJobId={job.id} finishedAt={job.finishedAt} />
+            )}
           </>
         )}
       </CardContent>
     </Card>
+  );
+}
+
+/** What the copy automation did with a finished crawl's qualified leads. */
+function CrawlCopiesStrip({ crawlJobId, finishedAt }: { crawlJobId: string; finishedAt: string | null }) {
+  const automation = useSiteAutomation();
+  const crawls = useSiteAutomationCrawls(50);
+  if (!automation.data || !crawls.data) return null;
+  const crawl = crawls.data.find((c) => c.crawlJobId === crawlJobId);
+  const { enabled, enabledAt } = automation.data;
+  const finishedBeforeOn = Boolean(enabledAt && finishedAt && new Date(finishedAt) < new Date(enabledAt));
+
+  let text: React.ReactNode;
+  if (crawl) {
+    text = (
+      <>
+        <span className="font-medium text-foreground">Website copies:</span> <CrawlCopiesCell crawl={crawl} finished />
+      </>
+    );
+  } else if (enabled && finishedBeforeOn) {
+    text = 'Website copies are not queued for this crawl: it finished before the copy automation was turned on.';
+  } else if (enabled) {
+    text = 'Website copies: the automation picks this crawl up within a minute.';
+  } else {
+    text = 'Website copies are not queued automatically because the copy automation is off.';
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+      <ScanEye className="size-3.5 text-primary" />
+      <span className="inline-flex items-center gap-1">{text}</span>
+      <Link href={crawl ? '/sites?tab=queue' : '/sites?tab=automation'} className="ml-auto font-medium text-primary hover:underline">
+        {crawl ? 'Open queue' : 'Automation settings'}
+      </Link>
+    </div>
   );
 }

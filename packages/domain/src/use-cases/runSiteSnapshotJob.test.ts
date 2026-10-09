@@ -347,6 +347,12 @@ describe('queueSiteSnapshot', () => {
     };
     const result = await queueSiteSnapshot(deps, { tenantId: 't', leadId: 'l1' });
     expect(result.deduped).toBe(false);
-    expect(created).toEqual({ tenantId: 't', leadId: 'l1', sourceUrl: 'https://clinic.my/', maxAttempts: 2 });
+    expect(created).toEqual({
+      tenantId: 't',
+      leadId: 'l1',
+      sourceUrl: 'https://clinic.my/',
+      maxAttempts: 2,
+      origin: 'manual',
+    });
   });
 });

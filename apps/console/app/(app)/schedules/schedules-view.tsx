@@ -24,7 +24,8 @@ import { EmptyState, ErrorState, TableSkeleton } from '@/components/app/states';
 import { JobStatusBadge } from '@/components/app/status';
 import { useCanEdit } from '@/components/app/user-context';
 import { api, errorMessage } from '@/lib/api';
-import { useApiMutation, useScheduleRuns, useSchedules } from '@/lib/queries';
+import { CrawlCopiesCell } from '@/components/sites/automation';
+import { useApiMutation, useScheduleRuns, useSchedules, useSiteAutomationCrawls } from '@/lib/queries';
 import { formatDateTime, formatDuration, formatNumber, formatRelative, humanize } from '@/lib/format';
 import type { Schedule, ScheduleGroup } from '@/lib/types';
 import { AddScheduleDialog } from './add-schedule-dialog';
@@ -114,6 +115,8 @@ export function SchedulesView() {
   const canEdit = useCanEdit();
   const schedules = useSchedules();
   const runs = useScheduleRuns(50);
+  const crawls = useSiteAutomationCrawls(100);
+  const copiesByRun = new Map((crawls.data ?? []).map((c) => [c.crawlJobId, c]));
   const [addOpen, setAddOpen] = useState(false);
   const [addCountry, setAddCountry] = useState<string | undefined>();
   const [pending, setPending] = useState<PendingDelete | null>(null);
@@ -209,7 +212,7 @@ export function SchedulesView() {
         {runs.error ? (
           <ErrorState error={runs.error} onRetry={() => runs.refetch()} />
         ) : runs.isLoading ? (
-          <TableSkeleton rows={5} columns={6} />
+          <TableSkeleton rows={5} columns={7} />
         ) : !runs.data?.length ? (
           <EmptyState icon={History} title="No runs yet" description="Runs appear here once a schedule fires or you start a crawl." />
         ) : (
@@ -223,6 +226,11 @@ export function SchedulesView() {
                 <TableHead className="text-right">Found</TableHead>
                 <TableHead className="text-right">Saved</TableHead>
                 <TableHead className="text-right">Skipped</TableHead>
+                <TableHead>
+                  <Tooltip content="Website copies the automation queued for this crawl's new qualified leads">
+                    <span>Copies</span>
+                  </Tooltip>
+                </TableHead>
                 <TableHead>Result</TableHead>
                 <TableHead>Duration</TableHead>
               </TableRow>
@@ -246,6 +254,9 @@ export function SchedulesView() {
                   <TableCell className="text-right tabular-nums">{formatNumber(run.found)}</TableCell>
                   <TableCell className="text-right font-medium tabular-nums">{formatNumber(run.saved)}</TableCell>
                   <TableCell className="text-right tabular-nums text-muted-foreground">{formatNumber(run.skipped)}</TableCell>
+                  <TableCell>
+                    <CrawlCopiesCell crawl={copiesByRun.get(run.id)} finished={run.status === 'done' || run.status === 'failed'} />
+                  </TableCell>
                   <TableCell className="max-w-[220px]">
                     {run.error ? (
                       <Tooltip content={run.error}>

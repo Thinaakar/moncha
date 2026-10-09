@@ -101,6 +101,12 @@ Common error codes:
 | **18** | `/api/v1/site-snapshots/:id` | `GET` | **READ** | One website copy: status, brand, file links, manifest |
 | **19** | `/api/v1/site-snapshots/:id/source` | `GET` | **READ** | `source.html` decoded with its charset (View source) |
 | **20** | `/api/v1/site-files/:token/*path` | `GET` | **READ** | Token-gated raw file from the copy (preview iframe) |
+| **21** | `/api/v1/site-snapshots/queue` | `GET` | **READ** | Website copy queue in run order with start estimates |
+| **22** | `/api/v1/site-snapshots/:id/cancel` | `POST` | **UPDATE** | Cancels a copy that has not started (signed-in editor) |
+| **23** | `/api/v1/site-automation` | `GET` | **READ** | Copy automation settings and today's allowance |
+| **24** | `/api/v1/site-automation` | `PUT` | **UPDATE** | Turns copy automation on or off, sets the daily cap (signed-in editor) |
+| **25** | `/api/v1/site-automation/crawls` | `GET` | **READ** | Crawls followed by the automation and their copies |
+| **26** | `/api/v1/site-snapshots/:id/github-push` | `POST` | **UPDATE** | Pushes a finished copy to the GitHub sites repo now (signed-in editor) |
 
 ---
 
@@ -839,10 +845,12 @@ curl -X POST http://127.0.0.1:4000/api/v1/leads/<leadId>/site-snapshots \
 #### 16. `GET /api/v1/leads/:id/site-snapshots`
 `{ "items": SiteSnapshotSummary[] }`. A summary has `id, leadId, jobId, status, sourceUrl, finalUrl, httpStatus,
 sourceHash, sourceBytes, sourceCharset, assetCount, skippedAssetCount, totalBytes, llmModel, llmPromptTokens,
-llmCompletionTokens, warnings[], failureReason, createdAt, finishedAt, thumbnailPath`.
-`thumbnailPath` is `site-files/<token>/screenshot-desktop.png` once the copy is `done`.
+llmCompletionTokens, warnings[], failureReason, origin, crawlJobId, createdAt, finishedAt, thumbnailPath`.
+`thumbnailPath` is `site-files/<token>/screenshot-desktop.png` once the copy is `done`. `origin` is `manual` or
+`auto`; `crawlJobId` names the country crawl behind an automatic copy. `github` is the GitHub push state (see 26),
+or `null` when the copy was never queued for GitHub.
 
-#### 17. `GET /api/v1/site-snapshots?page=&pageSize=&status=&search=`
+#### 17. `GET /api/v1/site-snapshots?page=&pageSize=&status=&search=&origin=`
 `{ items, total, page, pageSize, totalPages }`; each item also has `company { id, name, domain }`. `search` matches
 the source URL, company name and domain.
 
@@ -864,6 +872,49 @@ Streams one stored file. The token (HMAC-SHA256 with `SITE_PREVIEW_SECRET`, vali
 ```bash
 curl -O http://127.0.0.1:4000/api/v1/site-files/<token>/source.html?download=1
 ```
+
+#### 21. `GET /api/v1/site-snapshots/queue`
+`{ running: SiteQueueItem[], waiting: SiteQueueItem[], averageRunMs, measured }`. One copy runs at a time, first in,
+first out. Each item is a summary plus `company`, `position` (1-based, `null` while running), `estimatedAt` (start for
+waiting copies, finish for running ones), `retrying`, `attempts`, `maxAttempts`, `runAfter`, `startedAt`, `lastError`.
+
+#### 22. `POST /api/v1/site-snapshots/:id/cancel`
+* **Headers**: `Authorization: Bearer <token>` (role `admin` or `operator`).
+* **`200 OK`** `{ "cancelled": true }`: the copy and its job become `failed` with reason `cancelled`.
+* **`401`** · **`403`** · **`404`** unknown copy · **`409 not_pending`** already running or finished.
+
+#### 23–25. Copy automation
+When a country crawl (scheduled or manual) finishes, the worker waits for the crawl's website audits (up to 3 hours),
+then queues copies for its qualified leads that never had one, oldest first, up to `dailyCap` automatic copies per UTC
+day. Leads over the cap wait for the next day; manual copies never count. Only crawls that finish after the
+automation is turned on are picked up. `SITE_AUTO_COPY=false` on the worker turns it off there.
+
+* **`GET /api/v1/site-automation`** → `{ enabled, dailyCap, enabledAt, updatedAt, updatedBy, today { day, used, cap,
+  remaining, resetsAt }, carriedOver, waitingCrawls, agentReady, workerEnabled }`. Defaults: off, cap 20.
+* **`PUT /api/v1/site-automation`** with `{ "enabled": true }` and/or `{ "dailyCap": 30 }` (0 to 500). Needs
+  `Authorization: Bearer <token>` (role `admin` or `operator`). Returns the same shape as GET.
+* **`GET /api/v1/site-automation/crawls?limit=50`** → `{ items: [{ crawlJobId, country, countryCode, trigger,
+  crawlStatus, status, crawlFinishedAt, lastCheckedAt, completedAt, leadsCreated, auditsEnqueued, auditsTotal,
+  auditsPending, qualified, queued, carriedOver, copies { pending, running, done, failed } }] }`. `status` is
+  `waiting_audits`, `queuing` or `complete`.
+
+```bash
+curl -X PUT http://127.0.0.1:4000/api/v1/site-automation \
+  -H "Authorization: Bearer <token>" -H "content-type: application/json" \
+  -d '{"enabled":true,"dailyCap":20}'
+```
+
+#### 26. `POST /api/v1/site-snapshots/:id/github-push`
+With `GITHUB_TOKEN` and `GITHUB_SITES_REPO` set (branch `GITHUB_SITES_BRANCH`, default `main`), the worker pushes
+every finished copy by itself as one commit under `sites/{domain}/{copyId}/`: the four HTML files,
+`moncha-widget.js`, `brand.json`, `manifest.json` and the CSS/JS assets. Images, fonts and screenshots stay in R2.
+A GitHub failure never fails the copy; the worker retries after 1 min, 5 min, 15 min, 1 h and 3 h, then marks the
+push `failed`. This route queues a push now (an older copy, a retry, or a push again).
+* **Headers**: `Authorization: Bearer <token>` (role `admin` or `operator`).
+* **`202 Accepted`** `{ "queued": true }`.
+* **`github` on the summary**: `{ status: pending|pushing|pushed|failed, attempts, maxAttempts, nextAt, commitSha,
+  commitUrl, folderUrl, error, pushedAt }`. The detail response also has `githubConfigured` and `githubRepo`.
+* **`404`** unknown copy · **`409 not_ready`** copy not done · **`409 push_in_progress`** · **`503 github_not_configured`**.
 
 ---
 

@@ -47,6 +47,8 @@ export type SiteSnapshotJobDeps = {
   llmUsage?: LlmUsageRepo;
   maxLlmCallsPerDay?: number;
   widgetJs: string;
+  /** When the sites repo is configured, a finished copy is queued for a GitHub push. */
+  githubEnabled?: boolean;
   logger: Logger;
   now?: () => Date;
 };
@@ -240,6 +242,9 @@ export async function runSiteSnapshotJob(
       warnings: uniqueWarnings,
       failureReason: null,
       finishedAt: now(),
+      ...(deps.githubEnabled
+        ? { githubStatus: 'pending' as const, githubAttempts: 0, githubNextAt: now(), githubError: null }
+        : {}),
     });
     await finishJob('done', {
       lastError: null,

@@ -56,10 +56,42 @@ export const MONCHA_WIDGET_JS = String.raw`(function () {
     '.brand{font-size:10px;color:#9ca3af;text-align:center;padding:4px 0 8px;background:#fff}'
   ].join('');
 
+  var HOST_STYLE = 'display:block!important;position:static!important;visibility:visible!important;opacity:1!important;' +
+    'transform:none!important;filter:none!important;contain:none!important;width:0!important;height:0!important;' +
+    'margin:0!important;padding:0!important;border:0!important;overflow:visible!important';
+
+  // Sliders, preloaders and page builders sometimes rebuild <body> or remove unknown nodes after load.
+  // Put the same host (and its state) back, with a cap so a page that keeps removing it cannot loop forever.
+  function keepAttached(host) {
+    var restores = 0;
+    var watched = null;
+    var style = host.style.cssText;
+    var bodyObserver = new MutationObserver(check);
+    function watchBody() {
+      if (!document.body || document.body === watched) return;
+      watched = document.body;
+      bodyObserver.disconnect();
+      bodyObserver.observe(watched, { childList: true });
+    }
+    function check() {
+      watchBody();
+      if (host.style.cssText !== style) host.style.cssText = style;
+      if (host.hasAttribute('hidden')) host.removeAttribute('hidden');
+      if (host.isConnected || restores >= 50) return;
+      restores++;
+      (document.body || document.documentElement).appendChild(host);
+    }
+    new MutationObserver(check).observe(document.documentElement, { childList: true });
+    new MutationObserver(check).observe(host, { attributes: true, attributeFilter: ['style', 'hidden'] });
+    watchBody();
+  }
+
   function mount() {
     if (!document.body) return;
     var host = el('div', { id: 'moncha-demo-widget' });
+    host.style.cssText = HOST_STYLE;
     document.body.appendChild(host);
+    keepAttached(host);
     var root = host.attachShadow({ mode: 'closed' });
     root.appendChild(el('style', { text: css }));
 

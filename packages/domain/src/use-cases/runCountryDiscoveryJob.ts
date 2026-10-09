@@ -4,6 +4,20 @@ import { runCountryDiscovery, type CountryDiscoveryDeps, type CountryDiscoveryRe
 
 export type CountryDiscoveryJobDeps = CountryDiscoveryDeps & { jobs: JobRepo };
 
+/** Website audits created through this repo carry `payload.crawlJobId`, so the copy sweep can find a crawl's leads. */
+export function tagAuditsWithCrawl(jobs: JobRepo, crawlJobId: string): JobRepo {
+  return {
+    create: (data) =>
+      jobs.create(
+        data.type === 'website_audit' && data.payload && typeof data.payload === 'object'
+          ? { ...data, payload: { ...(data.payload as Record<string, unknown>), crawlJobId } }
+          : data,
+      ),
+    update: (tenantId, id, patch) => jobs.update(tenantId, id, patch),
+    get: (tenantId, id) => jobs.get(tenantId, id),
+  };
+}
+
 /**
  * Runs one country_discovery job to completion and records the outcome on the job.
  * The job's lockedAt is refreshed before every search and serves as the crawl's heartbeat.
@@ -45,7 +59,7 @@ export async function runCountryDiscoveryJob(
     const country = payload.countryCode || payload.country;
     if (!country) throw new Error('country_discovery job has no country');
     const result = await runCountryDiscovery(
-      { ...deps, targets },
+      { ...deps, targets, jobs: tagAuditsWithCrawl(deps.jobs, job.id) },
       {
         tenantId: job.tenantId,
         country,

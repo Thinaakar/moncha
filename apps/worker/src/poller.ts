@@ -15,6 +15,7 @@ import {
   PrismaLeadRepository,
   PrismaLlmUsageRepository,
   PrismaReviewTaskRepository,
+  PrismaSiteAutomationRepository,
   PrismaSiteSnapshotRepository,
   PrismaWebsiteAuditRepository,
   PrismaWebsiteRepository,
@@ -24,10 +25,13 @@ import {
 import {
   createConsoleLogger,
   enqueueDueSchedules,
+  pushSiteSnapshotToGithub,
   resolveCountry,
+  SITE_GITHUB_STALE_MS,
   runCountryDiscoveryJob,
   runSiteSnapshotJob,
   runWebsiteAuditJob,
+  sweepAllSiteAutomation,
   type CountryDiscoveryJobPayload,
   type JobRunRecord,
 } from '@moncha/domain';
@@ -41,7 +45,7 @@ import {
 } from '@moncha/crawling';
 import { createOpenRouterFromEnv, GeminiBrandExtractor } from '@moncha/integrations';
 import { countryCrawlDeps, discoveryBudget, liveCountryCrawls } from './country-crawls';
-import { siteAgentConfig } from './site-agent';
+import { siteAgentConfig, siteAutoCopyEnabled, siteGithubPublisher } from './site-agent';
 
 const WORKER_ID = `worker-${process.env.HOSTNAME || 'local'}-${randomUUID().slice(0, 8)}`;
 const CONCURRENCY = Math.max(1, Number(process.env.WORKER_CONCURRENCY || 3));
@@ -78,6 +82,10 @@ const siteBrandExtractor = llm
   ? new GeminiBrandExtractor({ client: llm, model: siteAgent.model, timeoutMs: siteAgent.llmTimeoutMs })
   : null;
 let activeSiteSnapshot: Promise<void> | null = null;
+const githubPublisher = siteGithubPublisher();
+let activeGithubPush: Promise<void> | null = null;
+const siteSnapshots = new PrismaSiteSnapshotRepository(prisma);
+const siteAutomation = new PrismaSiteAutomationRepository(prisma);
 
 function auditDeps() {
   return {
@@ -141,7 +149,17 @@ async function tick() {
 }
 
 async function schedulerTick() {
-  await withDbRetry(() => enqueueDueSchedules({ schedules, logger }));
+  try {
+    await withDbRetry(() => enqueueDueSchedules({ schedules, logger }));
+  } finally {
+    await siteAutomationTick();
+  }
+}
+
+/** Queues website copies for qualified leads from finished crawls (tenants with automation on). */
+async function siteAutomationTick() {
+  if (!siteAgent.ready || !siteAutoCopyEnabled() || crawlAbort.signal.aborted) return;
+  await withDbRetry(() => sweepAllSiteAutomation({ automation: siteAutomation, snapshots: siteSnapshots, logger }));
 }
 
 /** GET /api/v1/worker/health reports the worker offline when this row stops updating. */
@@ -216,7 +234,7 @@ async function siteTick() {
   activeSiteSnapshot = runSiteSnapshotJob(
     {
       jobs,
-      snapshots: new PrismaSiteSnapshotRepository(prisma),
+      snapshots: siteSnapshots,
       leads: new PrismaLeadRepository(prisma),
       capturer: siteCapturer,
       brandExtractor: siteBrandExtractor,
@@ -224,6 +242,7 @@ async function siteTick() {
       llmUsage: new PrismaLlmUsageRepository(prisma),
       maxLlmCallsPerDay: Number(process.env.LLM_MAX_CALLS_PER_DAY || 0) || undefined,
       widgetJs: MONCHA_WIDGET_JS,
+      githubEnabled: Boolean(githubPublisher),
       logger,
     },
     { job, timeoutMs: siteAgent.jobTimeoutMs, signal: crawlAbort.signal },
@@ -236,6 +255,28 @@ async function siteTick() {
       activeSiteSnapshot = null;
     });
   await activeSiteSnapshot;
+}
+
+/** Pushes finished copies to the sites repo, one at a time; GitHub problems never change a copy's status. */
+async function githubTick() {
+  if (!githubPublisher || !siteAgent.store || activeGithubPush || crawlAbort.signal.aborted) return;
+  const now = new Date();
+  const snapshot = await withDbRetry(() => siteSnapshots.claimGithubPush(now, new Date(now.getTime() - SITE_GITHUB_STALE_MS)));
+  if (!snapshot) return;
+  const store = siteAgent.store;
+  activeGithubPush = pushSiteSnapshotToGithub(
+    { snapshots: siteSnapshots, store, publisher: githubPublisher, logger },
+    snapshot,
+    crawlAbort.signal,
+  )
+    .then((outcome) => logger.info('site_github_outcome', { ...outcome }))
+    .catch((error) =>
+      logger.error('site_github_error', { snapshotId: snapshot.id, message: error instanceof Error ? error.message : String(error) }),
+    )
+    .finally(() => {
+      activeGithubPush = null;
+    });
+  await activeGithubPush;
 }
 
 async function every(errorEvent: string, ms: number, fn: () => Promise<void>) {
@@ -258,6 +299,8 @@ async function main() {
     llm: Boolean(llm),
     render: true,
     siteAgent: siteAgent.ready,
+    siteAutoCopy: siteAgent.ready && siteAutoCopyEnabled(),
+    githubSites: githubPublisher ? `${githubPublisher.repo}@${githubPublisher.branch}` : false,
     schedulerTickMs: SCHEDULER_TICK_MS,
     ...discoveryBudget(),
   });
@@ -272,7 +315,7 @@ async function main() {
       apiServer.close();
     }
     crawlAbort.abort();
-    const running = [activeCrawl, activeSiteSnapshot].filter(Boolean);
+    const running = [activeCrawl, activeSiteSnapshot, activeGithubPush].filter(Boolean);
     if (running.length) {
       await Promise.race([Promise.all(running), new Promise((r) => setTimeout(r, SHUTDOWN_WAIT_MS))]);
     }
@@ -311,6 +354,7 @@ async function main() {
     every('country_tick_error', POLL_MS, countryTick),
     every('csv_tick_error', POLL_MS, csvTick),
     every('site_tick_error', POLL_MS, siteTick),
+    every('github_tick_error', POLL_MS, githubTick),
   ]);
 }
 

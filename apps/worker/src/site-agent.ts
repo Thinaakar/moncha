@@ -1,5 +1,5 @@
-import type { SiteStore } from '@moncha/domain';
-import { createR2SiteStoreFromEnv } from '@moncha/integrations';
+import type { SiteGithubPublisher, SiteStore } from '@moncha/domain';
+import { createGitHubSitePublisherFromEnv, createR2SiteStoreFromEnv } from '@moncha/integrations';
 
 const MB = 1024 * 1024;
 
@@ -42,4 +42,17 @@ export function siteAgentConfig(): SiteAgentConfig {
     ready: Boolean(store && previewSecret),
   };
   return cached;
+}
+
+let cachedPublisher: SiteGithubPublisher | null | undefined;
+
+/** GITHUB_TOKEN + GITHUB_SITES_REPO (+ GITHUB_SITES_BRANCH, default main); null skips the push. */
+export function siteGithubPublisher(): SiteGithubPublisher | null {
+  if (cachedPublisher === undefined) cachedPublisher = createGitHubSitePublisherFromEnv(process.env);
+  return cachedPublisher;
+}
+
+/** SITE_AUTO_COPY=false switches the copy automation off on this worker, whatever the console setting says. */
+export function siteAutoCopyEnabled(): boolean {
+  return process.env.SITE_AUTO_COPY?.trim().toLowerCase() !== 'false';
 }

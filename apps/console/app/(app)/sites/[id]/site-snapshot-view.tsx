@@ -28,12 +28,15 @@ import { useCanEdit } from '@/components/app/user-context';
 import { AssetsTable } from '@/components/sites/assets-table';
 import { BrandPanel } from '@/components/sites/brand-panel';
 import { failureText } from '@/components/sites/labels';
+import { formatEta, OriginBadge } from '@/components/sites/automation';
+import { CancelCopyButton } from '@/components/sites/cancel-copy';
+import { GithubLinkButton, GithubPushAlert, GithubStatusBadge } from '@/components/sites/github-push';
 import { PreviewFrame } from '@/components/sites/preview-frame';
 import { SnapshotDetails } from '@/components/sites/snapshot-details';
 import { SourceViewer } from '@/components/sites/source-viewer';
 import { TabBar } from '@/components/sites/tabs';
 import { ApiError, errorMessage } from '@/lib/api';
-import { siteFileUrl, useCreateSiteSnapshot, useSiteSnapshot } from '@/lib/queries';
+import { siteFileUrl, useCreateSiteSnapshot, useSiteQueue, useSiteSnapshot } from '@/lib/queries';
 import { useUrlState } from '@/lib/use-url-state';
 import { formatDateTime, formatRelative } from '@/lib/format';
 import type { SiteSnapshotDetail } from '@/lib/types';
@@ -83,8 +86,11 @@ export function SiteSnapshotView({ id }: { id: string }) {
   const canEdit = useCanEdit();
   const { data: snapshot, error, isLoading, refetch } = useSiteSnapshot(id);
   const rerun = useCreateSiteSnapshot(snapshot?.leadId ?? '');
+  const queue = useSiteQueue(snapshot?.status === 'pending');
+  const queued = snapshot?.status === 'pending' ? queue.data?.waiting.find((w) => w.id === snapshot.id) : undefined;
 
-  if (error) {
+  // A failed background refresh keeps the last good data on screen instead of tearing down the preview.
+  if (error && !snapshot) {
     const notFound = error instanceof ApiError && error.status === 404;
     return (
       <Card>
@@ -150,6 +156,10 @@ export function SiteSnapshotView({ id }: { id: string }) {
           <span className="flex flex-wrap items-center gap-3">
             {company?.name ?? 'Website copy'}
             <JobStatusBadge status={snapshot.status} />
+            {snapshot.origin === 'auto' && <OriginBadge origin="auto" />}
+            {snapshot.github && snapshot.github.status !== 'pushed' && snapshot.status === 'done' && (
+              <GithubStatusBadge github={snapshot.github} />
+            )}
           </span>
         }
         description={
@@ -167,6 +177,10 @@ export function SiteSnapshotView({ id }: { id: string }) {
                 <ExternalLink /> Open original site
               </a>
             </Button>
+            <GithubLinkButton github={snapshot.github} />
+            {snapshot.status === 'pending' && (
+              <CancelCopyButton snapshotId={snapshot.id} company={company?.name} origin={snapshot.origin} variant="outline" />
+            )}
             {canEdit && (
               <Button onClick={startRerun} loading={rerun.isPending} disabled={open}>
                 {!rerun.isPending && <RefreshCw />} Re-run
@@ -178,12 +192,32 @@ export function SiteSnapshotView({ id }: { id: string }) {
       />
 
       {open && (
-        <InlineAlert variant="info" icon={Loader2} title={snapshot.status === 'running' ? 'Copying the homepage…' : 'Waiting for the worker…'} className="[&_svg]:animate-spin">
+        <InlineAlert
+          variant="info"
+          icon={Loader2}
+          title={
+            snapshot.status === 'running'
+              ? 'Copying the homepage…'
+              : queued
+                ? `#${queued.position} in the queue · starts ${formatEta(queued.estimatedAt)}`
+                : 'Waiting for the worker…'
+          }
+          className="[&_svg]:animate-spin"
+        >
           The worker downloads the HTML, opens the page on desktop and mobile, copies the assets, extracts the brand and
-          uploads everything. This usually takes one to three minutes; this page updates by itself.
+          uploads everything. This usually takes one to three minutes; this page updates by itself.{' '}
+          {snapshot.status === 'pending' && (
+            <Link href="/sites?tab=queue" className="font-medium text-primary hover:underline">
+              See the queue
+            </Link>
+          )}
         </InlineAlert>
       )}
-      {snapshot.status === 'failed' && (
+      {snapshot.status === 'failed' && snapshot.failureReason === 'cancelled' ? (
+        <InlineAlert variant="info" icon={Info} title="This copy was cancelled">
+          It was removed from the queue before it started. {canEdit && 'Re-run it to queue a new copy.'}
+        </InlineAlert>
+      ) : snapshot.status === 'failed' && (
         <InlineAlert variant="destructive" icon={AlertTriangle} title="The website could not be copied">
           {failureText(snapshot.failureReason) ?? 'Unknown error.'} {canEdit && 'You can re-run the copy later.'}
         </InlineAlert>
@@ -193,6 +227,7 @@ export function SiteSnapshotView({ id }: { id: string }) {
           The copy finished, but the file links could not be created. Check the site agent settings on the backend.
         </InlineAlert>
       )}
+      <GithubPushAlert snapshot={snapshot} />
 
       <TabBar<Tab>
         label="Website copy sections"

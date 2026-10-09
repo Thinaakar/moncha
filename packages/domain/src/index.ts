@@ -19,6 +19,8 @@ export * from './use-cases/discoverySchedules';
 export * from './use-cases/auth';
 export * from './use-cases/reviewTasks';
 export * from './use-cases/siteSnapshots';
+export * from './use-cases/siteAutomation';
+export * from './use-cases/siteGithub';
 export * from './use-cases/runSiteSnapshotJob';
 export * from './discovery/countries';
 export * from './discovery/schedule-time';

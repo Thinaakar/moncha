@@ -12,10 +12,14 @@ import { ErrorState } from '@/components/app/states';
 import { JobStatusBadge } from '@/components/app/status';
 import { useCanEdit } from '@/components/app/user-context';
 import { failureText } from '@/components/sites/labels';
-import { siteFileUrl, useCreateSiteSnapshot, useLeadSiteSnapshots } from '@/lib/queries';
+import { formatEta, OriginBadge } from '@/components/sites/automation';
+import { CancelCopyButton } from '@/components/sites/cancel-copy';
+import { GithubLinkButton } from '@/components/sites/github-push';
+import { siteFileUrl, useCreateSiteSnapshot, useLeadSiteSnapshots, useSiteQueue } from '@/lib/queries';
 import { errorMessage } from '@/lib/api';
 import { formatBytes, formatNumber, formatRelative } from '@/lib/format';
 import type { JobStatus, SiteSnapshotSummary } from '@/lib/types';
+import { cn } from '@/lib/utils';
 
 const isOpen = (status: JobStatus) => status === 'pending' || status === 'running';
 
@@ -26,7 +30,7 @@ function useFinishToasts(items: SiteSnapshotSummary[] | undefined) {
   useEffect(() => {
     for (const s of items ?? []) {
       const before = seen.current.get(s.id);
-      if (before && isOpen(before) && !isOpen(s.status)) {
+      if (before && isOpen(before) && !isOpen(s.status) && s.failureReason !== 'cancelled') {
         if (s.status === 'done') {
           toast.success('Website copy is ready', {
             action: { label: 'Open', onClick: () => router.push(`/sites/${s.id}`) },
@@ -50,6 +54,8 @@ export function WebsiteCopyCard({ leadId, hasWebsite }: { leadId: string; hasWeb
   const latest = items?.[0];
   const older = items?.slice(1, 5) ?? [];
   const busy = Boolean(items?.some((s) => isOpen(s.status)));
+  const queue = useSiteQueue(latest?.status === 'pending');
+  const queued = latest?.status === 'pending' ? queue.data?.waiting.find((w) => w.id === latest.id) : undefined;
 
   async function start() {
     try {
@@ -98,11 +104,17 @@ export function WebsiteCopyCard({ leadId, hasWebsite }: { leadId: string; hasWeb
                     {isOpen(latest.status) ? (
                       <>
                         <Loader2 className="size-5 animate-spin text-primary" />
-                        {latest.status === 'running' ? 'Copying the homepage…' : 'Waiting for the worker…'}
+                        {latest.status === 'running'
+                          ? 'Copying the homepage…'
+                          : queued
+                            ? `#${queued.position} in the queue · starts ${formatEta(queued.estimatedAt)}`
+                            : 'Waiting for the worker…'}
+                        {queued?.retrying && <span className="text-warning">Retrying after a failed attempt</span>}
                       </>
                     ) : latest.status === 'failed' ? (
                       <>
-                        <AlertTriangle className="size-5 text-destructive" /> Copy failed
+                        <AlertTriangle className="size-5 text-destructive" />
+                        {latest.failureReason === 'cancelled' ? 'Copy cancelled' : 'Copy failed'}
                       </>
                     ) : (
                       <>
@@ -113,7 +125,10 @@ export function WebsiteCopyCard({ leadId, hasWebsite }: { leadId: string; hasWeb
                 )}
               </div>
               <div className="flex items-center justify-between gap-2 border-t bg-card px-3 py-2 text-xs">
-                <JobStatusBadge status={latest.status} />
+                <span className="flex items-center gap-1.5">
+                  <JobStatusBadge status={latest.status} />
+                  {latest.origin === 'auto' && <OriginBadge origin="auto" />}
+                </span>
                 <span className="text-muted-foreground">
                   {latest.status === 'done'
                     ? `${formatNumber(latest.assetCount)} assets · ${formatBytes(latest.totalBytes)}`
@@ -122,7 +137,12 @@ export function WebsiteCopyCard({ leadId, hasWebsite }: { leadId: string; hasWeb
               </div>
             </Link>
             {latest.status === 'failed' && latest.failureReason && (
-              <p className="text-xs text-destructive">{failureText(latest.failureReason)}</p>
+              <p className={cn('text-xs', latest.failureReason === 'cancelled' ? 'text-muted-foreground' : 'text-destructive')}>
+                {failureText(latest.failureReason)}
+              </p>
+            )}
+            {latest.origin === 'auto' && latest.status !== 'pending' && (
+              <p className="text-xs text-muted-foreground">Copied automatically after a country crawl.</p>
             )}
             {older.length > 0 && (
               <div className="space-y-1">
@@ -149,6 +169,10 @@ export function WebsiteCopyCard({ leadId, hasWebsite }: { leadId: string; hasWeb
             <Button variant="outline" size="sm" asChild>
               <Link href={`/sites/${latest.id}`}>Open</Link>
             </Button>
+          )}
+          <GithubLinkButton github={latest?.github} size="sm" />
+          {latest?.status === 'pending' && (
+            <CancelCopyButton snapshotId={latest.id} company={latest.company?.name} origin={latest.origin} />
           )}
           {canEdit && (
             <Button size="sm" className="ml-auto" onClick={start} loading={create.isPending} disabled={!hasWebsite || busy}>

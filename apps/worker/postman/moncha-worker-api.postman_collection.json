@@ -375,10 +375,83 @@
                 { "key": "page", "value": "1" },
                 { "key": "pageSize", "value": "25" },
                 { "key": "status", "value": "done", "disabled": true },
-                { "key": "search", "value": "clinic", "disabled": true }
+                { "key": "search", "value": "clinic", "disabled": true },
+                { "key": "origin", "value": "auto", "disabled": true }
               ]
             }
           }
+        },
+        {
+          "name": "Copy queue",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/site-snapshots/queue" },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('has running and waiting', () => { pm.expect(body.running).to.be.an('array'); pm.expect(body.waiting).to.be.an('array'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cancel waiting copy",
+          "request": { "method": "POST", "url": "{{baseUrl}}/api/v1/site-snapshots/{{snapshotId}}/cancel" },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('cancelled, or 409 when already started', () => pm.expect(pm.response.code).to.be.oneOf([200, 409]));"]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Push copy to GitHub",
+          "request": { "method": "POST", "url": "{{baseUrl}}/api/v1/site-snapshots/{{snapshotId}}/github-push" },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('queued, or 409/503 when not possible', () => pm.expect(pm.response.code).to.be.oneOf([202, 409, 503]));"]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Copy automation settings",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/site-automation" }
+        },
+        {
+          "name": "Turn copy automation on (cap 20)",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"enabled\": true,\n  \"dailyCap\": 20\n}" },
+            "url": "{{baseUrl}}/api/v1/site-automation"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('enabled', () => pm.expect(pm.response.json().enabled).to.eql(true));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Crawls followed by automation",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/site-automation/crawls?limit=20" }
         },
         {
           "name": "Get website copy",
