@@ -13,6 +13,8 @@ export type SiteAgentConfig = {
   previewSecret: string | null;
   previewTtlSec: number;
   jobTimeoutMs: number;
+  /** Copies one worker makes at the same time. Each one is a Chromium page, so raise it only with memory to spare. */
+  concurrency: number;
   model: string | undefined;
   llmTimeoutMs: number;
   limits: { maxAssets: number; maxFileBytes: number; maxTotalBytes: number };
@@ -32,6 +34,7 @@ export function siteAgentConfig(): SiteAgentConfig {
     previewSecret,
     previewTtlSec: num('SITE_PREVIEW_TTL_SEC', 3600, 60),
     jobTimeoutMs: num('SITE_JOB_TIMEOUT_MS', 240_000, 30_000),
+    concurrency: Math.min(Math.floor(num('SITE_CONCURRENCY', 1, 1)), 4),
     model: process.env.SITE_AGENT_MODEL?.trim() || undefined,
     llmTimeoutMs: num('SITE_AGENT_TIMEOUT_MS', 90_000, 5_000),
     limits: {

@@ -34,6 +34,7 @@ import {
   sweepAllSiteAutomation,
   type CountryDiscoveryJobPayload,
   type JobRunRecord,
+  type SiteStore,
 } from '@moncha/domain';
 import {
   closeRenderBrowser,
@@ -81,7 +82,7 @@ const siteCapturer = new MonchaSiteCapturer({ limits: siteAgent.limits });
 const siteBrandExtractor = llm
   ? new GeminiBrandExtractor({ client: llm, model: siteAgent.model, timeoutMs: siteAgent.llmTimeoutMs })
   : null;
-let activeSiteSnapshot: Promise<void> | null = null;
+const activeSiteSnapshots = new Set<Promise<void>>();
 const githubPublisher = siteGithubPublisher();
 let activeGithubPush: Promise<void> | null = null;
 const siteSnapshots = new PrismaSiteSnapshotRepository(prisma);
@@ -225,13 +226,20 @@ async function runCrawl(job: JobRunRecord) {
   }
 }
 
-/** One website copy at a time per worker (Chromium memory); audits keep running in their own loop. */
+/**
+ * Up to SITE_CONCURRENCY website copies at a time per worker (default 1, Chromium memory); audits keep running in
+ * their own loop. Each poll tops up the free slots, so a finished copy is replaced without waiting for the others.
+ */
 async function siteTick() {
-  if (!siteAgent.ready || !siteAgent.store || activeSiteSnapshot || crawlAbort.signal.aborted) return;
-  const [job] = await withDbRetry(() => jobs.claimJobs(WORKER_ID, 1, 'site_snapshot'));
-  if (!job) return;
-  const store = siteAgent.store;
-  activeSiteSnapshot = runSiteSnapshotJob(
+  if (!siteAgent.ready || !siteAgent.store || crawlAbort.signal.aborted) return;
+  const free = siteAgent.concurrency - activeSiteSnapshots.size;
+  if (free <= 0) return;
+  const claimed = await withDbRetry(() => jobs.claimJobs(WORKER_ID, free, 'site_snapshot'));
+  for (const job of claimed) startSiteSnapshot(job, siteAgent.store);
+}
+
+function startSiteSnapshot(job: JobRunRecord, store: SiteStore) {
+  const run: Promise<void> = runSiteSnapshotJob(
     {
       jobs,
       snapshots: siteSnapshots,
@@ -252,9 +260,9 @@ async function siteTick() {
       logger.error('site_snapshot_error', { jobId: job.id, message: error instanceof Error ? error.message : String(error) }),
     )
     .finally(() => {
-      activeSiteSnapshot = null;
+      activeSiteSnapshots.delete(run);
     });
-  await activeSiteSnapshot;
+  activeSiteSnapshots.add(run);
 }
 
 /** Pushes finished copies to the sites repo, one at a time; GitHub problems never change a copy's status. */
@@ -300,6 +308,7 @@ async function main() {
     render: true,
     siteAgent: siteAgent.ready,
     siteAutoCopy: siteAgent.ready && siteAutoCopyEnabled(),
+    siteConcurrency: siteAgent.concurrency,
     githubSites: githubPublisher ? `${githubPublisher.repo}@${githubPublisher.branch}` : false,
     schedulerTickMs: SCHEDULER_TICK_MS,
     ...discoveryBudget(),
@@ -315,7 +324,7 @@ async function main() {
       apiServer.close();
     }
     crawlAbort.abort();
-    const running = [activeCrawl, activeSiteSnapshot, activeGithubPush].filter(Boolean);
+    const running = [activeCrawl, ...activeSiteSnapshots, activeGithubPush].filter(Boolean);
     if (running.length) {
       await Promise.race([Promise.all(running), new Promise((r) => setTimeout(r, SHUTDOWN_WAIT_MS))]);
     }

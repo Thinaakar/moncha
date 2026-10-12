@@ -575,7 +575,7 @@ route('GET', '/api/v1/site-snapshots', async ({ tenantId, url }) => {
 
 // Registered before /site-snapshots/:id so "queue" is not read as an id.
 route('GET', '/api/v1/site-snapshots/queue', async ({ tenantId }) => {
-  const view = await getSiteQueue({ snapshots: siteSnapshots }, { tenantId });
+  const view = await getSiteQueue({ snapshots: siteSnapshots }, { tenantId, slots: siteAgentConfig().concurrency });
   const toItem = (item: (typeof view.running)[number]): SiteQueueItem => ({
     ...siteSummary(item, null),
     position: item.position,

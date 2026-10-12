@@ -228,4 +228,17 @@ describe('getSiteQueue', () => {
     ]);
     expect(view.measured).toBe(true);
   });
+
+  it('spreads waiting copies over parallel slots', async () => {
+    const snapshots = {
+      queue: async () => [entry('r', 'running'), entry('w1', 'pending'), entry('w2', 'pending'), entry('w3', 'pending')],
+      averageRunMs: async () => 60_000,
+    } as unknown as SiteSnapshotRepo;
+    const view = await getSiteQueue({ snapshots, now: () => NOW }, { tenantId: 't1', slots: 2 });
+    expect(view.waiting.map((w) => w.estimatedAt.toISOString())).toEqual([
+      '2026-10-09T10:00:00.000Z',
+      '2026-10-09T10:00:30.000Z',
+      '2026-10-09T10:01:00.000Z',
+    ]);
+  });
 });

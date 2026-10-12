@@ -80,11 +80,11 @@ export const DEFAULT_SITE_RUN_MS = 120_000;
 
 /**
  * The website copy queue in claim order with a start estimate for each waiting copy.
- * The worker makes one copy at a time, so each estimate starts where the previous one ends.
+ * The worker runs `slots` copies at a time, so each waiting copy starts in the first slot to come free.
  */
 export async function getSiteQueue(
   deps: { snapshots: SiteSnapshotRepo; now?: () => Date },
-  input: { tenantId: string },
+  input: { tenantId: string; slots?: number },
 ): Promise<SiteQueueView> {
   const now = deps.now?.() ?? new Date();
   const [entries, measuredMs] = await Promise.all([
@@ -95,19 +95,22 @@ export async function getSiteQueue(
 
   const running: SiteQueueItem[] = [];
   const waiting: SiteQueueItem[] = [];
-  let freeAt = now.getTime();
+  const finishes: number[] = [];
   for (const entry of entries) {
     if (entry.status !== 'running') continue;
     const started = (entry.job?.lockedAt ?? entry.job?.startedAt ?? entry.createdAt).getTime();
     const finish = Math.max(now.getTime(), started + averageRunMs);
-    freeAt = Math.max(freeAt, finish);
+    finishes.push(finish);
     running.push({ ...entry, position: null, estimatedAt: new Date(finish), retrying: false });
   }
+  const slotCount = Math.max(1, Math.floor(input.slots ?? 1), finishes.length);
+  const freeAt = [...finishes, ...Array<number>(slotCount - finishes.length).fill(now.getTime())];
   for (const entry of entries) {
     if (entry.status === 'running') continue;
     const runAfter = entry.job?.runAfter.getTime() ?? now.getTime();
-    const start = Math.max(freeAt, runAfter);
-    freeAt = start + averageRunMs;
+    const slot = freeAt.indexOf(Math.min(...freeAt));
+    const start = Math.max(freeAt[slot]!, runAfter);
+    freeAt[slot] = start + averageRunMs;
     waiting.push({
       ...entry,
       position: waiting.length + 1,
