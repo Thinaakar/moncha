@@ -313,6 +313,11 @@ async function main() {
     schedulerTickMs: SCHEDULER_TICK_MS,
     ...discoveryBudget(),
   });
+  if (githubPublisher?.check) {
+    void githubPublisher.check().then((check) =>
+      check.error ? logger.error('site_github_check', { ...check }) : logger.info('site_github_check', { ...check }),
+    );
+  }
 
   let stopping = false;
   let apiServer: Server | null = null;

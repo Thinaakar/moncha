@@ -25,6 +25,7 @@ import {
   type DemoLoginStatus,
   type SiteAutomationCrawl,
   type SiteAutomationState,
+  type SiteGithubCheckResult,
   type SiteManifest,
   type SiteQueue,
   type SiteQueueItem,
@@ -645,6 +646,34 @@ route('PUT', '/api/v1/site-automation', async ({ req, tenantId, body }) => {
   }
   logger.info('site_automation.settings_updated', { tenantId, userId: user.id, ...input });
   return { json: await automationState(tenantId) };
+});
+
+// Sites repo connectivity: reads the repo and branch and proves write access without moving the branch.
+route('GET', '/api/v1/site-automation/github-check', async ({ req, tenantId }) => {
+  await requireEditor(req, tenantId, 'check the GitHub connection');
+  const keys = {
+    GITHUB_TOKEN: Boolean(process.env.GITHUB_TOKEN?.trim()),
+    GITHUB_SITES_REPO: Boolean(process.env.GITHUB_SITES_REPO?.trim()),
+    GITHUB_SITES_BRANCH: Boolean(process.env.GITHUB_SITES_BRANCH?.trim()),
+  };
+  const publisher = siteGithubPublisher();
+  const check = publisher?.check ? await publisher.check() : null;
+  const json: SiteGithubCheckResult = {
+    configured: Boolean(publisher),
+    keys,
+    repo: publisher?.repo ?? null,
+    branch: publisher?.branch ?? null,
+    private: check?.private ?? null,
+    canPush: check?.canPush ?? null,
+    canRead: check?.canRead ?? false,
+    canWrite: check?.canWrite ?? false,
+    branchHead: check?.branchHead ?? null,
+    folderPattern: 'sites/{domain}/{copyId}/',
+    error: publisher ? (check?.error ?? null) : 'GITHUB_TOKEN and GITHUB_SITES_REPO must both be set',
+    checkedAt: new Date().toISOString(),
+  };
+  logger.info('site_github.check', { tenantId, repo: json.repo, canRead: json.canRead, canWrite: json.canWrite, error: json.error });
+  return { json };
 });
 
 route('GET', '/api/v1/site-automation/crawls', async ({ tenantId, url }) => {

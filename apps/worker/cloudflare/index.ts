@@ -99,6 +99,7 @@ export default {
               '/api/v1/site-snapshots/:id/github-push',
               '/api/v1/site-automation',
               '/api/v1/site-automation/crawls',
+              '/api/v1/site-automation/github-check',
               '/api/v1/site-files/:token/*path',
             ],
           },

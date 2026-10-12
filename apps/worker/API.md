@@ -85,6 +85,7 @@ copies) were added on 2026-10-08.
 | 39 | PUT | `/api/v1/site-automation` | Update | Turn copy automation on or off (editor session) | 200 | SiteAutomationSettings |
 | 40 | GET | `/api/v1/site-automation/crawls` | Read | Crawls followed by the automation and their copies | 200 | SiteAutomationCrawl, JobRun, SiteSnapshot |
 | 41 | POST | `/api/v1/site-snapshots/:id/github-push` | Update | Push a finished copy to the GitHub sites repo now (editor session) | 202 | SiteSnapshot |
+| 41a | GET | `/api/v1/site-automation/github-check` | Read | Check the GitHub sites repo connection: read and write access (editor session) | 200 | - |
 
 The only PATCH is #20. To change a schedule time, delete the old one (#6) and create the new one (#5).
 
@@ -1792,6 +1793,35 @@ The summary's `github` object:
 | 409 | `not_ready` | The copy is not `done` |
 | 409 | `push_in_progress` | The worker is pushing this copy right now |
 | 503 | `github_not_configured` | `GITHUB_TOKEN` or `GITHUB_SITES_REPO` missing |
+
+### 41a. GET `/api/v1/site-automation/github-check`
+
+Checks the sites repo connection with the worker's own settings. It reads the repo, the branch ref and its head
+commit, then creates one unreferenced git blob to prove the token has Contents: Read and write. No commit is made and
+the branch does not move. The token is never returned or logged; `keys` only says which variables are set. The
+worker runs the same check once at start-up and logs it as `site_github_check`.
+
+**Headers:** `authorization: Bearer <token>` (role `admin` or `operator`). **200 OK**:
+
+```json
+{
+  "configured": true,
+  "keys": { "GITHUB_TOKEN": true, "GITHUB_SITES_REPO": true, "GITHUB_SITES_BRANCH": true },
+  "repo": "Thinaakar/moncha-sites",
+  "branch": "main",
+  "private": true,
+  "canPush": true,
+  "canRead": true,
+  "canWrite": true,
+  "branchHead": "1dcff22c5db1b7740b65596f2b7076decc90e682",
+  "folderPattern": "sites/{domain}/{copyId}/",
+  "error": null,
+  "checkedAt": "2026-10-12T13:30:00.000Z"
+}
+```
+
+`error` explains a failed step, e.g. `github_bad_token: …`, `github_forbidden: Token cannot write …` (read-only
+token), `github_not_found: …` (no access to the repo) or `github_branch_missing: …` (empty repo).
 
 ---
 

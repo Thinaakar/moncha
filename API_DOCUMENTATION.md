@@ -108,6 +108,7 @@ Common error codes:
 | **24** | `/api/v1/site-automation` | `PUT` | **UPDATE** | Turns copy automation on or off (signed-in editor) |
 | **25** | `/api/v1/site-automation/crawls` | `GET` | **READ** | Crawls followed by the automation and their copies |
 | **26** | `/api/v1/site-snapshots/:id/github-push` | `POST` | **UPDATE** | Pushes a finished copy to the GitHub sites repo now (signed-in editor) |
+| **26a** | `/api/v1/site-automation/github-check` | `GET` | **READ** | GitHub sites repo connectivity: read and write access, token never returned (signed-in editor) |
 
 ---
 
@@ -922,6 +923,11 @@ push `failed`. This route queues a push now (an older copy, a retry, or a push a
 * **`github` on the summary**: `{ status: pending|pushing|pushed|failed, attempts, maxAttempts, nextAt, commitSha,
   commitUrl, folderUrl, error, pushedAt }`. The detail response also has `githubConfigured` and `githubRepo`.
 * **`404`** unknown copy · **`409 not_ready`** copy not done · **`409 push_in_progress`** · **`503 github_not_configured`**.
+
+#### 26a. `GET /api/v1/site-automation/github-check`
+Editor-only connectivity check of the sites repo: `{ configured, keys, repo, branch, private, canPush, canRead,
+canWrite, branchHead, folderPattern, error, checkedAt }`. Write access is proven by creating an unreferenced blob, so
+the branch never moves. `keys` holds booleans only; the token is never returned. See `apps/worker/API.md` §41a.
 
 ---
 

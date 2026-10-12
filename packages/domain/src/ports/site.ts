@@ -361,11 +361,27 @@ export type SiteGithubFile = { path: string; bytes: Uint8Array };
 
 export type SiteGithubPublishResult = { commitSha: string; commitUrl: string; folderUrl: string };
 
+/** Connectivity check of the sites repo; never carries the token. */
+export type SiteGithubCheck = {
+  repo: string;
+  branch: string;
+  private: boolean | null;
+  /** The repo's own permission flag for the token's user; fine-grained tokens can still be narrower. */
+  canPush: boolean | null;
+  /** The token read the repo, the branch ref and its head commit. */
+  canRead: boolean;
+  /** The token created a git blob, which needs Contents: Read and write. The branch is not moved. */
+  canWrite: boolean;
+  branchHead: string | null;
+  error: string | null;
+};
+
 /** Pushes one folder of files to a git repo as a single commit. */
 export interface SiteGithubPublisher {
   readonly repo: string;
   readonly branch: string;
   publish(input: { folder: string; files: SiteGithubFile[]; message: string; signal?: AbortSignal }): Promise<SiteGithubPublishResult>;
+  check?(): Promise<SiteGithubCheck>;
 }
 
 /** `retryable` is false when trying again cannot help without someone changing something (e.g. the copy's files are gone). */

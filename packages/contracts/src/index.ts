@@ -483,6 +483,23 @@ export type SiteSnapshotDetail = SiteSnapshotSummary & {
   githubRepo?: string | null;
 };
 
+/** `GET /api/v1/site-automation/github-check`: sites repo connectivity. Key presence only, never values. */
+export type SiteGithubCheckResult = {
+  configured: boolean;
+  keys: { GITHUB_TOKEN: boolean; GITHUB_SITES_REPO: boolean; GITHUB_SITES_BRANCH: boolean };
+  repo: string | null;
+  branch: string | null;
+  private: boolean | null;
+  canPush: boolean | null;
+  canRead: boolean;
+  canWrite: boolean;
+  branchHead: string | null;
+  /** Where each copy is pushed: `sites/{domain}/{copyId}/`. */
+  folderPattern: string;
+  error: string | null;
+  checkedAt: string;
+};
+
 export type SiteSnapshotSource = {
   text: string;
   charset: string;

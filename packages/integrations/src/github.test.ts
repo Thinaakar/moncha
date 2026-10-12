@@ -93,6 +93,43 @@ describe('GitHubSitePublisher', () => {
     expect((error as Error).message).not.toContain('test-token');
   });
 
+  it('checks read and write access without moving the branch', async () => {
+    const calls = mockGitHub(({ method, url }) => {
+      if (method === 'GET' && url.endsWith('/repos/Thinaakar/moncha-sites')) {
+        return { status: 200, body: { private: true, permissions: { push: true } } };
+      }
+      if (method === 'GET' && url.endsWith('/git/ref/heads/main')) return { status: 200, body: { object: { sha: 'head1' } } };
+      if (method === 'GET' && url.endsWith('/git/commits/head1')) return { status: 200, body: { tree: { sha: 'tree0' } } };
+      if (method === 'POST' && url.endsWith('/git/blobs')) return { status: 201, body: { sha: 'b' } };
+      return { status: 500, body: {} };
+    });
+
+    expect(await publisher().check()).toEqual({
+      repo: 'Thinaakar/moncha-sites',
+      branch: 'main',
+      private: true,
+      canPush: true,
+      canRead: true,
+      canWrite: true,
+      branchHead: 'head1',
+      error: null,
+    });
+    expect(calls.some((c) => c.method === 'PATCH' || c.url.endsWith('/git/commits') || c.url.endsWith('/git/trees'))).toBe(false);
+  });
+
+  it('reports a read-only token in the check without leaking it', async () => {
+    mockGitHub(({ method, url }) => {
+      if (method === 'POST') return { status: 403, body: { message: 'Resource not accessible by personal access token' } };
+      if (url.endsWith('/git/ref/heads/main')) return { status: 200, body: { object: { sha: 'head1' } } };
+      return { status: 200, body: { private: true, permissions: { push: false } } };
+    });
+
+    const check = await publisher().check();
+    expect(check).toMatchObject({ canRead: true, canWrite: false, canPush: false });
+    expect(check.error).toMatch(/^github_forbidden/);
+    expect(JSON.stringify(check)).not.toContain('test-token');
+  });
+
   it('explains an empty repo', async () => {
     mockGitHub(({ url }) =>
       url.endsWith('/git/blobs') ? { status: 201, body: { sha: 'b' } } : { status: 409, body: { message: 'Git Repository is empty.' } },

@@ -1,4 +1,10 @@
-import { SiteGithubError, type SiteGithubFile, type SiteGithubPublishResult, type SiteGithubPublisher } from '@moncha/domain';
+import {
+  SiteGithubError,
+  type SiteGithubCheck,
+  type SiteGithubFile,
+  type SiteGithubPublishResult,
+  type SiteGithubPublisher,
+} from '@moncha/domain';
 
 type Env = Record<string, string | undefined>;
 
@@ -107,17 +113,35 @@ export class GitHubSitePublisher implements SiteGithubPublisher {
     return shas;
   }
 
-  /** Read-only setup check: the token can see the repo, may push, and the branch exists. */
-  async check(): Promise<{ repo: string; branch: string; private: boolean | null; canPush: boolean | null; branchHead: string | null; error: string | null }> {
-    const base = { repo: this.repo, branch: this.branch };
+  /**
+   * Setup check: reads the repo, the branch and its head commit, then creates one unreferenced blob to prove
+   * Contents write access. No commit is made and the branch does not move.
+   */
+  async check(): Promise<SiteGithubCheck> {
+    const result: SiteGithubCheck = {
+      repo: this.repo,
+      branch: this.branch,
+      private: null,
+      canPush: null,
+      canRead: false,
+      canWrite: false,
+      branchHead: null,
+      error: null,
+    };
     try {
       const { data } = await this.call<{ private?: boolean; permissions?: { push?: boolean } }>('GET', '', undefined, undefined);
+      result.private = data.private ?? null;
+      result.canPush = data.permissions?.push ?? null;
       const { data: ref } = await this.call<{ object: { sha: string } }>('GET', `/git/ref/heads/${encodePath(this.branch)}`, undefined, undefined);
-      return { ...base, private: data.private ?? null, canPush: data.permissions?.push ?? null, branchHead: ref.object.sha, error: null };
+      await this.call('GET', `/git/commits/${ref.object.sha}`, undefined, undefined);
+      result.branchHead = ref.object.sha;
+      result.canRead = true;
+      await this.call('POST', '/git/blobs', { content: 'moncha connectivity check\n', encoding: 'utf-8' }, undefined);
+      result.canWrite = true;
     } catch (error) {
-      const message = error instanceof SiteGithubError ? `${error.code}: ${error.message}` : String(error);
-      return { ...base, private: null, canPush: null, branchHead: null, error: message };
+      result.error = error instanceof SiteGithubError ? `${error.code}: ${error.message}` : String(error);
     }
+    return result;
   }
 
   async publish(input: { folder: string; files: SiteGithubFile[]; message: string; signal?: AbortSignal }): Promise<SiteGithubPublishResult> {
