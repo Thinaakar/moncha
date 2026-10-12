@@ -21,7 +21,7 @@ import { assetStoragePath, classifyAsset, contentTypeFor, relativeStoredPath } f
 import { detectCharset, toLatin1 } from './charset';
 import { collectPageEvidence, NAME_SHIM, sourceTextLength } from './evidence';
 import { collectCssUrls, collectHtmlUrls, rewriteCss, rewriteHtml, type UrlResolver } from './rewriter';
-import { safeFetch, SafeFetchError, type SafeFetchResult } from './safe-fetch';
+import { describeFetchError, safeFetch, SafeFetchError, type SafeFetchResult } from './safe-fetch';
 import { isTrackingUrl } from './skip-rules';
 
 export { MONCHA_WIDGET_JS } from './moncha-widget.js';
@@ -101,6 +101,10 @@ function looksLikeHtml(contentType: string | null, bytes: Uint8Array): boolean {
   if (type && !type.startsWith('text/plain') && !type.includes('octet-stream')) return false;
   const head = toLatin1(bytes.subarray(0, 512)).replace(/^\uFEFF|^\xEF\xBB\xBF/, '').trimStart().toLowerCase();
   return head.startsWith('<!doctype html') || head.startsWith('<html') || head.startsWith('<');
+}
+
+function errorText(error: unknown): string | undefined {
+  return error === undefined || error === null ? undefined : describeFetchError(error).slice(0, 300) || undefined;
 }
 
 function fetchErrorCode(error: unknown): SiteCaptureErrorCode {
@@ -210,13 +214,15 @@ export class MonchaSiteCapturer implements SiteCapturer {
     let safe: URL;
     try {
       safe = await assertSafeUrl(input.url);
-    } catch {
-      throw new SiteCaptureError('blocked_host');
+    } catch (error) {
+      throw new SiteCaptureError('blocked_host', errorText(error) ?? `${input.url} is not a public web address`);
     }
     if (this.options.checkRobots !== false) {
       const robots = await checkRobotsAllowed(safe.toString());
       if (!robots.allowed) {
-        throw new SiteCaptureError(robots.failureReason === 'robots_disallowed' ? 'robots_disallowed' : 'blocked_host');
+        throw robots.failureReason === 'robots_disallowed'
+          ? new SiteCaptureError('robots_disallowed', `robots.txt of ${safe.host} does not allow crawlers on ${safe.pathname}`)
+          : new SiteCaptureError('blocked_host', robots.failureReason);
       }
     }
     checkAbort();
@@ -230,10 +236,14 @@ export class MonchaSiteCapturer implements SiteCapturer {
         signal,
       });
     } catch (error) {
-      throw new SiteCaptureError(fetchErrorCode(error), error instanceof Error ? error.message : undefined);
+      throw new SiteCaptureError(fetchErrorCode(error), errorText(error));
     }
-    if (source.status < 200 || source.status >= 300) throw new SiteCaptureError(`http_${source.status}`);
-    if (!looksLikeHtml(source.contentType, source.bytes)) throw new SiteCaptureError('not_html', source.contentType ?? undefined);
+    if (source.status < 200 || source.status >= 300) {
+      throw new SiteCaptureError(`http_${source.status}`, `${source.url} answered HTTP ${source.status}`);
+    }
+    if (!looksLikeHtml(source.contentType, source.bytes)) {
+      throw new SiteCaptureError('not_html', `${source.url} returned ${source.contentType || 'an unknown content type'}, not an HTML page`);
+    }
     const finalUrl = source.url;
     const { charset, source: charsetSource } = detectCharset(source.bytes, source.contentType);
     checkAbort();
@@ -350,7 +360,9 @@ export class MonchaSiteCapturer implements SiteCapturer {
         let rendered: string | undefined;
         let evidence: (Omit<SiteEvidence, 'sourceTextLength' | 'renderedTextLength'> & { fullTextLength: number }) | undefined;
         if (!mobile) {
-          if (await looksBlocked(page)) throw new SiteCaptureError('blocked_or_captcha');
+          if (await looksBlocked(page)) {
+            throw new SiteCaptureError('blocked_or_captcha', `${page.url()} showed a captcha or bot check instead of the homepage`);
+          }
           rendered = await page.content().catch(() => undefined);
           if (rendered === undefined) throw new SiteCaptureError('render_failed', 'page.content failed');
           evidence = await collectPageEvidence(page).catch(() => undefined);

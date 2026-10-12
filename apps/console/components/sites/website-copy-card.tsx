@@ -11,6 +11,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/app/states';
 import { JobStatusBadge } from '@/components/app/status';
 import { useCanEdit } from '@/components/app/user-context';
+import { CopyError } from '@/components/sites/copy-error';
 import { failureText } from '@/components/sites/labels';
 import { formatEta, OriginBadge } from '@/components/sites/automation';
 import { CancelCopyButton } from '@/components/sites/cancel-copy';
@@ -19,7 +20,6 @@ import { siteFileUrl, useCreateSiteSnapshot, useLeadSiteSnapshots, useSiteQueue 
 import { errorMessage } from '@/lib/api';
 import { formatBytes, formatNumber, formatRelative } from '@/lib/format';
 import type { JobStatus, SiteSnapshotSummary } from '@/lib/types';
-import { cn } from '@/lib/utils';
 
 const isOpen = (status: JobStatus) => status === 'pending' || status === 'running';
 
@@ -36,7 +36,9 @@ function useFinishToasts(items: SiteSnapshotSummary[] | undefined) {
             action: { label: 'Open', onClick: () => router.push(`/sites/${s.id}`) },
           });
         } else {
-          toast.error('Website copy failed', { description: failureText(s.failureReason) ?? undefined });
+          toast.error('Website copy failed', {
+            description: [failureText(s.failureReason), s.failureDetail].filter(Boolean).join(' ') || undefined,
+          });
         }
       }
       seen.current.set(s.id, s.status);
@@ -136,11 +138,7 @@ export function WebsiteCopyCard({ leadId, hasWebsite }: { leadId: string; hasWeb
                 </span>
               </div>
             </Link>
-            {latest.status === 'failed' && latest.failureReason && (
-              <p className={cn('text-xs', latest.failureReason === 'cancelled' ? 'text-muted-foreground' : 'text-destructive')}>
-                {failureText(latest.failureReason)}
-              </p>
-            )}
+            {latest.failureReason && latest.status !== 'done' && <CopyError snapshot={latest} />}
             {latest.origin === 'auto' && latest.status !== 'pending' && (
               <p className="text-xs text-muted-foreground">Copied automatically after a country crawl.</p>
             )}

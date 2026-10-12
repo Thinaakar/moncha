@@ -464,6 +464,8 @@ function siteSummary(snapshot: SiteSnapshotRecord | SiteSnapshotListItem, previe
     llmCompletionTokens: snapshot.llmCompletionTokens,
     warnings: snapshot.warnings,
     failureReason: snapshot.failureReason,
+    failureDetail: snapshot.failureDetail,
+    attempts: snapshot.attempts,
     origin: snapshot.origin,
     crawlJobId: snapshot.crawlJobId,
     createdAt: snapshot.createdAt.toISOString(),

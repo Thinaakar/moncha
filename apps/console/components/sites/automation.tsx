@@ -74,14 +74,14 @@ export function CrawlCopiesCell({ crawl, finished }: { crawl: SiteAutomationCraw
       content={
         crawl.qualified === 0
           ? 'No new qualified leads without a copy.'
-          : `${formatNumber(crawl.qualified)} qualified · ${detail || 'none started yet'}${crawl.carriedOver ? ` · ${crawl.carriedOver} wait for tomorrow's allowance` : ''}`
+          : `${formatNumber(crawl.qualified)} qualified · ${detail || 'none started yet'}`
       }
     >
       <span className="text-xs whitespace-nowrap">
         <span className={cn('font-medium tabular-nums', crawl.queued ? 'text-foreground' : 'text-muted-foreground')}>
           {crawl.queued ? `${formatNumber(crawl.queued)} queued` : 'None'}
         </span>
-        {crawl.carriedOver > 0 && <span className="ml-1 text-warning tabular-nums">+{formatNumber(crawl.carriedOver)} later</span>}
+        {failed > 0 && <span className="ml-1 text-destructive tabular-nums">· {formatNumber(failed)} failed</span>}
       </span>
     </Tooltip>
   );

@@ -7,7 +7,7 @@ import type {
   SiteSnapshotRepo,
 } from '../ports';
 
-export const SITE_SNAPSHOT_MAX_ATTEMPTS = 2;
+export const SITE_SNAPSHOT_MAX_ATTEMPTS = 3;
 
 export class SiteSnapshotRequestError extends Error {
   constructor(readonly code: 'lead_not_found' | 'no_website') {

@@ -7,8 +7,11 @@ import type {
 } from '../ports';
 import { SITE_SNAPSHOT_MAX_ATTEMPTS, siteUrlFrom } from './siteSnapshots';
 
+/** Kept for the settings API; the sweep no longer limits how many copies it queues. */
 export const SITE_AUTOMATION_DEFAULT_CAP = 20;
 export const SITE_AUTOMATION_MAX_CAP = 500;
+/** Leads queued per crawl per sweep; a bigger crawl stays open and the rest follow on the next sweep. */
+export const SITE_AUTOMATION_BATCH = 1000;
 /** How long a finished crawl waits for its website audits before copies are queued anyway. */
 export const SITE_AUTOMATION_AUDIT_WAIT_MS = 3 * 60 * 60_000;
 /** After this, audits still pending no longer keep a crawl open. */
@@ -47,8 +50,6 @@ export type SiteAutomationSweepResult = {
   tracked: number;
   crawls: number;
   queued: number;
-  carriedOver: number;
-  remainingToday: number;
 };
 
 /**
@@ -56,9 +57,8 @@ export type SiteAutomationSweepResult = {
  *
  * A crawl is picked up once it is done (or failed) and finished after automation was turned on.
  * It waits until every website audit it started has finished, or SITE_AUTOMATION_AUDIT_WAIT_MS
- * has passed. Then its qualified leads that never had a copy are queued oldest first, up to the
- * day's remaining automatic allowance. Leads over the allowance carry over to the next UTC day.
- * Crawls are served oldest first, so the queue stays first in, first out across crawls.
+ * has passed. Then every qualified lead that never had a copy is queued, oldest first. Crawls are
+ * served oldest first, so the queue stays first in, first out across crawls.
  */
 export async function sweepSiteAutomation(
   deps: SweepDeps,
@@ -66,7 +66,7 @@ export async function sweepSiteAutomation(
 ): Promise<SiteAutomationSweepResult> {
   const now = deps.now?.() ?? new Date();
   const { tenantId } = settings;
-  const empty = { tenantId, tracked: 0, crawls: 0, queued: 0, carriedOver: 0, remainingToday: 0 };
+  const empty = { tenantId, tracked: 0, crawls: 0, queued: 0 };
   if (!settings.enabled || !settings.enabledAt) return empty;
 
   const since = new Date(Math.max(settings.enabledAt.getTime(), now.getTime() - SITE_AUTOMATION_LOOKBACK_MS));
@@ -74,37 +74,16 @@ export async function sweepSiteAutomation(
   const open = await deps.automation.listOpenCrawls(tenantId);
   if (open.length === 0) return { ...empty, tracked };
 
-  const usedToday = await deps.automation.countAutoSince(tenantId, utcDayStart(now));
-  let remaining = Math.max(0, settings.dailyCap - usedToday);
   let queuedTotal = 0;
-  let carriedTotal = 0;
-
-  for (const crawl of open) {
-    const outcome = await sweepCrawl(deps, crawl, now, remaining);
-    remaining -= outcome.queued;
-    queuedTotal += outcome.queued;
-    carriedTotal += outcome.carriedOver;
-  }
+  for (const crawl of open) queuedTotal += await sweepCrawl(deps, crawl, now);
 
   if (queuedTotal > 0 || tracked > 0) {
-    deps.logger?.info('site_automation.sweep', {
-      tenantId,
-      tracked,
-      crawls: open.length,
-      queued: queuedTotal,
-      carriedOver: carriedTotal,
-      remainingToday: remaining,
-    });
+    deps.logger?.info('site_automation.sweep', { tenantId, tracked, crawls: open.length, queued: queuedTotal });
   }
-  return { tenantId, tracked, crawls: open.length, queued: queuedTotal, carriedOver: carriedTotal, remainingToday: remaining };
+  return { tenantId, tracked, crawls: open.length, queued: queuedTotal };
 }
 
-async function sweepCrawl(
-  deps: SweepDeps,
-  crawl: SiteAutomationCrawlRecord,
-  now: Date,
-  allowance: number,
-): Promise<{ queued: number; carriedOver: number }> {
+async function sweepCrawl(deps: SweepDeps, crawl: SiteAutomationCrawlRecord, now: Date): Promise<number> {
   const { tenantId, crawlJobId } = crawl;
   const audits = await deps.automation.auditCounts(tenantId, crawlJobId);
   const age = now.getTime() - crawl.crawlFinishedAt.getTime();
@@ -116,16 +95,16 @@ async function sweepCrawl(
       auditsPending: audits.pending,
       lastCheckedAt: now,
     });
-    return { queued: 0, carriedOver: 0 };
+    return 0;
   }
 
-  const candidates = (await deps.automation.candidates(tenantId, crawlJobId))
+  const found = await deps.automation.candidates(tenantId, crawlJobId, SITE_AUTOMATION_BATCH);
+  const candidates = found
     .map((c) => ({ leadId: c.leadId, url: siteUrlFrom({ url: c.websiteUrl, finalUrl: c.websiteFinalUrl, domain: c.domain }) }))
     .filter((c): c is { leadId: string; url: string } => c.url !== null);
 
   let queued = 0;
   for (const candidate of candidates) {
-    if (queued >= allowance) break;
     try {
       await deps.snapshots.createWithJob({
         tenantId,
@@ -148,21 +127,21 @@ async function sweepCrawl(
     }
   }
 
-  const carriedOver = Math.max(0, candidates.length - queued);
+  const moreWaiting = found.length >= SITE_AUTOMATION_BATCH;
   const auditsSettled = audits.pending === 0 || age >= SITE_AUTOMATION_FOLLOW_MS;
-  const complete = carriedOver === 0 && auditsSettled;
+  const complete = !moreWaiting && auditsSettled;
   const queuedSoFar = crawl.queued + queued;
   await deps.automation.updateCrawl(crawlJobId, {
     status: complete ? 'complete' : 'queuing',
     auditsTotal: audits.total,
     auditsPending: audits.pending,
-    qualified: queuedSoFar + carriedOver,
+    qualified: queuedSoFar,
     queued: queuedSoFar,
-    carriedOver,
+    carriedOver: 0,
     lastCheckedAt: now,
     completedAt: complete ? now : null,
   });
-  return { queued, carriedOver };
+  return queued;
 }
 
 /** Runs the sweep for every tenant with automation turned on. One tenant's failure does not stop the others. */
@@ -183,8 +162,9 @@ export async function sweepAllSiteAutomation(deps: SweepDeps): Promise<SiteAutom
 
 export type SiteAutomationStatus = {
   settings: SiteAutomationSettingsRecord;
+  /** `used` = automatic copies queued today (UTC). `cap` and `remaining` are no longer enforced. */
   today: { day: string; used: number; cap: number; remaining: number; resetsAt: Date };
-  /** Qualified leads from open crawls still waiting for daily allowance. */
+  /** Always 0 now that copies are not capped; kept for older clients. */
   carriedOver: number;
   /** Crawls whose audits are still running. */
   waitingCrawls: number;
@@ -209,7 +189,7 @@ export async function getSiteAutomationStatus(
       remaining: Math.max(0, settings.dailyCap - used),
       resetsAt: nextUtcMidnight(now),
     },
-    carriedOver: open.reduce((sum, c) => sum + c.carriedOver, 0),
+    carriedOver: 0,
     waitingCrawls: open.filter((c) => c.status === 'waiting_audits').length,
   };
 }

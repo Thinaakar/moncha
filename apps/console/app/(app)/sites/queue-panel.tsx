@@ -10,6 +10,7 @@ import { Tooltip } from '@/components/ui/misc';
 import { EmptyState, ErrorState, InlineAlert, TableSkeleton } from '@/components/app/states';
 import { CancelCopyButton } from '@/components/sites/cancel-copy';
 import { formatAverage, formatEta, OriginBadge } from '@/components/sites/automation';
+import { failureText } from '@/components/sites/labels';
 import { useSiteQueue, useWorkerHealth } from '@/lib/queries';
 import { formatDateTime, formatDuration, formatNumber, formatRelative } from '@/lib/format';
 import type { SiteQueueItem } from '@/lib/types';
@@ -86,9 +87,17 @@ function RunningCard({ items, now }: { items: SiteQueueItem[]; now: number }) {
               <div className="h-full w-1/3 animate-[indeterminate_1.4s_ease-in-out_infinite] rounded-full bg-info" />
             </div>
             {item.attempts > 1 && (
-              <p className="mt-2 text-xs text-muted-foreground">
-                Attempt {item.attempts} of {item.maxAttempts}
-              </p>
+              <div className="mt-2 space-y-1 text-xs">
+                <p className="text-muted-foreground">
+                  Attempt {item.attempts} of {item.maxAttempts}
+                </p>
+                {item.failureReason && (
+                  <p className="text-warning">
+                    Previous attempt: {failureText(item.failureReason)}
+                    {item.failureDetail && <span className="ml-1 font-mono text-[11px] text-muted-foreground">{item.failureDetail}</span>}
+                  </p>
+                )}
+              </div>
             )}
           </div>
         ))}
@@ -235,11 +244,22 @@ export function QueuePanel() {
                       {item.position === 1 && !item.retrying && running.length === 0 ? 'Next' : formatEta(item.estimatedAt, now)}
                     </span>
                     {item.retrying && (
-                      <Tooltip content={item.lastError ?? 'The last attempt failed'}>
+                      <Tooltip
+                        content={
+                          [failureText(item.failureReason), item.failureDetail].filter(Boolean).join(' ') ||
+                          item.lastError ||
+                          'The last attempt failed'
+                        }
+                      >
                         <span className="mt-0.5 flex items-center gap-1 text-xs text-warning">
                           <RotateCcw className="size-3" /> Retry {item.attempts + 1} of {item.maxAttempts}
                         </span>
                       </Tooltip>
+                    )}
+                    {item.retrying && item.failureReason && (
+                      <p className="mt-0.5 max-w-64 truncate text-xs text-muted-foreground" title={item.failureDetail ?? undefined}>
+                        {failureText(item.failureReason)}
+                      </p>
                     )}
                   </TableCell>
                   <TableCell className="text-right">

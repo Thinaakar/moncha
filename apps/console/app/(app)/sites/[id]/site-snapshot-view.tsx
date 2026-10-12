@@ -27,6 +27,7 @@ import { JobStatusBadge } from '@/components/app/status';
 import { useCanEdit } from '@/components/app/user-context';
 import { AssetsTable } from '@/components/sites/assets-table';
 import { BrandPanel } from '@/components/sites/brand-panel';
+import { copyAttemptsSummary } from '@/components/sites/copy-error';
 import { failureText } from '@/components/sites/labels';
 import { formatEta, OriginBadge } from '@/components/sites/automation';
 import { CancelCopyButton } from '@/components/sites/cancel-copy';
@@ -220,6 +221,10 @@ export function SiteSnapshotView({ id }: { id: string }) {
       ) : snapshot.status === 'failed' && (
         <InlineAlert variant="destructive" icon={AlertTriangle} title="The website could not be copied">
           {failureText(snapshot.failureReason) ?? 'Unknown error.'} {canEdit && 'You can re-run the copy later.'}
+          {snapshot.failureDetail && (
+            <span className="mt-1.5 block break-words font-mono text-xs">{snapshot.failureDetail}</span>
+          )}
+          {copyAttemptsSummary(snapshot) && <span className="mt-1 block text-xs opacity-80">{copyAttemptsSummary(snapshot)}</span>}
         </InlineAlert>
       )}
       {snapshot.status === 'done' && !done && (

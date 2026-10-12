@@ -14,13 +14,37 @@ const FAILURES: Record<string, string> = {
   snapshot_missing: 'The copy record was removed before the job ran.',
   invalid_payload: 'The job was queued without a URL.',
   cancelled: 'Cancelled before it started.',
+  unexpected_error: 'Something unexpected went wrong while copying the site.',
+};
+
+const HTTP_FAILURES: Record<string, string> = {
+  '401': 'The homepage needs a login (HTTP 401).',
+  '403': 'The site refused our crawler (HTTP 403 Forbidden).',
+  '404': 'The homepage was not found (HTTP 404).',
+  '410': 'The homepage was removed (HTTP 410).',
+  '429': 'The site rate-limited our crawler (HTTP 429).',
+  '500': 'The site had a server error (HTTP 500).',
+  '502': 'The site is down or misconfigured (HTTP 502 Bad Gateway).',
+  '503': 'The site is temporarily unavailable (HTTP 503).',
+  '504': 'The site took too long to answer (HTTP 504).',
 };
 
 export function failureText(reason: string | null | undefined) {
   if (!reason) return null;
   const http = /^http_(\d{3})$/.exec(reason);
-  if (http) return `The homepage answered HTTP ${http[1]}.`;
+  if (http) return HTTP_FAILURES[http[1]!] ?? `The homepage answered HTTP ${http[1]}.`;
+  // Copies that failed before failureDetail existed stored the message in the code itself.
+  if (reason.startsWith('error:')) return `Unexpected error: ${reason.slice(6).trim()}`;
   return FAILURES[reason] ?? humanize(reason);
+}
+
+/** Retrying will not help for these, so the job gave up after one attempt. */
+export function isPermanentFailure(reason: string | null | undefined) {
+  if (!reason) return false;
+  return (
+    /^http_4\d\d$/.test(reason) ||
+    ['blocked_host', 'robots_disallowed', 'not_html', 'source_too_large', 'too_many_redirects', 'blocked_or_captcha', 'snapshot_missing', 'invalid_payload', 'cancelled'].includes(reason)
+  );
 }
 
 const WARNINGS: Record<string, string> = {

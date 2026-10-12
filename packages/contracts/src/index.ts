@@ -421,6 +421,10 @@ export type SiteSnapshotSummary = {
   llmCompletionTokens: number | null;
   warnings: string[];
   failureReason: string | null;
+  /** The error message behind `failureReason`, e.g. "fetch failed: getaddrinfo ENOTFOUND example.com". Older API versions omit it. */
+  failureDetail?: string | null;
+  /** Copy attempts made so far. Older API versions omit it. */
+  attempts?: number;
   /** Older API versions omit it; treat missing as `manual`. */
   origin?: SiteCopyOrigin;
   /** Country crawl that queued an automatic copy. */
@@ -518,13 +522,14 @@ export type SiteAutomationCrawlStatus = 'waiting_audits' | 'queuing' | 'complete
 /** `GET /api/v1/site-automation`. */
 export type SiteAutomationState = {
   enabled: boolean;
+  /** @deprecated No longer enforced: every qualified lead of a crawl is queued. */
   dailyCap: number;
   enabledAt: string | null;
   updatedAt: string | null;
   updatedBy: string | null;
-  /** UTC day; the allowance resets at `resetsAt`. */
+  /** `used` = automatic copies queued this UTC day. `cap` and `remaining` are deprecated and not enforced. */
   today: { day: string; used: number; cap: number; remaining: number; resetsAt: string };
-  /** Qualified leads still waiting for daily allowance. */
+  /** @deprecated Always 0 now that copies are not capped. */
   carriedOver: number;
   /** Finished crawls whose website audits are still running. */
   waitingCrawls: number;
@@ -551,6 +556,7 @@ export type SiteAutomationCrawl = {
   auditsPending: number;
   qualified: number;
   queued: number;
+  /** @deprecated Always 0 now that copies are not capped. */
   carriedOver: number;
   copies: { pending: number; running: number; done: number; failed: number };
 };

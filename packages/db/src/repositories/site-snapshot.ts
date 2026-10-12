@@ -42,6 +42,8 @@ function mapSnapshot(row: SiteSnapshot): SiteSnapshotRecord {
     llmCompletionTokens: row.llmCompletionTokens,
     warnings: Array.isArray(row.warnings) ? (row.warnings as string[]) : [],
     failureReason: row.failureReason,
+    failureDetail: row.failureDetail,
+    attempts: row.attempts,
     origin: row.origin,
     crawlJobId: row.crawlJobId,
     githubStatus: (row.githubStatus as SiteGithubStatus | null) ?? null,

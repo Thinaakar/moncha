@@ -1,80 +1,69 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { AlertTriangle, CalendarClock, CheckCircle2, Clock, Gauge, Radar, ScanEye, Sparkles, Workflow } from 'lucide-react';
+import { AlertTriangle, CalendarClock, CheckCircle2, Clock, Gauge, Radar, RotateCcw, ScanEye, Sparkles, Workflow } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { Switch, Tooltip } from '@/components/ui/misc';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { EmptyState, ErrorState, InlineAlert, TableSkeleton } from '@/components/app/states';
 import { useCanEdit } from '@/components/app/user-context';
-import { CRAWL_COPY_STATUS, formatEta } from '@/components/sites/automation';
-import { useSiteAutomation, useSiteAutomationCrawls, useUpdateSiteAutomation } from '@/lib/queries';
+import { CRAWL_COPY_STATUS } from '@/components/sites/automation';
+import { useSiteAutomation, useSiteAutomationCrawls, useSiteQueue, useUpdateSiteAutomation } from '@/lib/queries';
 import { errorMessage } from '@/lib/api';
 import { formatDateTime, formatNumber, formatRelative, humanize } from '@/lib/format';
 import type { SiteAutomationCrawl, SiteAutomationState } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
-const MAX_CAP = 500;
-const CAP_PRESETS = [10, 20, 50];
-
 const STEPS = [
   { icon: Radar, title: 'A country crawl finishes', text: 'Scheduled and manual crawls both count. CSV imports and single leads do not.' },
   { icon: Clock, title: 'Its website audits finish', text: 'The automation waits for the audits the crawl started, for up to 3 hours.' },
-  { icon: Sparkles, title: 'Qualified leads are queued', text: 'Leads with no assistant and no earlier copy join the queue, oldest first.' },
-  { icon: Gauge, title: 'Up to the daily cap', text: 'Leads over the cap wait for the next day. Copies you start by hand never count.' },
+  {
+    icon: Sparkles,
+    title: 'Every qualified lead is queued',
+    text: 'All leads with no assistant and no earlier copy join the queue, first in, first out. There is no daily limit.',
+  },
+  {
+    icon: RotateCcw,
+    title: 'Up to 3 attempts per copy',
+    text: 'A failed copy is retried up to 3 times. If it still fails, the error shows in All copies.',
+  },
 ];
 
-function UsageCard({ state }: { state: SiteAutomationState }) {
-  const { used, cap, remaining, resetsAt } = state.today;
-  const pct = cap > 0 ? Math.min(100, (used / cap) * 100) : 100;
+function TodayCard({ state }: { state: SiteAutomationState }) {
+  const queue = useSiteQueue();
+  const waiting = queue.data?.waiting.filter((w) => w.origin === 'auto').length;
+  const stats = [
+    { label: 'Queued today', value: formatNumber(state.today.used), hint: 'Automatic copies since 00:00 UTC' },
+    { label: 'Waiting in the queue', value: formatNumber(waiting), hint: 'Automatic copies not started yet' },
+    { label: 'Crawls waiting for audits', value: formatNumber(state.waitingCrawls), hint: 'Their leads are queued when audits finish' },
+  ];
   return (
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <Gauge className="size-4 text-primary" /> Today&apos;s allowance
+          <Gauge className="size-4 text-primary" /> Today
         </CardTitle>
-        <CardDescription>Automatic copies queued since 00:00 UTC</CardDescription>
+        <CardDescription>Every qualified lead from a finished crawl is queued; nothing waits for tomorrow.</CardDescription>
       </CardHeader>
-      <CardContent className="space-y-4">
-        <div>
-          <div className="flex items-baseline justify-between">
-            <p className="font-display text-3xl font-semibold tabular-nums">
-              {formatNumber(used)}
-              <span className="text-lg font-normal text-muted-foreground"> / {formatNumber(cap)}</span>
-            </p>
-            <span className={cn('text-sm font-medium', remaining === 0 ? 'text-warning' : 'text-success')}>
-              {remaining === 0 ? 'Cap reached' : `${formatNumber(remaining)} left`}
-            </span>
+      <CardContent className="space-y-3">
+        {stats.map((s) => (
+          <div key={s.label} className="flex items-center justify-between gap-3 rounded-lg border bg-muted/30 px-3 py-2.5">
+            <div className="min-w-0">
+              <p className="text-sm font-medium">{s.label}</p>
+              <p className="text-xs text-muted-foreground">{s.hint}</p>
+            </div>
+            <p className="font-display text-xl font-semibold tabular-nums">{s.value}</p>
           </div>
-          <div className="mt-2 h-2.5 w-full overflow-hidden rounded-full bg-muted">
-            <div
-              className={cn('h-full rounded-full transition-all', remaining === 0 ? 'bg-warning' : 'bg-primary')}
-              style={{ width: `${pct}%` }}
-            />
-          </div>
-          <p className="mt-2 text-xs text-muted-foreground">
-            Resets {formatEta(resetsAt).replace('any moment', 'now')} ({formatDateTime(resetsAt)} your time)
-          </p>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div className="rounded-lg border bg-muted/30 px-3 py-2.5">
-            <p className="text-xs text-muted-foreground">Waiting for tomorrow</p>
-            <p className={cn('font-display text-xl font-semibold tabular-nums', state.carriedOver > 0 && 'text-warning')}>
-              {formatNumber(state.carriedOver)}
-            </p>
-          </div>
-          <div className="rounded-lg border bg-muted/30 px-3 py-2.5">
-            <p className="text-xs text-muted-foreground">Crawls waiting for audits</p>
-            <p className="font-display text-xl font-semibold tabular-nums">{formatNumber(state.waitingCrawls)}</p>
-          </div>
-        </div>
+        ))}
+        <Button variant="outline" size="sm" className="w-full" asChild>
+          <Link href="/sites?status=failed&origin=auto">
+            <AlertTriangle /> See failed automatic copies
+          </Link>
+        </Button>
       </CardContent>
     </Card>
   );
@@ -83,22 +72,13 @@ function UsageCard({ state }: { state: SiteAutomationState }) {
 function SettingsCard({ state }: { state: SiteAutomationState }) {
   const canEdit = useCanEdit();
   const update = useUpdateSiteAutomation();
-  const [cap, setCap] = useState(String(state.dailyCap));
-  useEffect(() => setCap(String(state.dailyCap)), [state.dailyCap]);
-  const capNumber = Number(cap);
-  const capValid = cap.trim() !== '' && Number.isInteger(capNumber) && capNumber >= 0 && capNumber <= MAX_CAP;
-  const capChanged = capValid && capNumber !== state.dailyCap;
 
-  async function save(input: { enabled?: boolean; dailyCap?: number }) {
+  async function save(input: { enabled: boolean }) {
     try {
       const next = await update.mutateAsync(input);
-      if (input.enabled !== undefined) {
-        toast.success(next.enabled ? 'Copy automation is on' : 'Copy automation is off', {
-          description: next.enabled ? 'Crawls that finish from now on will queue website copies.' : 'Copies already queued still run.',
-        });
-      } else {
-        toast.success(`Daily cap set to ${next.dailyCap}`);
-      }
+      toast.success(next.enabled ? 'Copy automation is on' : 'Copy automation is off', {
+        description: next.enabled ? 'Crawls that finish from now on will queue website copies.' : 'Copies already queued still run.',
+      });
     } catch (e) {
       toast.error('Could not save', { description: errorMessage(e) });
     }
@@ -151,46 +131,6 @@ function SettingsCard({ state }: { state: SiteAutomationState }) {
             The worker runs with SITE_AUTO_COPY=false, so the automation is paused whatever this switch says.
           </InlineAlert>
         )}
-
-        <div className="grid gap-2 sm:max-w-md">
-          <Label htmlFor="daily-cap">Daily cap</Label>
-          <div className="flex gap-2">
-            <Input
-              id="daily-cap"
-              type="number"
-              inputMode="numeric"
-              min={0}
-              max={MAX_CAP}
-              value={cap}
-              disabled={!canEdit}
-              onChange={(e) => setCap(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && capChanged) void save({ dailyCap: capNumber });
-              }}
-              className="w-28 tabular-nums"
-              aria-invalid={!capValid}
-            />
-            {canEdit && (
-              <Button onClick={() => void save({ dailyCap: capNumber })} disabled={!capChanged} loading={update.isPending && capChanged}>
-                Save
-              </Button>
-            )}
-            {canEdit && (
-              <div className="ml-1 hidden items-center gap-1 sm:flex">
-                {CAP_PRESETS.map((p) => (
-                  <Button key={p} variant="ghost" size="sm" onClick={() => setCap(String(p))} className={cn(p === capNumber && 'bg-muted')}>
-                    {p}
-                  </Button>
-                ))}
-              </div>
-            )}
-          </div>
-          <p className={cn('text-xs', capValid ? 'text-muted-foreground' : 'text-destructive')}>
-            {capValid
-              ? 'Automatic copies per day (UTC). 0 pauses new automatic copies but keeps following crawls.'
-              : `Enter a whole number from 0 to ${MAX_CAP}.`}
-          </p>
-        </div>
 
         <ol className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           {STEPS.map((step, i) => (
@@ -321,11 +261,6 @@ function CrawlsCard() {
                   <TableCell className="text-right tabular-nums">{c.status === 'waiting_audits' ? '—' : formatNumber(c.qualified)}</TableCell>
                   <TableCell className="text-right tabular-nums">
                     <span className="font-medium">{formatNumber(c.queued)}</span>
-                    {c.carriedOver > 0 && (
-                      <Tooltip content={`${c.carriedOver} qualified lead${c.carriedOver === 1 ? '' : 's'} wait for the next day's allowance`}>
-                        <span className="ml-1 text-xs text-warning">+{formatNumber(c.carriedOver)}</span>
-                      </Tooltip>
-                    )}
                   </TableCell>
                   <TableCell>
                     <CopyProgress crawl={c} />
@@ -333,7 +268,7 @@ function CrawlsCard() {
                   <TableCell>
                     <span className={cn('inline-flex items-center gap-1 text-xs font-medium', meta.tone)}>
                       {c.status === 'complete' ? <CheckCircle2 className="size-3.5" /> : <Clock className="size-3.5" />}
-                      {c.status === 'queuing' && c.carriedOver > 0 ? 'Waiting for allowance' : meta.label}
+                      {meta.label}
                     </span>
                   </TableCell>
                 </TableRow>
@@ -371,7 +306,7 @@ export function AutomationPanel() {
         <div className="xl:col-span-2">
           <SettingsCard state={automation.data} />
         </div>
-        <UsageCard state={automation.data} />
+        <TodayCard state={automation.data} />
       </div>
       <CrawlsCard />
       <p className="flex items-center gap-1.5 text-xs text-muted-foreground">

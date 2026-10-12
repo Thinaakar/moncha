@@ -78,8 +78,8 @@ copies) were added on 2026-10-08.
 | 35 | GET | `/api/v1/site-files/:token/*path` | Read | One stored file, token-gated (preview iframe) | 200 | none (R2) |
 | 36 | GET | `/api/v1/site-snapshots/queue` | Read | Website copy queue in run order, with start estimates | 200 | SiteSnapshot, JobRun |
 | 37 | POST | `/api/v1/site-snapshots/:id/cancel` | Update | Cancel a copy that has not started (editor session) | 200 | SiteSnapshot, JobRun |
-| 38 | GET | `/api/v1/site-automation` | Read | Copy automation settings and today's allowance | 200 | SiteAutomationSettings, SiteAutomationCrawl, SiteSnapshot |
-| 39 | PUT | `/api/v1/site-automation` | Update | Turn copy automation on or off, set the daily cap (editor session) | 200 | SiteAutomationSettings |
+| 38 | GET | `/api/v1/site-automation` | Read | Copy automation settings and today's count | 200 | SiteAutomationSettings, SiteAutomationCrawl, SiteSnapshot |
+| 39 | PUT | `/api/v1/site-automation` | Update | Turn copy automation on or off (editor session) | 200 | SiteAutomationSettings |
 | 40 | GET | `/api/v1/site-automation/crawls` | Read | Crawls followed by the automation and their copies | 200 | SiteAutomationCrawl, JobRun, SiteSnapshot |
 | 41 | POST | `/api/v1/site-snapshots/:id/github-push` | Update | Push a finished copy to the GitHub sites repo now (editor session) | 202 | SiteSnapshot |
 
@@ -1620,10 +1620,26 @@ is already pending or running: **200 OK** with the same fields and `"deduped": t
 **200 OK** `{ "items": [ <summary>, ... ] }`, newest first, at most 20. A summary has `id`, `leadId`, `jobId`,
 `status`, `sourceUrl`, `finalUrl`, `httpStatus`, `sourceHash`, `sourceBytes`, `sourceCharset`, `assetCount`,
 `skippedAssetCount`, `totalBytes`, `llmModel`, `llmPromptTokens`, `llmCompletionTokens`, `warnings`,
-`failureReason`, `origin` (`manual` or `auto`), `crawlJobId` (the country crawl behind an automatic copy, else
-`null`), `createdAt`, `finishedAt`, `thumbnailPath` (`site-files/<token>/screenshot-desktop.png` once `done`,
-else `null`) and `github` (see #41; `null` when the copy was never queued for GitHub). A cancelled copy is `failed`
-with `failureReason: "cancelled"`.
+`failureReason`, `failureDetail`, `attempts`, `origin` (`manual` or `auto`), `crawlJobId` (the country crawl behind
+an automatic copy, else `null`), `createdAt`, `finishedAt`, `thumbnailPath` (`site-files/<token>/screenshot-desktop.png`
+once `done`, else `null`) and `github` (see #41; `null` when the copy was never queued for GitHub). A cancelled copy is
+`failed` with `failureReason: "cancelled"`.
+
+A copy is tried up to 3 times. Failures that a retry cannot fix (`blocked_host`, `robots_disallowed`, `not_html`,
+`source_too_large`, `too_many_redirects`, `blocked_or_captcha`, `http_4xx`) fail on the first attempt. `failureReason`
+is the code and `failureDetail` the error message behind it, for example:
+
+```json
+{
+  "status": "failed",
+  "failureReason": "fetch_failed",
+  "failureDetail": "fetch failed: getaddrinfo ENOTFOUND exampledental.sg",
+  "attempts": 3
+}
+```
+
+While a retry waits, the copy is `pending` and keeps the last attempt's `failureReason` and `failureDetail`; both are
+cleared when the copy is `done`. Other codes: `http_<status>`, `timeout`, `render_failed`, `unexpected_error`.
 
 ### 32. GET `/api/v1/site-snapshots`
 
@@ -1662,7 +1678,7 @@ waits until its `runAfter`.
 
 ```json
 {
-  "running": [ { "...summary": "...", "position": null, "estimatedAt": "2026-10-09T10:02:10.000Z", "startedAt": "2026-10-09T10:00:00.000Z", "attempts": 1, "maxAttempts": 2, "retrying": false, "runAfter": "...", "lastError": null } ],
+  "running": [ { "...summary": "...", "position": null, "estimatedAt": "2026-10-09T10:02:10.000Z", "startedAt": "2026-10-09T10:00:00.000Z", "attempts": 1, "maxAttempts": 3, "retrying": false, "runAfter": "...", "lastError": null } ],
   "waiting": [ { "...summary": "...", "position": 1, "estimatedAt": "2026-10-09T10:02:10.000Z", "attempts": 0, "retrying": false } ],
   "averageRunMs": 138399,
   "measured": true
@@ -1738,10 +1754,11 @@ qualified leads. CSV imports and single leads are not included.
    on, and at most 7 days ago.
 3. A crawl waits until all its audits are finished, for up to 3 hours. After that, copies are queued for whatever
    has qualified so far, and later audits are still followed for up to 24 hours.
-4. Qualified leads with no website copy at all are queued oldest first, crawls oldest first, as `origin: "auto"`.
-   A lead is never copied automatically twice (job dedupe key `site_snapshot:auto:<leadId>`).
-5. At most `dailyCap` automatic copies are queued per UTC day. The rest wait for the next day. Manual copies never
-   count toward the cap.
+4. Every qualified lead with no website copy at all is queued, oldest first, crawls oldest first, as
+   `origin: "auto"`. There is no daily limit. A lead is never copied automatically twice (job dedupe key
+   `site_snapshot:auto:<leadId>`).
+5. Each copy is tried up to 3 times; a copy that still fails is `failed` with `failureReason` and `failureDetail`
+   (see #31).
 
 Needs the website copy settings (R2 and `SITE_PREVIEW_SECRET`). `SITE_AUTO_COPY=false` in `apps/worker/.env` turns it
 off on that worker whatever the setting says.
@@ -1763,18 +1780,19 @@ off on that worker whatever the setting says.
 }
 ```
 
-Off with a cap of 20 until someone changes it. `carriedOver` counts qualified leads waiting for the next day's
-allowance; `waitingCrawls` counts crawls whose audits are still running.
+Off until someone turns it on. `today.used` counts automatic copies queued this UTC day; `waitingCrawls` counts
+crawls whose audits are still running. `dailyCap`, `today.cap`, `today.remaining` and `carriedOver` are deprecated:
+they are still returned for older clients, but no cap is enforced and `carriedOver` is always 0.
 
 ### 39. PUT `/api/v1/site-automation`
 
-**Headers:** `authorization: Bearer <token>` (role `admin` or `operator`). Body: `{ "enabled": true }`,
-`{ "dailyCap": 30 }`, or both. `dailyCap` is a whole number from 0 to 500. Turning the automation on only picks up
-crawls that finish from then on. **200 OK** with the same shape as #38.
+**Headers:** `authorization: Bearer <token>` (role `admin` or `operator`). Body: `{ "enabled": true }`. Turning the
+automation on only picks up crawls that finish from then on. `dailyCap` (0 to 500) is still accepted and stored for
+older clients but has no effect. **200 OK** with the same shape as #38.
 
 | Status | `code` | When |
 |---|---|---|
-| 400 | `validation_error` | Empty body, or a cap outside 0 to 500 |
+| 400 | `validation_error` | Empty body, or a `dailyCap` outside 0 to 500 |
 | 401 | `unauthorized` | No bearer token, or an invalid one |
 | 403 | `forbidden` | Viewer role, or a user of another tenant |
 
@@ -1798,14 +1816,14 @@ Query: `limit` (1 to 200, default 50). **200 OK** `{ "items": [...] }`, newest c
   "auditsTotal": 41,
   "auditsPending": 0,
   "qualified": 25,
-  "queued": 20,
-  "carriedOver": 5,
-  "copies": { "pending": 12, "running": 1, "done": 7, "failed": 0 }
+  "queued": 25,
+  "carriedOver": 0,
+  "copies": { "pending": 17, "running": 1, "done": 7, "failed": 0 }
 }
 ```
 
-`status` is `waiting_audits` (audits still running), `queuing` (copies queued, some leads may wait for allowance) or
-`complete`. Only crawls the automation picked up are listed.
+`status` is `waiting_audits` (audits still running), `queuing` (copies queued while late audits are still followed,
+or more than 1,000 leads that are queued over several sweeps) or `complete`. Only crawls the automation picked up are listed.
 
 ---
 

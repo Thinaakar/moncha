@@ -57,6 +57,8 @@ function snapshot(over: Partial<SiteSnapshotListItem> = {}): SiteSnapshotListIte
     llmCompletionTokens: null,
     warnings: [],
     failureReason: null,
+    failureDetail: null,
+    attempts: 1,
     origin: 'auto',
     crawlJobId: 'crawl1',
     githubStatus: 'pushing',

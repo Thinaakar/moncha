@@ -78,8 +78,16 @@ async function uploadAll(store: SiteStore, prefix: string, uploads: Upload[], si
 function failureCode(error: unknown, aborted: boolean): string {
   if (aborted) return 'timeout';
   if (error instanceof SiteCaptureError) return error.code;
-  const message = error instanceof Error ? error.message : String(error);
-  return `error:${message.slice(0, 160)}`;
+  return 'unexpected_error';
+}
+
+/** The message behind a failure code, shown next to it in the console. Null when it adds nothing. */
+function failureDetail(error: unknown, reason: string, timedOut: boolean, timeoutMs: number): string | null {
+  if (timedOut) return `The copy did not finish within ${Math.round(timeoutMs / 1000)} seconds`;
+  if (!(error instanceof Error)) return error === undefined || error === null ? null : String(error).slice(0, 500);
+  const cause = error.cause instanceof Error ? error.cause.message : '';
+  const message = cause && !error.message.includes(cause) ? `${error.message}: ${cause}` : error.message;
+  return message && message !== reason ? message.slice(0, 500) : null;
 }
 
 function isPermanent(code: string): boolean {
@@ -133,13 +141,14 @@ export async function runSiteSnapshotJob(
     return { status: 'skipped', snapshotId };
   }
 
-  await deps.snapshots.update(tenantId, snapshotId, { status: 'running', failureReason: null });
+  await deps.snapshots.update(tenantId, snapshotId, { status: 'running', attempts: job.attempts });
   if (job.status === 'pending') {
     await deps.jobs.update(tenantId, job.id, { status: 'running', startedAt: now(), lockedAt: now() });
   }
 
+  const timeoutMs = input.timeoutMs ?? SITE_JOB_TIMEOUT_MS;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), input.timeoutMs ?? SITE_JOB_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   const onOuterAbort = () => controller.abort();
   input.signal?.addEventListener('abort', onOuterAbort, { once: true });
   const signal = controller.signal;
@@ -241,6 +250,7 @@ export async function runSiteSnapshotJob(
       llmCompletionTokens: llmModel ? usage.completionTokens : null,
       warnings: uniqueWarnings,
       failureReason: null,
+      failureDetail: null,
       finishedAt: now(),
       ...(deps.githubEnabled
         ? { githubStatus: 'pending' as const, githubAttempts: 0, githubNextAt: now(), githubError: null }
@@ -268,27 +278,48 @@ export async function runSiteSnapshotJob(
     });
     return { status: 'done', snapshotId, assetCount: capture.manifest.assets.length, totalBytes, brandSource: brand.source };
   } catch (error) {
-    const reason = failureCode(error, signal.aborted && !input.signal?.aborted);
+    const timedOut = signal.aborted && !input.signal?.aborted;
+    const reason = failureCode(error, timedOut);
+    const detail = failureDetail(error, reason, timedOut, timeoutMs);
+    const lastError = detail ? `${reason}: ${detail}` : reason;
     const shutdown = Boolean(input.signal?.aborted);
     const canRetry = !isPermanent(reason) && job.attempts < job.maxAttempts;
-    if (canRetry || shutdown) {
-      // Worker shutdown or a transient failure: back to the queue, same snapshot and storage prefix.
-      await deps.snapshots.update(tenantId, snapshotId, { status: 'pending', failureReason: reason });
+    if (shutdown) {
+      // Not the copy's fault: give the claimed attempt back and keep the last real error on the copy.
+      const attempts = Math.max(0, job.attempts - 1);
+      await deps.snapshots.update(tenantId, snapshotId, { status: 'pending', attempts });
       await deps.jobs.update(tenantId, job.id, {
         status: 'pending',
-        lastError: shutdown ? 'worker_shutdown' : reason,
+        lastError: 'worker_shutdown',
         lockedAt: null,
         lockedBy: null,
-        // A shutdown is not the job's fault: give the claimed attempt back.
-        ...(shutdown ? { attempts: Math.max(0, job.attempts - 1) } : {}),
-        runAfter: new Date(now().getTime() + (shutdown ? 0 : RETRY_DELAY_MS * job.attempts)),
+        attempts,
+        runAfter: now(),
       });
-      deps.logger.error('site_snapshot_retry', { snapshotId, reason, attempts: job.attempts });
+      deps.logger.error('site_snapshot_retry', { snapshotId, reason: 'worker_shutdown', attempts });
+      return { status: 'retry', snapshotId, reason: 'worker_shutdown' };
+    }
+    if (canRetry) {
+      // Transient failure: back to the queue, same snapshot and storage prefix.
+      await deps.snapshots.update(tenantId, snapshotId, { status: 'pending', failureReason: reason, failureDetail: detail });
+      await deps.jobs.update(tenantId, job.id, {
+        status: 'pending',
+        lastError,
+        lockedAt: null,
+        lockedBy: null,
+        runAfter: new Date(now().getTime() + RETRY_DELAY_MS * job.attempts),
+      });
+      deps.logger.error('site_snapshot_retry', { snapshotId, reason, detail, attempts: job.attempts });
       return { status: 'retry', snapshotId, reason };
     }
-    await deps.snapshots.update(tenantId, snapshotId, { status: 'failed', failureReason: reason, finishedAt: now() });
-    await finishJob('failed', { lastError: reason });
-    deps.logger.error('site_snapshot_failed', { snapshotId, reason });
+    await deps.snapshots.update(tenantId, snapshotId, {
+      status: 'failed',
+      failureReason: reason,
+      failureDetail: detail,
+      finishedAt: now(),
+    });
+    await finishJob('failed', { lastError });
+    deps.logger.error('site_snapshot_failed', { snapshotId, reason, detail, attempts: job.attempts });
     return { status: 'failed', snapshotId, reason };
   } finally {
     clearTimeout(timer);

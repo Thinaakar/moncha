@@ -541,6 +541,10 @@ model SiteSnapshot {
   /// Non-fatal notes, e.g. llm_skipped:budget_exhausted, base_href_neutralized.
   warnings            Json?
   failureReason       String?
+  /// The error message behind failureReason, e.g. "getaddrinfo ENOTFOUND example.com".
+  failureDetail       String?
+  /// Copy attempts made so far (the job retries up to SITE_SNAPSHOT_MAX_ATTEMPTS).
+  attempts            Int       @default(0)
   /// manual = started from the console; auto = queued by the copy automation after a crawl.
   origin              SiteCopyOrigin @default(manual)
   /// country_discovery job that found the lead (automatic copies only).

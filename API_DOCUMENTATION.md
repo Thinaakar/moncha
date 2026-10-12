@@ -103,8 +103,8 @@ Common error codes:
 | **20** | `/api/v1/site-files/:token/*path` | `GET` | **READ** | Token-gated raw file from the copy (preview iframe) |
 | **21** | `/api/v1/site-snapshots/queue` | `GET` | **READ** | Website copy queue in run order with start estimates |
 | **22** | `/api/v1/site-snapshots/:id/cancel` | `POST` | **UPDATE** | Cancels a copy that has not started (signed-in editor) |
-| **23** | `/api/v1/site-automation` | `GET` | **READ** | Copy automation settings and today's allowance |
-| **24** | `/api/v1/site-automation` | `PUT` | **UPDATE** | Turns copy automation on or off, sets the daily cap (signed-in editor) |
+| **23** | `/api/v1/site-automation` | `GET` | **READ** | Copy automation settings and today's count |
+| **24** | `/api/v1/site-automation` | `PUT` | **UPDATE** | Turns copy automation on or off (signed-in editor) |
 | **25** | `/api/v1/site-automation/crawls` | `GET` | **READ** | Crawls followed by the automation and their copies |
 | **26** | `/api/v1/site-snapshots/:id/github-push` | `POST` | **UPDATE** | Pushes a finished copy to the GitHub sites repo now (signed-in editor) |
 
@@ -845,7 +845,10 @@ curl -X POST http://127.0.0.1:4000/api/v1/leads/<leadId>/site-snapshots \
 #### 16. `GET /api/v1/leads/:id/site-snapshots`
 `{ "items": SiteSnapshotSummary[] }`. A summary has `id, leadId, jobId, status, sourceUrl, finalUrl, httpStatus,
 sourceHash, sourceBytes, sourceCharset, assetCount, skippedAssetCount, totalBytes, llmModel, llmPromptTokens,
-llmCompletionTokens, warnings[], failureReason, origin, crawlJobId, createdAt, finishedAt, thumbnailPath`.
+llmCompletionTokens, warnings[], failureReason, failureDetail, attempts, origin, crawlJobId, createdAt, finishedAt,
+thumbnailPath`. `failureReason` is a code (`fetch_failed`, `http_403`, `timeout`, …) and `failureDetail` the error
+message behind it; both stay set while a retry waits and are cleared once the copy is `done`. `attempts` counts copy
+attempts (up to 3).
 `thumbnailPath` is `site-files/<token>/screenshot-desktop.png` once the copy is `done`. `origin` is `manual` or
 `auto`; `crawlJobId` names the country crawl behind an automatic copy. `github` is the GitHub push state (see 26),
 or `null` when the copy was never queued for GitHub.
@@ -885,14 +888,17 @@ waiting copies, finish for running ones), `retrying`, `attempts`, `maxAttempts`,
 
 #### 23–25. Copy automation
 When a country crawl (scheduled or manual) finishes, the worker waits for the crawl's website audits (up to 3 hours),
-then queues copies for its qualified leads that never had one, oldest first, up to `dailyCap` automatic copies per UTC
-day. Leads over the cap wait for the next day; manual copies never count. Only crawls that finish after the
-automation is turned on are picked up. `SITE_AUTO_COPY=false` on the worker turns it off there.
+then queues copies for every qualified lead that never had one, oldest first, crawls oldest first. There is no daily
+limit. Each copy is tried up to 3 times; a copy that still fails is `failed` with `failureReason` (code) and
+`failureDetail` (the error message, e.g. `fetch failed: getaddrinfo ENOTFOUND example.com`). Only crawls that finish
+after the automation is turned on are picked up. `SITE_AUTO_COPY=false` on the worker turns it off there.
 
 * **`GET /api/v1/site-automation`** → `{ enabled, dailyCap, enabledAt, updatedAt, updatedBy, today { day, used, cap,
-  remaining, resetsAt }, carriedOver, waitingCrawls, agentReady, workerEnabled }`. Defaults: off, cap 20.
-* **`PUT /api/v1/site-automation`** with `{ "enabled": true }` and/or `{ "dailyCap": 30 }` (0 to 500). Needs
-  `Authorization: Bearer <token>` (role `admin` or `operator`). Returns the same shape as GET.
+  remaining, resetsAt }, carriedOver, waitingCrawls, agentReady, workerEnabled }`. Default: off. `today.used` counts
+  automatic copies queued this UTC day. `dailyCap`, `today.cap`, `today.remaining` and `carriedOver` are deprecated
+  (still returned, not enforced; `carriedOver` is always 0).
+* **`PUT /api/v1/site-automation`** with `{ "enabled": true }`. Needs `Authorization: Bearer <token>` (role `admin` or
+  `operator`). `dailyCap` is still accepted for older clients but has no effect. Returns the same shape as GET.
 * **`GET /api/v1/site-automation/crawls?limit=50`** → `{ items: [{ crawlJobId, country, countryCode, trigger,
   crawlStatus, status, crawlFinishedAt, lastCheckedAt, completedAt, leadsCreated, auditsEnqueued, auditsTotal,
   auditsPending, qualified, queued, carriedOver, copies { pending, running, done, failed } }] }`. `status` is
@@ -901,7 +907,7 @@ automation is turned on are picked up. `SITE_AUTO_COPY=false` on the worker turn
 ```bash
 curl -X PUT http://127.0.0.1:4000/api/v1/site-automation \
   -H "Authorization: Bearer <token>" -H "content-type: application/json" \
-  -d '{"enabled":true,"dailyCap":20}'
+  -d '{"enabled":true}'
 ```
 
 #### 26. `POST /api/v1/site-snapshots/:id/github-push`

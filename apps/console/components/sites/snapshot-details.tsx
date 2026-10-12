@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { InlineAlert } from '@/components/app/states';
 import { JobStatusBadge } from '@/components/app/status';
 import { CopyButton, DetailRow, JsonView } from '@/components/app/widgets';
+import { copyAttemptsSummary } from '@/components/sites/copy-error';
 import { failureText, warningText } from '@/components/sites/labels';
 import { OriginBadge } from '@/components/sites/automation';
 import { GithubDetailsCard } from '@/components/sites/github-push';
@@ -39,6 +40,10 @@ export function SnapshotDetails({ snapshot }: { snapshot: SiteSnapshotDetail }) 
             title={snapshot.status === 'failed' ? 'Copy failed' : 'Last attempt failed'}
           >
             {failureText(snapshot.failureReason)} <span className="font-mono text-xs">({snapshot.failureReason})</span>
+            {snapshot.failureDetail && (
+              <span className="mt-1.5 block break-words font-mono text-xs">{snapshot.failureDetail}</span>
+            )}
+            {copyAttemptsSummary(snapshot) && <span className="mt-1 block text-xs opacity-80">{copyAttemptsSummary(snapshot)}</span>}
           </InlineAlert>
         )}
 

@@ -9,6 +9,7 @@ import type {
 } from '../ports';
 import {
   SITE_AUTOMATION_AUDIT_WAIT_MS,
+  SITE_AUTOMATION_BATCH,
   siteAutoCopyDedupeKey,
   sweepSiteAutomation,
   updateSiteAutomationSettings,
@@ -132,18 +133,28 @@ describe('sweepSiteAutomation', () => {
     expect(t.crawls.get('c1')).toMatchObject({ status: 'complete', queued: 2, qualified: 2, carriedOver: 0 });
   });
 
-  it('stops at the daily cap, serves the oldest crawl first and carries the rest over', async () => {
+  it('queues every lead with no daily cap, oldest crawl first', async () => {
     const t = setup({
       crawls: [crawl('newer', HOUR), crawl('older', 2 * HOUR)],
       candidates: { older: [lead('o1'), lead('o2')], newer: [lead('n1'), lead('n2')] },
       usedToday: 17,
-      cap: 20,
+      cap: 1,
     });
     const result = await t.run();
-    expect(t.created.map((c) => c.leadId)).toEqual(['o1', 'o2', 'n1']);
-    expect(result).toMatchObject({ queued: 3, carriedOver: 1, remainingToday: 0 });
-    expect(t.crawls.get('older')).toMatchObject({ status: 'complete' });
-    expect(t.crawls.get('newer')).toMatchObject({ status: 'queuing', queued: 1, carriedOver: 1, qualified: 2 });
+    expect(t.created.map((c) => c.leadId)).toEqual(['o1', 'o2', 'n1', 'n2']);
+    expect(result).toMatchObject({ queued: 4 });
+    expect(t.crawls.get('older')).toMatchObject({ status: 'complete', queued: 2 });
+    expect(t.crawls.get('newer')).toMatchObject({ status: 'complete', queued: 2, qualified: 2, carriedOver: 0 });
+  });
+
+  it('keeps a crawl open while a full batch of leads was found', async () => {
+    const many = Array.from({ length: SITE_AUTOMATION_BATCH }, (_, i) => lead(`l${String(i).padStart(4, '0')}`));
+    const t = setup({ crawls: [crawl('c1', HOUR)], candidates: { c1: many } });
+    await t.run();
+    expect(t.created).toHaveLength(SITE_AUTOMATION_BATCH);
+    expect(t.crawls.get('c1')).toMatchObject({ status: 'queuing', queued: SITE_AUTOMATION_BATCH });
+    await t.run();
+    expect(t.crawls.get('c1')).toMatchObject({ status: 'complete' });
   });
 
   it('skips leads without a usable website', async () => {

@@ -231,6 +231,10 @@ export type SiteSnapshotRecord = {
   llmCompletionTokens: number | null;
   warnings: string[];
   failureReason: string | null;
+  /** The error message behind failureReason, for people reading why a copy failed. */
+  failureDetail: string | null;
+  /** Copy attempts made so far. */
+  attempts: number;
   origin: SiteCopyOrigin;
   crawlJobId: string | null;
   githubStatus: SiteGithubStatus | null;
@@ -293,6 +297,8 @@ export type SiteSnapshotPatch = Partial<
     | 'llmCompletionTokens'
     | 'warnings'
     | 'failureReason'
+    | 'failureDetail'
+    | 'attempts'
     | 'finishedAt'
     | 'githubStatus'
     | 'githubAttempts'
@@ -453,8 +459,8 @@ export interface SiteAutomationRepo {
   listOpenCrawls(tenantId: string): Promise<SiteAutomationCrawlRecord[]>;
   updateCrawl(crawlJobId: string, patch: SiteAutomationCrawlPatch): Promise<void>;
   auditCounts(tenantId: string, crawlJobId: string): Promise<{ total: number; pending: number }>;
-  /** Qualified leads audited for this crawl with no website copy at all, oldest lead first. */
-  candidates(tenantId: string, crawlJobId: string): Promise<SiteAutomationCandidate[]>;
+  /** Qualified leads audited for this crawl with no website copy at all, oldest lead first, at most `limit`. */
+  candidates(tenantId: string, crawlJobId: string, limit: number): Promise<SiteAutomationCandidate[]>;
   /** Automatic copies created at or after `since`. */
   countAutoSince(tenantId: string, since: Date): Promise<number>;
   listCrawls(tenantId: string, limit: number): Promise<SiteAutomationCrawlListItem[]>;

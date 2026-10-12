@@ -12,7 +12,7 @@ import { Pagination } from '@/components/app/pagination';
 import { EmptyState, ErrorState, TableSkeleton } from '@/components/app/states';
 import { JobStatusBadge } from '@/components/app/status';
 import { SearchInput } from '@/components/app/widgets';
-import { failureText } from '@/components/sites/labels';
+import { CopyError } from '@/components/sites/copy-error';
 import { OriginBadge } from '@/components/sites/automation';
 import { GithubStatusBadge } from '@/components/sites/github-push';
 import { TabBar } from '@/components/sites/tabs';
@@ -60,9 +60,7 @@ export function SitesView() {
               <span className={cn('size-2 rounded-full', automation.data.enabled ? 'bg-success' : 'bg-muted-foreground/40')} />
               Automation {automation.data.enabled ? 'on' : 'off'}
               {automation.data.enabled && (
-                <span className="text-muted-foreground tabular-nums">
-                  · {automation.data.today.used}/{automation.data.today.cap} today
-                </span>
+                <span className="text-muted-foreground tabular-nums">· {formatNumber(automation.data.today.used)} queued today</span>
               )}
             </button>
           )
@@ -150,7 +148,7 @@ function CopiesPanel() {
         {sites.error ? (
           <ErrorState error={sites.error} onRetry={() => sites.refetch()} />
         ) : sites.isLoading || !sites.data ? (
-          <TableSkeleton rows={8} columns={6} />
+          <TableSkeleton rows={8} columns={7} />
         ) : sites.data.items.length === 0 ? (
           filtered ? (
             <EmptyState
@@ -189,6 +187,7 @@ function CopiesPanel() {
                   <TableHead>Company</TableHead>
                   <TableHead>Started by</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead>Error</TableHead>
                   <TableHead>GitHub</TableHead>
                   <TableHead className="text-right">Assets</TableHead>
                   <TableHead className="text-right">Size</TableHead>
@@ -230,10 +229,12 @@ function CopiesPanel() {
                       </TableCell>
                       <TableCell>
                         <JobStatusBadge status={s.status} />
-                        {s.status === 'failed' && s.failureReason && (
-                          <p className="mt-1 max-w-56 truncate text-xs text-muted-foreground" title={failureText(s.failureReason) ?? undefined}>
-                            {failureText(s.failureReason)}
-                          </p>
+                      </TableCell>
+                      <TableCell className="w-72 max-w-72 whitespace-normal">
+                        {s.failureReason && s.status !== 'done' ? (
+                          <CopyError snapshot={s} clamp />
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
                         )}
                       </TableCell>
                       <TableCell>

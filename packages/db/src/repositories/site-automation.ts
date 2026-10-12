@@ -114,7 +114,7 @@ export class PrismaSiteAutomationRepository implements SiteAutomationRepo {
     return { total: num(rows[0]?.total), pending: num(rows[0]?.pending) };
   }
 
-  async candidates(tenantId: string, crawlJobId: string): Promise<SiteAutomationCandidate[]> {
+  async candidates(tenantId: string, crawlJobId: string, limit: number): Promise<SiteAutomationCandidate[]> {
     return this.db.$queryRaw<SiteAutomationCandidate[]>`
       SELECT l.id AS "leadId", w.url AS "websiteUrl", w."finalUrl" AS "websiteFinalUrl", c.domain AS "domain"
       FROM "Lead" l
@@ -128,7 +128,7 @@ export class PrismaSiteAutomationRepository implements SiteAutomationRepo {
         )
         AND NOT EXISTS (SELECT 1 FROM "SiteSnapshot" s WHERE s."leadId" = l.id)
       ORDER BY l."createdAt" ASC, l.id ASC
-      LIMIT 1000`;
+      LIMIT ${Math.max(1, Math.floor(limit))}`;
   }
 
   async countAutoSince(tenantId: string, since: Date): Promise<number> {

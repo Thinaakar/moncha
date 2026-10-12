@@ -100,6 +100,8 @@ function setup(over: Partial<SiteSnapshotJobDeps> = {}, jobOver: Partial<JobRunR
     llmCompletionTokens: null,
     warnings: [],
     failureReason: null,
+    failureDetail: null,
+    attempts: 0,
     createdAt: new Date(),
     finishedAt: null,
     company: { id: 'c1', name: 'X Clinic Sdn Bhd', domain: 'x.com' },
@@ -207,7 +209,7 @@ function setup(over: Partial<SiteSnapshotJobDeps> = {}, jobOver: Partial<JobRunR
     status: 'running',
     payload: { snapshotId: 'snap1', leadId: 'lead1', url: 'https://x.com' },
     attempts: 1,
-    maxAttempts: 2,
+    maxAttempts: 3,
     runAfter: new Date(),
     ...jobOver,
   };
@@ -281,16 +283,52 @@ describe('runSiteSnapshotJob', () => {
     expect(outcome).toMatchObject({ status: 'retry', reason: 'render_failed' });
     expect(s.snapshot.status).toBe('pending');
     expect(s.jobPatches.at(-1)).toMatchObject({ status: 'pending', lastError: 'render_failed' });
+    expect(s.snapshot).toMatchObject({ failureReason: 'render_failed', failureDetail: null, attempts: 1 });
   });
 
-  it('fails permanently on robots or after the last attempt', async () => {
+  it('keeps the error message behind a failure, including its cause', async () => {
+    const dns = new Error('fetch failed', { cause: new Error('getaddrinfo ENOTFOUND x.com') });
+    const s = setup({ capturer: { capture: async () => Promise.reject(dns) } }, { attempts: 2 });
+    expect(await runSiteSnapshotJob(s.deps, { job: s.job })).toMatchObject({ status: 'retry', reason: 'unexpected_error' });
+    expect(s.snapshot).toMatchObject({
+      status: 'pending',
+      failureReason: 'unexpected_error',
+      failureDetail: 'fetch failed: getaddrinfo ENOTFOUND x.com',
+      attempts: 2,
+    });
+    expect(s.jobPatches.at(-1)).toMatchObject({ lastError: 'unexpected_error: fetch failed: getaddrinfo ENOTFOUND x.com' });
+  });
+
+  it('fails permanently on robots or after the third attempt', async () => {
     const robots = setup({ capturer: { capture: async () => Promise.reject(new SiteCaptureError('robots_disallowed')) } });
     expect(await runSiteSnapshotJob(robots.deps, { job: robots.job })).toMatchObject({ status: 'failed', reason: 'robots_disallowed' });
     expect(robots.snapshot).toMatchObject({ status: 'failed', failureReason: 'robots_disallowed' });
 
-    const last = setup({ capturer: { capture: async () => Promise.reject(new Error('boom')) } }, { attempts: 2 });
-    expect(await runSiteSnapshotJob(last.deps, { job: last.job })).toMatchObject({ status: 'failed' });
-    expect(last.jobPatches.at(-1)).toMatchObject({ status: 'failed' });
+    const last = setup({ capturer: { capture: async () => Promise.reject(new SiteCaptureError('fetch_failed', 'read ECONNRESET')) } }, { attempts: 3 });
+    expect(await runSiteSnapshotJob(last.deps, { job: last.job })).toMatchObject({ status: 'failed', reason: 'fetch_failed' });
+    expect(last.snapshot).toMatchObject({ status: 'failed', failureReason: 'fetch_failed', failureDetail: 'read ECONNRESET', attempts: 3 });
+    expect(last.jobPatches.at(-1)).toMatchObject({ status: 'failed', lastError: 'fetch_failed: read ECONNRESET' });
+  });
+
+  it('gives the attempt back when the worker shuts down', async () => {
+    const controller = new AbortController();
+    const s = setup(
+      {
+        capturer: {
+          capture: async () => {
+            controller.abort();
+            throw new SiteCaptureError('timeout', 'capture aborted');
+          },
+        },
+      },
+      { attempts: 2 },
+    );
+    expect(await runSiteSnapshotJob(s.deps, { job: s.job, signal: controller.signal })).toMatchObject({
+      status: 'retry',
+      reason: 'worker_shutdown',
+    });
+    expect(s.snapshot).toMatchObject({ status: 'pending', attempts: 1 });
+    expect(s.jobPatches.at(-1)).toMatchObject({ status: 'pending', attempts: 1, lastError: 'worker_shutdown' });
   });
 
   it('times out a capture that runs too long', async () => {
@@ -301,10 +339,11 @@ describe('runSiteSnapshotJob', () => {
             new Promise((_, reject) => signal?.addEventListener('abort', () => reject(new SiteCaptureError('timeout')))),
         },
       },
-      { attempts: 2 },
+      { attempts: 3 },
     );
-    const outcome = await runSiteSnapshotJob(s.deps, { job: s.job, timeoutMs: 20 });
+    const outcome = await runSiteSnapshotJob(s.deps, { job: s.job, timeoutMs: 2_000 });
     expect(outcome).toMatchObject({ status: 'failed', reason: 'timeout' });
+    expect(s.snapshot.failureDetail).toBe('The copy did not finish within 2 seconds');
   });
 
   it('skips a snapshot that is already done', async () => {
@@ -351,7 +390,7 @@ describe('queueSiteSnapshot', () => {
       tenantId: 't',
       leadId: 'l1',
       sourceUrl: 'https://clinic.my/',
-      maxAttempts: 2,
+      maxAttempts: 3,
       origin: 'manual',
     });
   });

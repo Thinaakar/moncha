@@ -241,7 +241,6 @@ function WebsiteCopiesCard() {
   const a = automation.data;
   const current = q?.running[0];
   const next = q?.waiting.slice(0, 3) ?? [];
-  const usedPct = a && a.today.cap > 0 ? Math.min(100, (a.today.used / a.today.cap) * 100) : 0;
   return (
     <Card>
       <CardHeader className="flex-row items-start">
@@ -305,19 +304,12 @@ function WebsiteCopiesCard() {
                     <span className={cn('size-2 rounded-full', a.enabled ? 'bg-success' : 'bg-muted-foreground/40')} />
                     Automation {a.enabled ? 'on' : 'off'}
                   </span>
-                  {a.enabled && (
-                    <span className="tabular-nums text-muted-foreground">
-                      {a.today.used} / {a.today.cap} today
-                    </span>
-                  )}
+                  {a.enabled && <span className="tabular-nums text-muted-foreground">{a.today.used} queued today</span>}
                 </div>
-                {a.enabled && (
-                  <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-background">
-                    <div className="h-full rounded-full bg-primary" style={{ width: `${usedPct}%` }} />
-                  </div>
-                )}
-                {a.enabled && a.carriedOver > 0 && (
-                  <p className="mt-1.5 text-xs text-warning">{a.carriedOver} qualified leads wait for tomorrow</p>
+                {a.enabled && a.waitingCrawls > 0 && (
+                  <p className="mt-1.5 text-xs text-muted-foreground">
+                    {a.waitingCrawls} crawl{a.waitingCrawls === 1 ? '' : 's'} waiting for audits
+                  </p>
                 )}
               </Link>
             )}

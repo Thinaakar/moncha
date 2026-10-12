@@ -33,11 +33,18 @@ export type SafeFetchOptions = {
   signal?: AbortSignal;
 };
 
+/** Node's fetch only says "fetch failed"; the cause holds the real reason, e.g. "getaddrinfo ENOTFOUND example.com". */
+export function describeFetchError(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  const cause = error.cause instanceof Error ? error.cause.message : typeof error.cause === 'string' ? error.cause : '';
+  return cause && !error.message.includes(cause) ? `${error.message}: ${cause}` : error.message;
+}
+
 async function readCapped(response: Response, maxBytes: number): Promise<Uint8Array> {
   const declared = Number(response.headers.get('content-length') ?? '');
   if (Number.isFinite(declared) && declared > maxBytes) {
     await response.body?.cancel().catch(() => undefined);
-    throw new SafeFetchError('too_large', `content-length ${declared}`);
+    throw new SafeFetchError('too_large', `page is ${declared} bytes, over the ${maxBytes} byte limit`);
   }
   const reader = response.body?.getReader();
   if (!reader) return new Uint8Array(await response.arrayBuffer());
@@ -49,7 +56,7 @@ async function readCapped(response: Response, maxBytes: number): Promise<Uint8Ar
     received += value.byteLength;
     if (received > maxBytes) {
       await reader.cancel().catch(() => undefined);
-      throw new SafeFetchError('too_large', `over ${maxBytes} bytes`);
+      throw new SafeFetchError('too_large', `page is over the ${maxBytes} byte limit`);
     }
     chunks.push(value);
   }
@@ -92,7 +99,7 @@ export async function safeFetch(rawUrl: string, options: SafeFetchOptions): Prom
 
       if (response.status >= 300 && response.status < 400 && response.headers.has('location')) {
         await response.body?.cancel().catch(() => undefined);
-        if (hop >= maxRedirects) throw new SafeFetchError('too_many_redirects');
+        if (hop >= maxRedirects) throw new SafeFetchError('too_many_redirects', `more than ${maxRedirects} redirects from ${rawUrl}`);
         redirects.push(url.toString());
         current = new URL(response.headers.get('location')!, url).toString();
         continue;
@@ -108,8 +115,8 @@ export async function safeFetch(rawUrl: string, options: SafeFetchOptions): Prom
       };
     } catch (error) {
       if (error instanceof SafeFetchError) throw error;
-      if (controller.signal.aborted) throw new SafeFetchError('timeout');
-      throw new SafeFetchError('fetch_error', error instanceof Error ? error.message.slice(0, 160) : String(error));
+      if (controller.signal.aborted) throw new SafeFetchError('timeout', `no answer from ${url.host} within ${Math.round(options.timeoutMs / 1000)} s`);
+      throw new SafeFetchError('fetch_error', describeFetchError(error).slice(0, 300));
     } finally {
       clearTimeout(timer);
       options.signal?.removeEventListener('abort', onAbort);

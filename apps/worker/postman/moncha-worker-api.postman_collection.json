@@ -429,11 +429,11 @@
           "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/site-automation" }
         },
         {
-          "name": "Turn copy automation on (cap 20)",
+          "name": "Turn copy automation on",
           "request": {
             "method": "PUT",
             "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": { "mode": "raw", "raw": "{\n  \"enabled\": true,\n  \"dailyCap\": 20\n}" },
+            "body": { "mode": "raw", "raw": "{\n  \"enabled\": true\n}" },
             "url": "{{baseUrl}}/api/v1/site-automation"
           },
           "event": [
