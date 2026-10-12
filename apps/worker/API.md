@@ -58,6 +58,8 @@ copies) were added on 2026-10-08.
 | 15 | POST | `/api/v1/leads/:id/audit` | Create + Update | Queue a website re-audit for a lead | 202 | Lead, Website, JobRun |
 | 16 | POST | `/api/v1/auth/register` | Create | Create an account and sign in | 201 | User, Session |
 | 17 | POST | `/api/v1/auth/login` | Create | Sign in with email and password, get a token | 200 | User (read), Session |
+| 17a | GET | `/api/v1/auth/demo` | Read | Whether one-click demo admin sign-in is on | 200 | none |
+| 17b | POST | `/api/v1/auth/demo` | Create | Sign in as the demo admin (only when `DEMO_LOGIN_ENABLED=true`) | 200 | User, Session |
 | 18 | POST | `/api/v1/auth/logout` | Update | Sign out (revoke the token) | 200 | Session |
 | 19 | GET | `/api/v1/auth/me` | Read | The signed-in user | 200 | Session, User |
 | 20 | PATCH | `/api/v1/auth/me` | Update | Change the signed-in user's name | 200 | Session, User |
@@ -969,6 +971,35 @@ curl -X POST https://moncha-backend.vinothjv4-tech.workers.dev/api/v1/auth/login
 |---|---|
 | 400 | `fieldErrors.password: ["Invalid input: expected string, received undefined"]` |
 | 401 | `{ "error": { "code": "unauthorized", "message": "Invalid email or password" } }` |
+
+### 17a. GET `/api/v1/auth/demo`
+
+**CRUD:** Read. Tells the console whether to show the "Sign in as demo admin" button. Controlled by the server env `DEMO_LOGIN_ENABLED` (default off).
+
+**200 OK**
+
+```json
+{ "enabled": true, "email": "demo-admin@moncha.local" }
+```
+
+When it is off: `{ "enabled": false, "email": null }`.
+
+### 17b. POST `/api/v1/auth/demo`
+
+**CRUD:** Create. Signs in as the tenant's demo admin, `demo-admin@moncha.local`, with role `admin`. No body. The account is created on first use with a random password nobody knows, so this route is the only way in. Anyone who can call it gets admin access, so keep `DEMO_LOGIN_ENABLED` off outside demos.
+
+```bash
+curl -X POST https://moncha-backend.vinothjv4-tech.workers.dev/api/v1/auth/demo
+```
+
+**200 OK**: a session object, the same shape as login, with `user.role: "admin"`.
+
+**Errors**
+
+| Status | Example |
+|---|---|
+| 404 | `{ "error": { "code": "not_found", "message": "Demo login is turned off" } }` |
+| 409 | `{ "error": { "code": "conflict", "message": "demo-admin@moncha.local exists but is not an admin" } }` |
 
 ### 18. POST `/api/v1/auth/logout`
 

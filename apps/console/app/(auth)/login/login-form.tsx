@@ -4,9 +4,9 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useState } from 'react';
-import { AlertCircle, Clock } from 'lucide-react';
-import { passwordLoginSchema, type PasswordLoginInput } from '@moncha/contracts';
+import { useEffect, useState } from 'react';
+import { AlertCircle, Clock, UserCog } from 'lucide-react';
+import { passwordLoginSchema, type DemoLoginStatus, type PasswordLoginInput } from '@moncha/contracts';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Field } from '@/components/app/field';
@@ -27,14 +27,41 @@ export function LoginForm() {
     defaultValues: { email: '', password: '' },
   });
 
+  const [demo, setDemo] = useState<DemoLoginStatus | null>(null);
+  const [demoLoading, setDemoLoading] = useState(false);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    request<DemoLoginStatus>('/api/auth/demo', { signal: controller.signal })
+      .then(setDemo)
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, []);
+
+  function goNext() {
+    router.replace(safeNext(params.get('next')));
+    router.refresh();
+  }
+
   async function onSubmit(values: PasswordLoginInput) {
     setError(null);
     try {
       await request('/api/auth/login', { method: 'POST', body: values });
-      router.replace(safeNext(params.get('next')));
-      router.refresh();
+      goNext();
     } catch (e) {
       setError(errorMessage(e, 'Sign in failed'));
+    }
+  }
+
+  async function onDemo() {
+    setError(null);
+    setDemoLoading(true);
+    try {
+      await request('/api/auth/demo', { method: 'POST' });
+      goNext();
+    } catch (e) {
+      setError(errorMessage(e, 'Demo sign in failed'));
+      setDemoLoading(false);
     }
   }
 
@@ -93,10 +120,35 @@ export function LoginForm() {
             {...form.register('password')}
           />
         </Field>
-        <Button type="submit" className="w-full" size="lg" loading={isSubmitting}>
+        <Button type="submit" className="w-full" size="lg" loading={isSubmitting} disabled={demoLoading}>
           Sign in
         </Button>
       </form>
+
+      {demo?.enabled && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-3 text-xs uppercase tracking-wide text-muted-foreground">
+            <span className="h-px flex-1 bg-border" />
+            or
+            <span className="h-px flex-1 bg-border" />
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full"
+            size="lg"
+            loading={demoLoading}
+            disabled={isSubmitting}
+            onClick={onDemo}
+          >
+            <UserCog />
+            Sign in as demo admin
+          </Button>
+          <p className="text-center text-xs text-muted-foreground">
+            No password needed. You will be signed in as {demo.email ?? 'the demo admin'} with full admin access.
+          </p>
+        </div>
+      )}
 
       <p className="text-center text-sm text-muted-foreground">
         New to MonCha?{' '}

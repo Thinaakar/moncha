@@ -358,6 +358,8 @@ export type ResolveReviewInput = z.infer<typeof resolveReviewSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type PasswordLoginInput = z.infer<typeof passwordLoginSchema>;
+/** `GET /api/v1/auth/demo`: whether one-click demo admin sign-in is turned on. */
+export type DemoLoginStatus = { enabled: boolean; email: string | null };
 export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>;
 export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;
 export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;

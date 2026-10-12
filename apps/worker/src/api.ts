@@ -21,6 +21,7 @@ import {
   siteSnapshotListQuerySchema,
   sourceImportSchema,
   updateProfileSchema,
+  type DemoLoginStatus,
   type SiteAutomationCrawl,
   type SiteAutomationState,
   type SiteManifest,
@@ -56,6 +57,8 @@ import {
   createManualLead,
   createSchedule,
   currentUser,
+  DEMO_ADMIN_EMAIL,
+  demoAdminLogin,
   loginUser,
   logoutUser,
   registerUser,
@@ -360,6 +363,21 @@ route('POST', '/api/v1/auth/register', async ({ tenantId, body }) => {
 route('POST', '/api/v1/auth/login', async ({ tenantId, body }) => {
   const input = passwordLoginSchema.parse(await body());
   return { json: await loginUser(auth, { ...input, tenantId }) };
+});
+
+// Anyone who can reach the console can use it, so it stays off unless DEMO_LOGIN_ENABLED=true.
+const demoLoginEnabled = () => process.env.DEMO_LOGIN_ENABLED?.trim().toLowerCase() === 'true';
+
+route('GET', '/api/v1/auth/demo', async () => {
+  const json: DemoLoginStatus = { enabled: demoLoginEnabled(), email: demoLoginEnabled() ? DEMO_ADMIN_EMAIL : null };
+  return { json };
+});
+
+route('POST', '/api/v1/auth/demo', async ({ tenantId }) => {
+  if (!demoLoginEnabled()) throw new HttpError(404, 'not_found', 'Demo login is turned off');
+  const session = await demoAdminLogin(auth, { tenantId });
+  logger.info('auth.demo_login', { tenantId, userId: session.user.id });
+  return { json: session };
 });
 
 route('POST', '/api/v1/auth/logout', async ({ req }) => ({ json: await logoutUser(auth, { token: tokenOf(req) }) }));
