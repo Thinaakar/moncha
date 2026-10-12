@@ -15,6 +15,7 @@ import { SearchInput } from '@/components/app/widgets';
 import { CopyError } from '@/components/sites/copy-error';
 import { OriginBadge } from '@/components/sites/automation';
 import { GithubStatusBadge } from '@/components/sites/github-push';
+import { LiveSiteLink } from '@/components/sites/live-site';
 import { TabBar } from '@/components/sites/tabs';
 import { siteFileUrl, useSiteAutomation, useSiteQueue, useSiteSnapshots } from '@/lib/queries';
 import { useUrlState } from '@/lib/use-url-state';
@@ -148,7 +149,7 @@ function CopiesPanel() {
         {sites.error ? (
           <ErrorState error={sites.error} onRetry={() => sites.refetch()} />
         ) : sites.isLoading || !sites.data ? (
-          <TableSkeleton rows={8} columns={7} />
+          <TableSkeleton rows={8} columns={8} />
         ) : sites.data.items.length === 0 ? (
           filtered ? (
             <EmptyState
@@ -188,6 +189,7 @@ function CopiesPanel() {
                   <TableHead>Started by</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Error</TableHead>
+                  <TableHead>Live site</TableHead>
                   <TableHead>GitHub</TableHead>
                   <TableHead className="text-right">Assets</TableHead>
                   <TableHead className="text-right">Size</TableHead>
@@ -236,6 +238,9 @@ function CopiesPanel() {
                         ) : (
                           <span className="text-muted-foreground">—</span>
                         )}
+                      </TableCell>
+                      <TableCell>
+                        <LiveSiteLink url={s.publicUrl} />
                       </TableCell>
                       <TableCell>
                         {s.github?.status === 'pushed' && (s.github.folderUrl || s.github.commitUrl) ? (

@@ -13,6 +13,8 @@ export type GitHubSitesConfig = {
   /** `owner/name` */
   repo: string;
   branch: string;
+  /** Inline text per tree request (default 3 MB); bigger copies are split over chained tree requests. */
+  inlineTreeMaxBytes?: number;
 };
 
 const API = 'https://api.github.com';
@@ -20,6 +22,25 @@ const REQUEST_TIMEOUT_MS = 30_000;
 const BLOB_CONCURRENCY = 4;
 /** Times the commit is rebuilt when another push moved the branch in between. */
 const REF_RACE_RETRIES = 3;
+/**
+ * GitHub allows about 500 content-creating requests an hour, so UTF-8 text files up to this size travel inside
+ * the tree request instead of costing one blob request each. Binary or larger files still get a blob.
+ */
+const INLINE_FILE_MAX_BYTES = 1024 * 1024;
+const INLINE_TREE_MAX_BYTES = 3 * 1024 * 1024;
+
+const utf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+
+type TreeEntry = { path: string; mode: '100644'; type: 'blob' } & ({ sha: string } | { content: string });
+
+function inlineText(bytes: Uint8Array): string | null {
+  if (bytes.byteLength > INLINE_FILE_MAX_BYTES || bytes.includes(0)) return null;
+  try {
+    return utf8.decode(bytes);
+  } catch {
+    return null;
+  }
+}
 
 function encodePath(path: string): string {
   return path.split('/').map(encodeURIComponent).join('/');
@@ -34,11 +55,13 @@ export class GitHubSitePublisher implements SiteGithubPublisher {
   readonly repo: string;
   readonly branch: string;
   private readonly token: string;
+  private readonly inlineTreeMaxBytes: number;
 
   constructor(config: GitHubSitesConfig) {
     this.repo = config.repo;
     this.branch = config.branch;
     this.token = config.token;
+    this.inlineTreeMaxBytes = config.inlineTreeMaxBytes ?? INLINE_TREE_MAX_BYTES;
   }
 
   private async call<T>(method: string, path: string, body: unknown, signal: AbortSignal | undefined): Promise<{ status: number; data: T }> {
@@ -113,6 +136,24 @@ export class GitHubSitePublisher implements SiteGithubPublisher {
     return shas;
   }
 
+  /** Blob entries go first; inline text is packed into tree requests of at most `inlineTreeMaxBytes`. */
+  private treeGroups(blobEntries: TreeEntry[], inlineEntries: Array<{ entry: TreeEntry; bytes: number }>): TreeEntry[][] {
+    const groups: TreeEntry[][] = [];
+    let current: TreeEntry[] = [...blobEntries];
+    let size = 0;
+    for (const { entry, bytes } of inlineEntries) {
+      if (size > 0 && size + bytes > this.inlineTreeMaxBytes) {
+        groups.push(current);
+        current = [];
+        size = 0;
+      }
+      current.push(entry);
+      size += bytes;
+    }
+    if (current.length) groups.push(current);
+    return groups;
+  }
+
   /**
    * Setup check: reads the repo, the branch and its head commit, then creates one unreferenced blob to prove
    * Contents write access. No commit is made and the branch does not move.
@@ -151,21 +192,35 @@ export class GitHubSitePublisher implements SiteGithubPublisher {
     if (!files.length) throw new SiteGithubError('nothing_to_push', 'No code files found for this copy', false);
 
     const refPath = `/git/ref/heads/${encodePath(this.branch)}`;
-    const blobs = await this.createBlobs(files, signal);
-    const tree = files.map((f) => ({ path: `${folder}/${f.path}`, mode: '100644', type: 'blob', sha: blobs.get(f.path)! }));
+    const inline: Array<{ path: string; content: string; bytes: number }> = [];
+    const binary: SiteGithubFile[] = [];
+    for (const file of files) {
+      const content = inlineText(file.bytes);
+      if (content === null) binary.push(file);
+      else inline.push({ path: file.path, content, bytes: file.bytes.byteLength });
+    }
+    const blobs = await this.createBlobs(binary, signal);
+    const groups = this.treeGroups(
+      binary.map((f) => ({ path: `${folder}/${f.path}`, mode: '100644', type: 'blob', sha: blobs.get(f.path)! })),
+      inline.map((f) => ({ entry: { path: `${folder}/${f.path}`, mode: '100644', type: 'blob', content: f.content }, bytes: f.bytes })),
+    );
 
     for (let attempt = 1; ; attempt++) {
       const { data: ref } = await this.call<{ object: { sha: string } }>('GET', refPath, undefined, signal);
       const headSha = ref.object.sha;
       const { data: head } = await this.call<{ tree: { sha: string } }>('GET', `/git/commits/${headSha}`, undefined, signal);
-      const { data: newTree } = await this.call<{ sha: string }>('POST', '/git/trees', { base_tree: head.tree.sha, tree }, signal);
+      let treeSha = head.tree.sha;
+      for (const tree of groups) {
+        const { data } = await this.call<{ sha: string }>('POST', '/git/trees', { base_tree: treeSha, tree }, signal);
+        treeSha = data.sha;
+      }
 
       let commitSha = headSha;
-      if (newTree.sha !== head.tree.sha) {
+      if (treeSha !== head.tree.sha) {
         const { data: commit } = await this.call<{ sha: string }>(
           'POST',
           '/git/commits',
-          { message: input.message, tree: newTree.sha, parents: [headSha] },
+          { message: input.message, tree: treeSha, parents: [headSha] },
           signal,
         );
         try {

@@ -16,6 +16,7 @@ import { failureText } from '@/components/sites/labels';
 import { formatEta, OriginBadge } from '@/components/sites/automation';
 import { CancelCopyButton } from '@/components/sites/cancel-copy';
 import { GithubLinkButton } from '@/components/sites/github-push';
+import { LiveSiteButton } from '@/components/sites/live-site';
 import { siteFileUrl, useCreateSiteSnapshot, useLeadSiteSnapshots, useSiteQueue } from '@/lib/queries';
 import { errorMessage } from '@/lib/api';
 import { formatBytes, formatNumber, formatRelative } from '@/lib/format';
@@ -168,6 +169,7 @@ export function WebsiteCopyCard({ leadId, hasWebsite }: { leadId: string; hasWeb
               <Link href={`/sites/${latest.id}`}>Open</Link>
             </Button>
           )}
+          <LiveSiteButton url={latest?.publicUrl} size="sm" />
           <GithubLinkButton github={latest?.github} size="sm" />
           {latest?.status === 'pending' && (
             <CancelCopyButton snapshotId={latest.id} company={latest.company?.name} origin={latest.origin} />

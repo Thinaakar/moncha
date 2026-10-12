@@ -1,0 +1,11 @@
+// Public demo links for website copies: https://moncha-sites.pages.dev/sites/{domain}/{copyId}/demo.html
+// The Function under functions/sites reads the copy's files from the worker's private R2 bucket; nothing is
+// built or uploaded per copy. Deploy: pnpm --filter @moncha/worker sites:deploy
+// Must stay .jsonc: Wrangler prefers apps/worker/wrangler.jsonc over a wrangler.toml in this folder.
+{
+  "name": "moncha-sites",
+  "pages_build_output_dir": "./public",
+  "compatibility_date": "2026-09-29",
+  "r2_buckets": [{ "binding": "SITES", "bucket_name": "moncha-site-previews" }],
+  "vars": { "TENANT_ID": "tenant_moncha_internal" }
+}

@@ -1823,6 +1823,27 @@ worker runs the same check once at start-up and logs it as `site_github_check`.
 `error` explains a failed step, e.g. `github_bad_token: …`, `github_forbidden: Token cannot write …` (read-only
 token), `github_not_found: …` (no access to the repo) or `github_branch_missing: …` (empty repo).
 
+### 41b. Public demo links (`publicUrl`)
+
+Every copy summary (lists, lead copies, copy detail) has `publicUrl`: a public, no-login link to the copy's
+`demo.html`, or `null` when the copy is not `done` or `SITE_PUBLIC_BASE_URL` is not set.
+
+```
+https://moncha-sites.pages.dev/sites/{domain}/{copyId}/demo.html
+```
+
+The links are served by the Cloudflare Pages project in `apps/worker/sites-pages`: a Pages Function bound to the
+R2 bucket reads `sites/{tenantId}/{copyId}/{file}` and returns it as is, so the relative asset links in `demo.html`
+resolve to the same copy. There is no build or deploy per copy; a copy is live the moment it is `done`.
+
+- GET and HEAD only. `/sites/{domain}/{copyId}/` redirects to `demo.html`. Unknown copies or files return 404.
+- Every response has `x-robots-tag: noindex, nofollow, noarchive` and `robots.txt` disallows all crawling.
+- `source.html` and `rendered.html` are served as plain text so the captured scripts never run from them.
+- Responses are cached for 1 hour (`cache-control: public, max-age=3600`) and support `if-none-match`.
+
+Deploy (from `apps/worker`, Wrangler logged in): `pnpm sites:deploy`. First time only:
+`wrangler pages project create moncha-sites --production-branch main`. Local preview: `pnpm sites:dev`.
+
 ---
 
 ## Copy automation

@@ -11,6 +11,7 @@ import { copyAttemptsSummary } from '@/components/sites/copy-error';
 import { failureText, warningText } from '@/components/sites/labels';
 import { OriginBadge } from '@/components/sites/automation';
 import { GithubDetailsCard } from '@/components/sites/github-push';
+import { LiveSiteLink } from '@/components/sites/live-site';
 import { siteFileUrl, useJob } from '@/lib/queries';
 import { formatBytes, formatDateTime, formatDuration, formatNumber, humanize } from '@/lib/format';
 import type { SiteSnapshotDetail } from '@/lib/types';
@@ -68,6 +69,11 @@ export function SnapshotDetails({ snapshot }: { snapshot: SiteSnapshotDetail }) 
                   )}
                 </span>
               </DetailRow>
+              {snapshot.publicUrl && (
+                <DetailRow label="Live site">
+                  <LiveSiteLink url={snapshot.publicUrl} full />
+                </DetailRow>
+              )}
               <DetailRow label="Requested">{formatDateTime(snapshot.createdAt)}</DetailRow>
               <DetailRow label="Started">{formatDateTime(job?.startedAt)}</DetailRow>
               <DetailRow label="Finished">{formatDateTime(snapshot.finishedAt)}</DetailRow>

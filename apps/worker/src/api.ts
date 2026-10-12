@@ -96,7 +96,9 @@ import {
   SITE_GITHUB_MAX_ATTEMPTS,
   SiteGithubRequestError,
   updateSiteAutomationSettings,
+  publicSiteUrl,
   signPreviewToken,
+  siteGithubDomain,
   siteStoragePrefix,
   SiteSnapshotRequestError,
   verifyPreviewToken,
@@ -480,6 +482,13 @@ async function previewBaseFor(snapshot: SiteSnapshotRecord): Promise<string | nu
 const summarize = async (snapshot: SiteSnapshotRecord | SiteSnapshotListItem) =>
   siteSummary(snapshot, await previewBaseFor(snapshot));
 
+/** Public demo link on the sites Pages project, which serves the copy's R2 files directly. */
+function publicUrlFor(snapshot: SiteSnapshotRecord | SiteSnapshotListItem): string | null {
+  const base = siteAgentConfig().publicBaseUrl;
+  if (!base || snapshot.status !== 'done' || !('company' in snapshot)) return null;
+  return publicSiteUrl(base, siteGithubDomain(snapshot), snapshot.id);
+}
+
 function siteSummary(snapshot: SiteSnapshotRecord | SiteSnapshotListItem, previewBase: string | null): SiteSnapshotSummary {
   return {
     id: snapshot.id,
@@ -521,6 +530,7 @@ function siteSummary(snapshot: SiteSnapshotRecord | SiteSnapshotListItem, previe
           pushedAt: snapshot.githubPushedAt?.toISOString() ?? null,
         }
       : null,
+    publicUrl: publicUrlFor(snapshot),
   };
 }
 

@@ -147,8 +147,9 @@ export class PrismaSiteSnapshotRepository implements SiteSnapshotRepo {
       where: { tenantId, leadId },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: Math.min(100, Math.max(1, limit)),
+      include: companySelect,
     });
-    return rows.map(mapSnapshot);
+    return rows.map(mapListItem);
   }
 
   async list(tenantId: string, query: SiteSnapshotListQuery) {

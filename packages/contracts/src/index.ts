@@ -441,6 +441,11 @@ export type SiteSnapshotSummary = {
   thumbnailPath: string | null;
   /** GitHub push of the code files; null when never queued. Older API versions omit it. */
   github?: SiteGithubPush | null;
+  /**
+   * Public demo link (`https://moncha-sites.pages.dev/sites/{domain}/{copyId}/demo.html`) once done; null while
+   * running, after a failure or when the worker has no SITE_PUBLIC_BASE_URL. Older API versions omit it.
+   */
+  publicUrl?: string | null;
 };
 
 /**

@@ -18,9 +18,22 @@ export type SiteAgentConfig = {
   model: string | undefined;
   llmTimeoutMs: number;
   limits: { maxAssets: number; maxFileBytes: number; maxTotalBytes: number };
+  /** Origin of the sites Pages project that serves public demo links; null hides the links. */
+  publicBaseUrl: string | null;
   /** R2 and the preview secret are both required; otherwise copies cannot be stored or viewed. */
   ready: boolean;
 };
+
+function publicBaseUrl(raw: string | undefined): string | null {
+  const value = raw?.trim();
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' || url.protocol === 'http:' ? url.origin : null;
+  } catch {
+    return null;
+  }
+}
 
 let cached: SiteAgentConfig | null = null;
 
@@ -42,6 +55,7 @@ export function siteAgentConfig(): SiteAgentConfig {
       maxFileBytes: num('SITE_MAX_FILE_MB', 10, 1) * MB,
       maxTotalBytes: num('SITE_MAX_TOTAL_MB', 80, 1) * MB,
     },
+    publicBaseUrl: publicBaseUrl(process.env.SITE_PUBLIC_BASE_URL),
     ready: Boolean(store && previewSecret),
   };
   return cached;

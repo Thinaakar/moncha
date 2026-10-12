@@ -929,6 +929,11 @@ Editor-only connectivity check of the sites repo: `{ configured, keys, repo, bra
 canWrite, branchHead, folderPattern, error, checkedAt }`. Write access is proven by creating an unreferenced blob, so
 the branch never moves. `keys` holds booleans only; the token is never returned. See `apps/worker/API.md` §41a.
 
+#### 26b. Public demo links
+Copy summaries carry `publicUrl` (`{SITE_PUBLIC_BASE_URL}/sites/{domain}/{copyId}/demo.html`, or `null` until the
+copy is `done`). The Cloudflare Pages project in `apps/worker/sites-pages` serves these straight from the R2 bucket.
+See `apps/worker/API.md` §41b.
+
 ---
 
 ## 6. Testing with Postman

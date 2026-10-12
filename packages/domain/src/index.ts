@@ -28,4 +28,5 @@ export * from './discovery/schedule-time';
 export * from './discovery/industries';
 export * from './site/demo-injection';
 export * from './site/preview-token';
+export * from './site/public-site';
 export * from './site/evidence-brand';
