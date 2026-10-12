@@ -6,6 +6,7 @@ import {
   countryDiscoverySchema,
   forgotPasswordSchema,
   jobListQuerySchema,
+  leadExportQuerySchema,
   leadListQuerySchema,
   manualLeadSchema,
   passwordLoginSchema,
@@ -59,6 +60,8 @@ import {
   currentUser,
   DEMO_ADMIN_EMAIL,
   demoAdminLogin,
+  leadCsvChunks,
+  leadExportFilename,
   loginUser,
   logoutUser,
   registerUser,
@@ -264,6 +267,20 @@ route('GET', '/api/v1/leads', async ({ tenantId, url }) => {
   const q = leadListQuerySchema.parse(query(url, 'page', 'pageSize', 'search', 'country', 'queue'));
   // queue=ALL (parsed to undefined) must list every lead, including chatbot sites.
   return { json: await leads.list(tenantId, { ...q, omitChatbotSites: q.queue ? omitChatbotSitesEnabled() : false }) };
+});
+
+// Registered before /leads/:id so "export" is not read as a lead id.
+route('GET', '/api/v1/leads/export', async ({ tenantId, url }) => {
+  const q = leadExportQuerySchema.parse(query(url, 'search', 'country', 'queue'));
+  const batches = leads.exportBatches(tenantId, { ...q, omitChatbotSites: q.queue ? omitChatbotSitesEnabled() : false });
+  const filename = leadExportFilename(q.queue, new Date());
+  return {
+    raw: {
+      body: leadCsvChunks(batches),
+      contentType: 'text/csv; charset=utf-8',
+      headers: { 'content-disposition': `attachment; filename="${filename}"`, 'cache-control': 'no-store' },
+    },
+  };
 });
 
 route('GET', '/api/v1/leads/counts', async ({ tenantId }) => ({ json: await leads.queueCounts(tenantId) }));

@@ -152,6 +152,9 @@ export const leadListQuerySchema = z.object({
   method: auditMethodSchema.optional(),
 });
 
+/** `GET /api/v1/leads/export`: the list filters without paging; the CSV holds every matching lead. */
+export const leadExportQuerySchema = leadListQuerySchema.pick({ search: true, country: true, queue: true });
+
 export const jobTypeSchema = z.enum([
   'places_discovery',
   'csv_import',

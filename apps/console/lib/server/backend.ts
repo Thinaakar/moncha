@@ -7,11 +7,11 @@ export function errorResponse(status: number, code: string, message: string) {
 }
 
 /**
- * Raw GET to the backend for streamed bodies (website copy files). Returns the backend response
- * untouched, or null when the backend is unreachable or too slow to answer.
+ * Raw GET to the backend for streamed bodies (website copy files, CSV exports). Returns the backend
+ * response untouched, or null when the backend is unreachable or too slow to answer.
  */
-export async function streamBackend(path: string, init: { timeoutMs?: number } = {}) {
-  const headers = backendHeaders();
+export async function streamBackend(path: string, init: { timeoutMs?: number; token?: string } = {}) {
+  const headers = backendHeaders(init.token);
   headers.set('accept', '*/*');
   const started = Date.now();
   try {

@@ -4,8 +4,10 @@ import type {
   LeadListQuery,
   LeadQualificationPatch,
   LeadRepo,
+  LeadExportRow,
   QueueCounts,
 } from '@moncha/domain';
+import { LEAD_EXPORT_BATCH } from '@moncha/domain';
 import { leadListPagination, leadListWhere } from '../lead-query';
 
 const leadInclude = {
@@ -13,6 +15,27 @@ const leadInclude = {
     include: {
       website: true,
       sourceRecords: true,
+    },
+  },
+} as const;
+
+const leadExportSelect = {
+  id: true,
+  queue: true,
+  assistantVerdict: true,
+  assistantVendor: true,
+  qualificationReason: true,
+  createdAt: true,
+  company: {
+    select: {
+      name: true,
+      domain: true,
+      phone: true,
+      address: true,
+      city: true,
+      country: true,
+      website: { select: { url: true, finalUrl: true, status: true } },
+      sourceRecords: { select: { source: true }, orderBy: { createdAt: 'asc' }, take: 1 },
     },
   },
 } as const;
@@ -69,6 +92,24 @@ export class PrismaLeadRepository implements LeadRepo {
       pageSize,
       totalPages: total === 0 ? 0 : Math.ceil(total / pageSize),
     };
+  }
+
+  /** Every lead matching the list filters (no paging), newest first, read in batches by cursor. */
+  async *exportBatches(tenantId: string, query: LeadListQuery, batchSize = LEAD_EXPORT_BATCH): AsyncGenerator<LeadExportRow[]> {
+    const where = leadListWhere(tenantId, { ...query, method: undefined });
+    let cursor: string | undefined;
+    for (;;) {
+      const batch: LeadExportRow[] = await this.db.lead.findMany({
+        where,
+        select: leadExportSelect,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: batchSize,
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      });
+      if (batch.length) yield batch;
+      if (batch.length < batchSize) return;
+      cursor = batch[batch.length - 1]!.id;
+    }
   }
 
   async applyQualification(tenantId: string, leadId: string, data: LeadQualificationPatch) {

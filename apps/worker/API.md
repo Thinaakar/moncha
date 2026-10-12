@@ -52,6 +52,7 @@ copies) were added on 2026-10-08.
 | 10 | GET | `/api/v1/jobs/:id` | Read | Status of any background job | 200 | JobRun |
 | 10a | GET | `/api/v1/jobs` | Read | Paginated list of background jobs | 200 | JobRun |
 | 11 | GET | `/api/v1/leads` | Read | Paginated lead list with filters | 200 | Lead, Company, Website |
+| 11a | GET | `/api/v1/leads/export` | Read | Every lead matching the filters as a CSV file | 200 | Lead, Company, Website, SourceRecord |
 | 12 | GET | `/api/v1/leads/counts` | Read | Number of leads per queue | 200 | Lead |
 | 13 | GET | `/api/v1/leads/:id` | Read | One lead with company and website | 200 | Lead, Company, Website |
 | 14 | POST | `/api/v1/leads` | Create (or Update if duplicate) | Add a lead manually | 201 / 200 | Company, SourceRecord, Lead, Website, JobRun |
@@ -697,6 +698,25 @@ curl "https://moncha-backend.vinothjv4-tech.workers.dev/api/v1/leads?queue=ALL&p
   }
 }
 ```
+
+### 11a. GET `/api/v1/leads/export`
+
+**CRUD:** Read. Every lead that matches the filters, as one CSV file (no paging). It takes the same `queue`, `search`
+and `country` as the lead list, so `queue=QUALIFIED` gives every qualified lead and `queue=ALL` every lead. The rows
+are streamed newest first, in batches of 1000.
+
+```bash
+curl -o leads.csv "https://moncha-backend.vinothjv4-tech.workers.dev/api/v1/leads/export?queue=QUALIFIED&country=Singapore"
+```
+
+**200 OK** with `content-type: text/csv; charset=utf-8` and
+`content-disposition: attachment; filename="moncha-leads-qualified-2026-10-12.csv"`. The file starts with a UTF-8
+byte order mark so Excel shows Japanese and Chinese names correctly. Columns:
+
+`Company, Domain, Website, Phone, Address, City, Country, Queue, Assistant, Assistant vendor, Website status, Source, Reason, Added, Lead ID`
+
+`Added` is an ISO timestamp. Cells that a spreadsheet would run as a formula (starting with `=`, `+`, `-` or `@`) get
+a leading `'`, except plain phone numbers. **400** for an invalid `queue`, same as the list.
 
 ### 12. GET `/api/v1/leads/counts`
 

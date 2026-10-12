@@ -82,3 +82,30 @@ export async function request<T>(
 export function api<T>(path: string, init?: Parameters<typeof request>[1]) {
   return request<T>(`/api/proxy/${path.replace(/^\/+/, '')}`, init);
 }
+
+/**
+ * Downloads a backend file (e.g. a CSV export) through the proxy and saves it under the name the
+ * backend sends in content-disposition. Errors come back as the usual ApiError.
+ */
+export async function downloadFile(path: string, init: { query?: Query; fallbackName: string }) {
+  const res = await fetch(withQuery(`/api/proxy/${path.replace(/^\/+/, '')}`, init.query), {
+    cache: 'no-store',
+    credentials: 'same-origin',
+  });
+  if (!res.ok) {
+    const data = (await parse(res)) as { error?: { code?: string; message?: string } } | null;
+    if (res.status === 401) {
+      const next = encodeURIComponent(window.location.pathname + window.location.search);
+      window.location.assign(`/login?next=${next}&expired=1`);
+    }
+    throw new ApiError(res.status, data?.error?.code ?? 'http_error', data?.error?.message ?? `Download failed (${res.status})`);
+  }
+  const name = /filename="([^"]+)"/.exec(res.headers.get('content-disposition') ?? '')?.[1] ?? init.fallbackName;
+  const href = URL.createObjectURL(await res.blob());
+  const link = Object.assign(document.createElement('a'), { href, download: name });
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(href), 10_000);
+  return name;
+}

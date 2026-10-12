@@ -12,6 +12,8 @@ const READ_TIMEOUT_MS = 30_000;
 const WRITE_TIMEOUT_MS = 60_000;
 const IMPORT_TIMEOUT_MS = 120_000;
 const SITE_FILE_TIMEOUT_MS = 60_000;
+const DOWNLOAD_PATHS = new Set(['leads/export']);
+const DOWNLOAD_TIMEOUT_MS = 180_000;
 const SITE_FILE_HEADERS = ['content-type', 'content-length', 'cache-control', 'content-disposition'];
 const PREVIEW_TOKEN_RE = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 
@@ -58,6 +60,22 @@ async function siteFile(req: NextRequest, path: string[]) {
   return new Response(req.method === 'HEAD' ? null : res.body, { status: res.status, headers });
 }
 
+/** File downloads (CSV exports): the body streams through instead of being parsed as JSON. */
+async function download(req: NextRequest, joined: string, token: string) {
+  if (req.method !== 'GET') return errorResponse(405, 'method_not_allowed', 'Read only');
+  const res = await streamBackend(`/api/v1/${joined}${req.nextUrl.search}`, { token, timeoutMs: DOWNLOAD_TIMEOUT_MS });
+  if (!res) return errorResponse(502, 'backend_unreachable', 'Cannot reach the backend service');
+
+  const headers = new Headers({ 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
+  for (const name of ['content-type', 'content-disposition']) {
+    const value = res.headers.get(name);
+    if (value) headers.set(name, value);
+  }
+  const response = new NextResponse(res.body, { status: res.status, headers });
+  if (res.status === 401) response.cookies.delete(SESSION_COOKIE);
+  return response;
+}
+
 async function forward(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
   const { path } = await ctx.params;
   if (path.some((segment) => segment === '..' || segment === '.' || segment.includes('\\'))) {
@@ -69,6 +87,7 @@ async function forward(req: NextRequest, ctx: { params: Promise<{ path: string[]
 
   const token = req.cookies.get(SESSION_COOKIE)?.value;
   if (!token && !PUBLIC_PATHS.has(joined)) return errorResponse(401, 'unauthorized', 'Sign in to continue');
+  if (DOWNLOAD_PATHS.has(joined)) return download(req, joined, token!);
 
   const hasBody = req.method !== 'GET' && req.method !== 'HEAD';
   const body = hasBody ? await req.text() : null;

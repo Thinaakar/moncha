@@ -2,7 +2,9 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { ExternalLink, Globe, MapPin, Plus, SearchX, Users } from 'lucide-react';
+import { useState } from 'react';
+import { Download, ExternalLink, Globe, MapPin, Plus, SearchX, Users } from 'lucide-react';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -14,6 +16,7 @@ import { QUEUES, QueueBadge, VerdictBadge, WebsiteStatusBadge } from '@/componen
 import { SearchInput } from '@/components/app/widgets';
 import { useDiscoveryOptions, useLeads, useQueueCounts } from '@/lib/queries';
 import { useUrlState } from '@/lib/use-url-state';
+import { downloadFile, errorMessage } from '@/lib/api';
 import { formatNumber, formatRelative, humanize } from '@/lib/format';
 import type { LeadQueue } from '@/lib/types';
 import { cn } from '@/lib/utils';
@@ -37,17 +40,47 @@ export function LeadsView() {
   const activeQueue = QUEUES.find((q) => q.value === queue);
   const filtered = Boolean(search || country);
 
+  const [downloading, setDownloading] = useState(false);
+  const exportCount = leads.data?.total;
+  const exportLabel = `${formatNumber(exportCount ?? 0)} ${activeQueue ? `${activeQueue.label.toLowerCase()} ` : ''}lead${exportCount === 1 ? '' : 's'}${filtered ? ' matching the filters' : ''}`;
+
+  async function downloadCsv() {
+    setDownloading(true);
+    try {
+      const name = await downloadFile('leads/export', {
+        query: { queue, search: search || undefined, country: country || undefined },
+        fallbackName: 'moncha-leads.csv',
+      });
+      toast.success(exportCount === undefined ? 'Leads downloaded' : `Downloaded ${exportLabel}`, { description: name });
+    } catch (e) {
+      toast.error('Could not download leads', { description: errorMessage(e) });
+    } finally {
+      setDownloading(false);
+    }
+  }
+
   return (
     <div>
       <PageHeader
         title="Leads"
         description={activeQueue ? activeQueue.description : 'Every company discovered or imported, across all queues.'}
         actions={
-          <Button asChild>
-            <Link href="/leads/new">
-              <Plus /> Add lead
-            </Link>
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              onClick={downloadCsv}
+              loading={downloading}
+              disabled={exportCount === 0}
+              title={exportCount === undefined ? 'Download leads as CSV' : `Download ${exportLabel} as CSV`}
+            >
+              <Download /> Download
+            </Button>
+            <Button asChild>
+              <Link href="/leads/new">
+                <Plus /> Add lead
+              </Link>
+            </Button>
+          </div>
         }
       />
 

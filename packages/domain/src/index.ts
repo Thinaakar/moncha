@@ -8,6 +8,7 @@ export * from './llm-combine';
 export * from './use-cases/ingestDiscoveredRecord';
 export * from './use-cases/discoverCompanies';
 export * from './use-cases/createManualLead';
+export * from './use-cases/leadExport';
 export * from './use-cases/importCsvRecords';
 export * from './use-cases/auditLeadWebsite';
 export * from './use-cases/runPlacesDiscovery';

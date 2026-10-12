@@ -123,7 +123,8 @@ async function readJson(request: Request): Promise<unknown> {
   }
 }
 
-const SITE_ROUTE_RE = /^\/api\/v1\/(site-snapshots|site-files|site-automation)(\/|$)|^\/api\/v1\/leads\/[^/]+\/site-snapshots$/;
+const SITE_ROUTE_RE =
+  /^\/api\/v1\/(site-snapshots|site-files|site-automation)(\/|$)|^\/api\/v1\/leads\/[^/]+\/site-snapshots$|^\/api\/v1\/leads\/export$/;
 
 export async function handleNeonApi(
   request: Request,

@@ -90,6 +90,7 @@ Common error codes:
 | **7** | `/api/v1/discovery/country` | `POST` | **CREATE** | Enqueues an immediate country-wide crawl job |
 | **8** | `/api/v1/jobs/:id` | `GET` | **READ** | Polls the status and result of a background job |
 | **9** | `/api/v1/leads` | `GET` | **READ** | Paginated query of leads with queue, search, and vendor filters |
+| **9a** | `/api/v1/leads/export` | `GET` | **READ** | Every lead matching `queue`, `search` and `country` as a CSV download (see `apps/worker/API.md` §11a) |
 | **10** | `/api/v1/leads/counts` | `GET` | **READ** | Real-time counts across all 6 queues + open review tasks |
 | **11** | `/api/v1/leads` | `POST` | **CREATE / UPDATE** | Manually creates or enriches a lead by domain |
 | **12** | `/api/v1/leads/:id` | `GET` | **READ** | Detailed view of a lead, company, website, and audits |
