@@ -45,6 +45,15 @@ function sameTopics(a: string[] | undefined, b: string[]): boolean {
   return [...(a ?? [])].sort().join(',') === [...b].sort().join(',');
 }
 
+/** `retry-after` (seconds, secondary limits) or `x-ratelimit-reset` (epoch seconds, primary limit). */
+export function rateLimitRetryAt(headers: Headers, now = Date.now()): Date | undefined {
+  const after = Number(headers.get('retry-after'));
+  if (Number.isFinite(after) && after > 0) return new Date(now + after * 1000);
+  const reset = Number(headers.get('x-ratelimit-reset'));
+  if (headers.get('x-ratelimit-remaining') === '0' && Number.isFinite(reset) && reset * 1000 > now) return new Date(reset * 1000);
+  return undefined;
+}
+
 /**
  * One website, one private repo: creates `{owner}/{name}` when it is missing, then pushes the copy as a single
  * commit with the git CLI (one push per copy, however many images it has). The commit's tree is exactly the
@@ -102,7 +111,13 @@ export class GitHubSiteRepoPublisher implements SiteGithubPublisher {
     if (status === 401) return new SiteGithubError('github_bad_token', 'GitHub rejected GITHUB_TOKEN (expired or revoked)');
     if (status === 403 || status === 429) {
       if (status === 429 || response.headers.get('x-ratelimit-remaining') === '0' || /rate limit/i.test(message)) {
-        return new SiteGithubError('github_rate_limited', 'GitHub rate limit reached');
+        const retryAt = rateLimitRetryAt(response.headers);
+        return new SiteGithubError(
+          'github_rate_limited',
+          `GitHub rate limit reached${retryAt ? ` until ${retryAt.toISOString()}` : ''}: ${message}`,
+          true,
+          retryAt,
+        );
       }
       if (method === 'POST' && path.endsWith('/repos')) {
         return new SiteGithubError(

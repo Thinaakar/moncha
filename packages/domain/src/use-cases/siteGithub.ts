@@ -133,7 +133,11 @@ export type SiteGithubPushDeps = {
 
 export type SiteGithubPushOutcome =
   | { status: 'pushed'; snapshotId: string; repo: string; commitUrl: string; files: number }
-  | { status: 'retry' | 'failed'; snapshotId: string; error: string };
+  | { status: 'retry' | 'failed'; snapshotId: string; error: string }
+  | { status: 'rate_limited'; snapshotId: string; error: string; retryAt: Date };
+
+/** Wait after a GitHub rate limit that did not say how long (its secondary limits often don't). */
+export const SITE_GITHUB_RATE_LIMIT_WAIT_MS = 15 * 60_000;
 
 const FILE_READ_CONCURRENCY = 6;
 
@@ -255,6 +259,20 @@ export async function pushSiteSnapshotToGithub(
     return { status: 'pushed', snapshotId, repo: result.repo, commitUrl: result.commitUrl, files: files.length };
   } catch (error) {
     const { code, text, retryable } = errorText(error);
+    if (code === 'github_rate_limited') {
+      // The account is limited, not this copy: the claim's try is given back and the copy waits for the limit.
+      const retryAt =
+        (error as SiteGithubError).retryAt ?? new Date(now().getTime() + SITE_GITHUB_RATE_LIMIT_WAIT_MS);
+      await deps.snapshots.update(tenantId, snapshotId, {
+        githubStatus: 'pending',
+        githubAttempts: Math.max(0, snapshot.githubAttempts - 1),
+        githubError: text,
+        githubNextAt: retryAt,
+        githubLockedAt: null,
+      });
+      deps.logger.error('site_github_rate_limited', { snapshotId, tenantId, retryAt: retryAt.toISOString(), error: text });
+      return { status: 'rate_limited', snapshotId, error: text, retryAt };
+    }
     const shutdown = code === 'worker_shutdown' || Boolean(signal?.aborted);
     const next = retryAfterError({
       attempts: snapshot.githubAttempts,

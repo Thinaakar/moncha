@@ -466,12 +466,16 @@ export class SiteDeployError extends Error {
   }
 }
 
-/** `retryable` is false when trying again cannot help without someone changing something (e.g. the copy's files are gone). */
+/**
+ * `retryable` is false when trying again cannot help without someone changing something (e.g. the copy's files are gone).
+ * `retryAt` is when GitHub allows requests again after a rate limit, when it said so.
+ */
 export class SiteGithubError extends Error {
   constructor(
     readonly code: string,
     message?: string,
     readonly retryable = true,
+    readonly retryAt?: Date,
   ) {
     super(message ?? code);
     this.name = 'SiteGithubError';

@@ -14,6 +14,7 @@ import {
   requestSiteGithubPush,
   SITE_GITHUB_BACKOFF_MS,
   SITE_GITHUB_MAX_ATTEMPTS,
+  SITE_GITHUB_RATE_LIMIT_WAIT_MS,
   SITE_REPO_TOPIC,
   siteGithubDomain,
   siteName,
@@ -228,6 +229,30 @@ describe('site repo', () => {
     const outcome = await pushSiteSnapshotToGithub(deps, snapshot({ githubAttempts: 3, githubError: 'old' }), controller.signal);
     expect(outcome.status).toBe('retry');
     expect(patches[0]).toMatchObject({ githubStatus: 'pending', githubAttempts: 2, githubError: 'old', githubNextAt: NOW });
+  });
+
+  it('waits for a rate limit without using up a try', async () => {
+    const until = new Date(NOW.getTime() + 42 * 60_000);
+    const { deps, patches } = setup(async () => {
+      throw new SiteGithubError('github_rate_limited', 'limited', true, until);
+    });
+    const outcome = await pushSiteSnapshotToGithub(deps, snapshot({ githubAttempts: SITE_GITHUB_MAX_ATTEMPTS }));
+    expect(outcome).toMatchObject({ status: 'rate_limited', retryAt: until });
+    expect(patches[0]).toMatchObject({
+      githubStatus: 'pending',
+      githubAttempts: SITE_GITHUB_MAX_ATTEMPTS - 1,
+      githubNextAt: until,
+      githubLockedAt: null,
+    });
+  });
+
+  it('waits a default time when GitHub does not say how long the rate limit lasts', async () => {
+    const { deps, patches } = setup(async () => {
+      throw new SiteGithubError('github_rate_limited', 'limited');
+    });
+    const outcome = await pushSiteSnapshotToGithub(deps, snapshot({ githubAttempts: 1 }));
+    expect(outcome.status).toBe('rate_limited');
+    expect(patches[0]).toMatchObject({ githubAttempts: 0, githubNextAt: new Date(NOW.getTime() + SITE_GITHUB_RATE_LIMIT_WAIT_MS) });
   });
 
   it('maps a push request that cannot run to an error', async () => {

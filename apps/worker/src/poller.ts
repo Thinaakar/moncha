@@ -87,6 +87,8 @@ const siteBrandExtractor = llm
 const activeSiteSnapshots = new Set<Promise<void>>();
 const githubPublisher = siteGithubPublisher();
 let activeGithubPush: Promise<void> | null = null;
+/** Set by a GitHub rate limit: no pushes start before then, so the limit is not extended. */
+let githubPausedUntil: Date | null = null;
 const workerDeployer = siteWorkerDeployer();
 let activeWorkerDeploy: Promise<void> | null = null;
 const siteSnapshots = new PrismaSiteSnapshotRepository(prisma);
@@ -274,6 +276,7 @@ function startSiteSnapshot(job: JobRunRecord, store: SiteStore) {
 async function githubTick() {
   if (!githubPublisher || !siteAgent.store || activeGithubPush || crawlAbort.signal.aborted) return;
   const now = new Date();
+  if (githubPausedUntil && now < githubPausedUntil) return;
   const snapshot = await withDbRetry(() => siteSnapshots.claimGithubPush(now, new Date(now.getTime() - SITE_GITHUB_STALE_MS)));
   if (!snapshot) return;
   const store = siteAgent.store;
@@ -288,7 +291,13 @@ async function githubTick() {
     snapshot,
     crawlAbort.signal,
   )
-    .then((outcome) => logger.info('site_github_outcome', { ...outcome }))
+    .then((outcome) => {
+      logger.info('site_github_outcome', { ...outcome });
+      if (outcome.status === 'rate_limited') {
+        githubPausedUntil = outcome.retryAt;
+        logger.info('site_github_paused', { until: outcome.retryAt.toISOString() });
+      }
+    })
     .catch((error) =>
       logger.error('site_github_error', { snapshotId: snapshot.id, message: error instanceof Error ? error.message : String(error) }),
     )

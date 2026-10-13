@@ -1782,6 +1782,10 @@ The summary's `github` object:
 | 409 | `push_in_progress` | The worker is pushing this copy right now |
 | 503 | `github_not_configured` | `GITHUB_TOKEN` or the owner missing |
 
+A GitHub rate limit (`github_rate_limited`) does not use up a try: the copy waits until the time GitHub gives
+(`retry-after` or `x-ratelimit-reset`, else 15 min) and the worker starts no GitHub push before then, so creating
+hundreds of repos goes at the pace GitHub allows.
+
 Common `github.error` codes: `github_cannot_create_repo` (token lacks Administration write or All repositories),
 `github_forbidden` (token cannot push), `github_repo_taken` (a repo with that name exists that is not a MonCha
 site repo, or the token cannot see it), `github_bad_token`, `github_rate_limited`, `git_failed`.

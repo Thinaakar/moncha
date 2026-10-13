@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SiteGithubError, type SiteGithubRepoSpec } from '@moncha/domain';
-import { GitHubSiteRepoPublisher, githubSitesConfigFromEnv } from './github';
+import { GitHubSiteRepoPublisher, githubSitesConfigFromEnv, rateLimitRetryAt } from './github';
 
 type Call = { method: string; url: string; body: Record<string, unknown> | null; auth: string | null };
 type Reply = { status: number; body: unknown; headers?: Record<string, string> };
@@ -189,6 +189,19 @@ describe('GitHubSiteRepoPublisher', { timeout: 30_000 }, () => {
       canRead: true,
       error: null,
     });
+  });
+});
+
+describe('rateLimitRetryAt', () => {
+  const now = Date.UTC(2026, 9, 13, 12, 0, 0);
+  it('reads retry-after (secondary limits) and x-ratelimit-reset (primary limit)', () => {
+    expect(rateLimitRetryAt(new Headers({ 'retry-after': '60' }), now)).toEqual(new Date(now + 60_000));
+    const reset = String(now / 1000 + 900);
+    expect(rateLimitRetryAt(new Headers({ 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': reset }), now)).toEqual(
+      new Date(now + 900_000),
+    );
+    expect(rateLimitRetryAt(new Headers({ 'x-ratelimit-remaining': '12', 'x-ratelimit-reset': reset }), now)).toBeUndefined();
+    expect(rateLimitRetryAt(new Headers(), now)).toBeUndefined();
   });
 });
 

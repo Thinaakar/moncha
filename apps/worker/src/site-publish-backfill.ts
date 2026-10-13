@@ -114,6 +114,7 @@ async function main() {
 
   if (!store) throw new Error('R2 is not configured (R2_*), so copy files cannot be read');
   const snapshots = new PrismaSiteSnapshotRepository(prisma);
+  let githubPausedUntil: Date | null = null;
   for (const p of picked) {
     // Claimed rows (deploying/pushing) are skipped by every other worker until they go stale.
     if (p.worker && deployer) {
@@ -125,7 +126,7 @@ async function main() {
       const outcome = await deploySiteSnapshotToWorker({ snapshots, store, deployer, logger }, claimed);
       console.log(JSON.stringify({ site: p.name, step: 'worker', ...outcome }));
     }
-    if (p.github && publisher) {
+    if (p.github && publisher && !githubPausedUntil) {
       await prisma.siteSnapshot.update({
         where: { id: p.row.id },
         data: { githubStatus: 'pushing', githubAttempts: 1, githubLockedAt: new Date(), githubError: null },
@@ -136,6 +137,10 @@ async function main() {
         claimed,
       );
       console.log(JSON.stringify({ site: p.name, step: 'github', ...outcome }));
+      if (outcome.status === 'rate_limited') {
+        githubPausedUntil = outcome.retryAt;
+        console.log(`GitHub is rate limited until ${outcome.retryAt.toISOString()}; skipping the remaining GitHub pushes.`);
+      }
     }
   }
 }
