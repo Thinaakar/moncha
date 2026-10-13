@@ -32,6 +32,7 @@ import {
   runSiteSnapshotJob,
   runWebsiteAuditJob,
   sweepAllSiteAutomation,
+  websiteAuditJobLeadId,
   type CountryDiscoveryJobPayload,
   type JobRunRecord,
   type SiteStore,
@@ -104,7 +105,7 @@ function auditDeps() {
 }
 
 async function handleJob(job: Awaited<ReturnType<typeof jobs.claimJobs>>[number]) {
-  const payload = (job.payload || {}) as { leadId?: string; force?: boolean };
+  const payload = (job.payload || {}) as { force?: boolean };
   if (job.type !== 'website_audit') {
     // Should not be claimed (claimJobs filters), but never overwrite other runners.
     logger.error('worker_unexpected_job_type', { jobId: job.id, type: job.type });
@@ -118,11 +119,12 @@ async function handleJob(job: Awaited<ReturnType<typeof jobs.claimJobs>>[number]
     });
     return;
   }
-  if (!payload.leadId) throw new Error('website_audit missing leadId');
+  const leadId = websiteAuditJobLeadId(job);
+  if (!leadId) throw new Error('website_audit missing leadId');
   await runWebsiteAuditJob(auditDeps(), {
     jobId: job.id,
     tenantId: job.tenantId,
-    leadId: payload.leadId,
+    leadId,
     force: payload.force === true,
   });
 }

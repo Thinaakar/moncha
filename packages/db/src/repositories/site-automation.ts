@@ -110,7 +110,7 @@ export class PrismaSiteAutomationRepository implements SiteAutomationRepo {
       SELECT COUNT(*)::int AS total,
              (COUNT(*) FILTER (WHERE status IN ('pending', 'running')))::int AS pending
       FROM "JobRun"
-      WHERE "tenantId" = ${tenantId} AND type = 'website_audit' AND payload->>'crawlJobId' = ${crawlJobId}`;
+      WHERE "tenantId" = ${tenantId} AND type = 'website_audit' AND "crawlJobId" = ${crawlJobId}`;
     return { total: num(rows[0]?.total), pending: num(rows[0]?.pending) };
   }
 
@@ -123,8 +123,8 @@ export class PrismaSiteAutomationRepository implements SiteAutomationRepo {
       WHERE l."tenantId" = ${tenantId}
         AND l.queue = 'QUALIFIED'
         AND l.id IN (
-          SELECT j.payload->>'leadId' FROM "JobRun" j
-          WHERE j."tenantId" = ${tenantId} AND j.type = 'website_audit' AND j.payload->>'crawlJobId' = ${crawlJobId}
+          SELECT j."leadId" FROM "JobRun" j
+          WHERE j."tenantId" = ${tenantId} AND j.type = 'website_audit' AND j."crawlJobId" = ${crawlJobId}
         )
         AND NOT EXISTS (SELECT 1 FROM "SiteSnapshot" s WHERE s."leadId" = l.id)
       ORDER BY l."createdAt" ASC, l.id ASC

@@ -4,13 +4,13 @@ import { runCountryDiscovery, type CountryDiscoveryDeps, type CountryDiscoveryRe
 
 export type CountryDiscoveryJobDeps = CountryDiscoveryDeps & { jobs: JobRepo };
 
-/** Website audits created through this repo carry `payload.crawlJobId`, so the copy sweep can find a crawl's leads. */
+/** Website audits created through this repo carry `crawlJobId` (column and payload), so the copy sweep can find a crawl's leads. */
 export function tagAuditsWithCrawl(jobs: JobRepo, crawlJobId: string): JobRepo {
   return {
     create: (data) =>
       jobs.create(
         data.type === 'website_audit' && data.payload && typeof data.payload === 'object'
-          ? { ...data, payload: { ...(data.payload as Record<string, unknown>), crawlJobId } }
+          ? { ...data, crawlJobId, payload: { ...(data.payload as Record<string, unknown>), crawlJobId } }
           : data,
       ),
     update: (tenantId, id, patch) => jobs.update(tenantId, id, patch),

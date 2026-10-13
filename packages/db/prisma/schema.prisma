@@ -222,6 +222,7 @@ model Lead {
   reviewTasks         ReviewTask[]
   auditLogs           AuditLog[]
   siteSnapshots       SiteSnapshot[]
+  jobs                JobRun[]
 
   @@unique([tenantId, companyId])
   @@index([tenantId, queue])
@@ -303,6 +304,7 @@ model WebsiteAudit {
   evidenceItems       EvidenceItem[]
   detectedChannels    DetectedChannel[]
   reviewTasks         ReviewTask[]
+  jobs                JobRun[]
 
   @@index([tenantId, leadId, auditedAt])
   @@index([tenantId, websiteId, auditedAt])
@@ -398,10 +400,20 @@ model JobRun {
   lastError   String?
   /// Set only when dedupe is wanted (e.g. website-audit). NULL allowed many times per tenant.
   dedupeKey   String?
+  /// Lead the job works on (website_audit, site_snapshot). Mirrors payload.leadId.
+  leadId      String?
+  /// country_discovery job that queued this one. Mirrors payload.crawlJobId.
+  crawlJobId  String?
+  /// Audit a website_audit job produced or reused. Mirrors result.auditId.
+  auditId     String?
   startedAt   DateTime?
   finishedAt  DateTime?
   createdAt   DateTime  @default(now())
   tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lead        Lead?         @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  crawlJob    JobRun?       @relation("CrawlChildJobs", fields: [crawlJobId], references: [id], onDelete: SetNull)
+  crawlChildJobs JobRun[]   @relation("CrawlChildJobs")
+  audit       WebsiteAudit? @relation(fields: [auditId], references: [id], onDelete: SetNull)
   siteSnapshot        SiteSnapshot?        @relation("SiteSnapshotJob")
   crawlSiteSnapshots  SiteSnapshot[]       @relation("SiteSnapshotCrawlJob")
   siteAutomationCrawl SiteAutomationCrawl?
@@ -411,6 +423,9 @@ model JobRun {
   @@index([tenantId, createdAt])
   @@index([tenantId, status])
   @@index([status, lockedAt])
+  @@index([tenantId, leadId, type, status])
+  @@index([tenantId, crawlJobId])
+  @@index([auditId])
 }
 
 /// Intentionally not tenant-scoped: one row per worker process for liveness only.

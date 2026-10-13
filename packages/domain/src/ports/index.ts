@@ -250,6 +250,9 @@ export type JobRunRecord = {
   lockedBy?: string | null;
   lastError?: string | null;
   dedupeKey?: string | null;
+  leadId?: string | null;
+  crawlJobId?: string | null;
+  auditId?: string | null;
   startedAt?: Date | null;
   finishedAt?: Date | null;
   createdAt?: Date;
@@ -528,12 +531,18 @@ export type JobCreate = {
   runAfter?: Date;
   /** "running" creates the job already claimed by the caller, so no queue worker picks it up. */
   status?: 'pending' | 'running';
+  /** Lead the job works on; also kept in payload.leadId. */
+  leadId?: string | null;
+  /** country_discovery job that queued this one; also kept in payload.crawlJobId. */
+  crawlJobId?: string | null;
 };
 
 export type JobPatch = {
   status?: JobStatus;
   lastError?: string | null;
   result?: unknown;
+  /** Audit a website_audit job produced or reused; also kept in result.auditId. */
+  auditId?: string | null;
   attempts?: number;
   runAfter?: Date | null;
   lockedAt?: Date | null;

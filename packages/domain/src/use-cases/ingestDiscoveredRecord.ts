@@ -150,6 +150,7 @@ async function ensureWebsiteAndEnqueue(
       tenantId,
       type: 'website_audit',
       payload: { leadId, companyId, url: websiteUrl },
+      leadId,
       dedupeKey: websiteAuditDedupeKey(leadId, config.classifierVersion),
     });
     return true;

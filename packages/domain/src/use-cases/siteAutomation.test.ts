@@ -177,10 +177,12 @@ describe('updateSiteAutomationSettings', () => {
 describe('tagAuditsWithCrawl', () => {
   it('adds crawlJobId to website audits only', async () => {
     const seen: unknown[] = [];
+    const columns: unknown[] = [];
     const jobs = tagAuditsWithCrawl(
       {
         create: async (data) => {
           seen.push(data.payload);
+          columns.push(data.crawlJobId);
           return {} as never;
         },
         update: async () => null,
@@ -191,6 +193,7 @@ describe('tagAuditsWithCrawl', () => {
     await jobs.create({ tenantId: 't1', type: 'website_audit', payload: { leadId: 'l1' } });
     await jobs.create({ tenantId: 't1', type: 'csv_import', payload: { x: 1 } });
     expect(seen).toEqual([{ leadId: 'l1', crawlJobId: 'crawl1' }, { x: 1 }]);
+    expect(columns).toEqual(['crawl1', undefined]);
   });
 });
 

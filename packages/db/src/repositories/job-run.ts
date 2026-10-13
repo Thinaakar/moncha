@@ -19,6 +19,9 @@ export function mapJob(row: {
   lockedBy: string | null;
   lastError: string | null;
   dedupeKey: string | null;
+  leadId?: string | null;
+  crawlJobId?: string | null;
+  auditId?: string | null;
   startedAt: Date | null;
   finishedAt: Date | null;
   createdAt: Date;
@@ -37,6 +40,9 @@ export function mapJob(row: {
     lockedBy: row.lockedBy,
     lastError: row.lastError,
     dedupeKey: row.dedupeKey,
+    leadId: row.leadId ?? null,
+    crawlJobId: row.crawlJobId ?? null,
+    auditId: row.auditId ?? null,
     startedAt: row.startedAt,
     finishedAt: row.finishedAt,
     createdAt: row.createdAt,
@@ -55,6 +61,8 @@ export class PrismaJobRunRepository implements JobRepo {
         type: data.type,
         payload: data.payload as Prisma.InputJsonValue,
         dedupeKey: data.dedupeKey ?? null,
+        leadId: data.leadId ?? null,
+        crawlJobId: data.crawlJobId ?? null,
         maxAttempts: data.maxAttempts ?? 3,
         runAfter: data.runAfter ?? now,
         ...(running ? { status: 'running', attempts: 1, startedAt: now, lockedAt: now } : {}),
@@ -72,6 +80,7 @@ export class PrismaJobRunRepository implements JobRepo {
         status: data.status,
         lastError: data.lastError,
         result: data.result as Prisma.InputJsonValue | undefined,
+        auditId: data.auditId,
         attempts: data.attempts,
         runAfter: data.runAfter === null ? undefined : data.runAfter,
         lockedAt: data.lockedAt === undefined ? undefined : data.lockedAt,
@@ -171,6 +180,9 @@ export class PrismaJobRunRepository implements JobRepo {
         lockedBy: string | null;
         lastError: string | null;
         dedupeKey: string | null;
+        leadId: string | null;
+        crawlJobId: string | null;
+        auditId: string | null;
         startedAt: Date | null;
         finishedAt: Date | null;
         createdAt: Date;

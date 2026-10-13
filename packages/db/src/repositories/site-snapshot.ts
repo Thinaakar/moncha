@@ -102,6 +102,8 @@ export class PrismaSiteSnapshotRepository implements SiteSnapshotRepo {
             origin,
             ...(crawlJobId ? { crawlJobId } : {}),
           },
+          leadId: input.leadId,
+          crawlJobId,
           maxAttempts: input.maxAttempts,
           dedupeKey: input.dedupeKey ?? `site_snapshot:${input.leadId}:${Date.now()}`,
         },

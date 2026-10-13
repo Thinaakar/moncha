@@ -149,8 +149,8 @@ export class NeonJobRepo implements JobRepo {
     const running = data.status === 'running';
     const rows = await queryRows(
       this.sql,
-      `INSERT INTO "JobRun" (id, "tenantId", type, status, payload, "dedupeKey", "maxAttempts", "runAfter", attempts, "startedAt", "lockedAt", "createdAt")
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, NOW())
+      `INSERT INTO "JobRun" (id, "tenantId", type, status, payload, "dedupeKey", "maxAttempts", "runAfter", attempts, "startedAt", "lockedAt", "leadId", "crawlJobId", "createdAt")
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, $11, $12, NOW())
        RETURNING *`,
       [
         id,
@@ -163,6 +163,8 @@ export class NeonJobRepo implements JobRepo {
         data.runAfter ? data.runAfter.toISOString() : new Date().toISOString(),
         running ? 1 : 0,
         running ? new Date().toISOString() : null,
+        data.leadId ?? null,
+        data.crawlJobId ?? null,
       ]
     );
     return mapJobRow(rows[0]);
@@ -176,6 +178,7 @@ export class NeonJobRepo implements JobRepo {
     if (data.status) { sets.push(`status = $${idx++}`); params.push(data.status); }
     if (data.lastError !== undefined) { sets.push(`"lastError" = $${idx++}`); params.push(data.lastError); }
     if (data.result !== undefined) { sets.push(`result = $${idx++}`); params.push(data.result ? JSON.stringify(data.result) : null); }
+    if (data.auditId !== undefined) { sets.push(`"auditId" = $${idx++}`); params.push(data.auditId); }
     if (data.attempts !== undefined) { sets.push(`attempts = $${idx++}`); params.push(data.attempts); }
     if (data.runAfter) { sets.push(`"runAfter" = $${idx++}`); params.push(iso(data.runAfter)); }
     if (data.lockedAt !== undefined) { sets.push(`"lockedAt" = $${idx++}`); params.push(iso(data.lockedAt)); }
@@ -699,6 +702,9 @@ function mapJobRow(r: any): JobRunRecord {
     lockedBy: r.lockedBy ?? null,
     lastError: r.lastError ?? null,
     dedupeKey: r.dedupeKey ?? null,
+    leadId: r.leadId ?? null,
+    crawlJobId: r.crawlJobId ?? null,
+    auditId: r.auditId ?? null,
     startedAt: r.startedAt ? new Date(r.startedAt) : null,
     finishedAt: r.finishedAt ? new Date(r.finishedAt) : null,
     createdAt: r.createdAt ? new Date(r.createdAt) : new Date(),

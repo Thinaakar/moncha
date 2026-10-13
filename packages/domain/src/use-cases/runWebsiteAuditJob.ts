@@ -3,6 +3,7 @@ import type {
   EvidenceStore,
   HostAuditCacheRepo,
   JobRepo,
+  JobRunRecord,
   LeadRepo,
   Logger,
   ReviewTaskRepo,
@@ -27,6 +28,13 @@ export type WebsiteAuditJobDeps = {
   logger?: Logger;
   config?: AuditConfig;
 };
+
+/** Jobs queued by workers older than the `leadId` column only carry it in the payload. */
+export function websiteAuditJobLeadId(job: Pick<JobRunRecord, 'leadId' | 'payload'>): string | null {
+  if (job.leadId) return job.leadId;
+  const fromPayload = (job.payload as { leadId?: unknown } | null | undefined)?.leadId;
+  return typeof fromPayload === 'string' && fromPayload ? fromPayload : null;
+}
 
 export async function runWebsiteAuditJob(
   deps: WebsiteAuditJobDeps,
@@ -59,6 +67,7 @@ export async function runWebsiteAuditJob(
       status: 'done',
       finishedAt: new Date(),
       result: outcome,
+      auditId: outcome.auditId ?? null,
       lockedAt: null,
       lockedBy: null,
     });

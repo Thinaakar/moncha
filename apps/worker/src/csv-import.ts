@@ -142,9 +142,9 @@ async function importChunk(
     ),
     // Same dedupe key as ingestDiscoveredRecord: one audit per lead per classifier version per day.
     sql.query(
-      `INSERT INTO "JobRun" (id, "tenantId", type, status, payload, "dedupeKey", "maxAttempts", attempts, "runAfter", "createdAt")
+      `INSERT INTO "JobRun" (id, "tenantId", type, status, payload, "leadId", "dedupeKey", "maxAttempts", attempts, "runAfter", "createdAt")
        SELECT ${newId('job')}, $1, 'website_audit'::"JobType", 'pending'::"JobStatus",
-              jsonb_build_object('leadId', l.id, 'companyId', c.id, 'url', r."websiteUrl"),
+              jsonb_build_object('leadId', l.id, 'companyId', c.id, 'url', r."websiteUrl"), l.id,
               l.id || ':' || $3::text || ':' || $4::text, 3, 0, NOW(), NOW()
        FROM ${INPUT} ${COMPANY} ${PENDING_LEAD}
        ON CONFLICT ("tenantId", "dedupeKey") DO NOTHING

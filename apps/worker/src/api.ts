@@ -318,7 +318,7 @@ async function queueLeadAudit(tenantId: string, id: string) {
       tenantId,
       type: 'website_audit',
       status: { in: ['pending', 'running'] },
-      payload: { path: ['leadId'], equals: id },
+      leadId: id,
     },
     select: { id: true, status: true },
   });
@@ -330,6 +330,7 @@ async function queueLeadAudit(tenantId: string, id: string) {
     tenantId,
     type: 'website_audit',
     payload: { leadId: id, companyId: lead.companyId, url, force: true },
+    leadId: id,
     dedupeKey: `${websiteAuditDedupeKey(id, DEFAULT_AUDIT_CONFIG.classifierVersion)}:manual:${Date.now()}`,
   });
   return { id: job.id, status: job.status };

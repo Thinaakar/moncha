@@ -367,7 +367,7 @@ export async function handleNeonApi(
       const openRows = await sql.query(
         `SELECT id, status FROM "JobRun"
          WHERE "tenantId" = $1 AND type = 'website_audit' AND status IN ('pending', 'running')
-         AND payload->>'leadId' = $2 LIMIT 1`,
+         AND "leadId" = $2 LIMIT 1`,
         [tenantId, id]
       );
       const open = Array.isArray(openRows) && openRows.length ? (openRows[0] as any) : null;
@@ -379,6 +379,7 @@ export async function handleNeonApi(
         tenantId,
         type: 'website_audit',
         payload: { leadId: id, companyId: lead.companyId, url: webUrl, force: true },
+        leadId: id,
         dedupeKey: `${websiteAuditDedupeKey(id, DEFAULT_AUDIT_CONFIG.classifierVersion)}:manual:${Date.now()}`,
       });
       return jsonResponse({ id: job.id, status: job.status }, 202, cors);
