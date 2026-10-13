@@ -16,7 +16,12 @@ export type CloudflareWorkersConfig = {
   accountId: string;
   /** `{subdomain}.workers.dev`; read from the account when not set. */
   subdomain?: string | null;
+  /** Most Workers the account may have; new site Workers stop there. Defaults to Workers Free's 100. */
+  maxWorkers?: number;
 };
+
+/** Workers Free allows 100 Workers per account; Workers Paid allows 500. */
+export const CLOUDFLARE_FREE_WORKER_LIMIT = 100;
 
 const API = 'https://api.cloudflare.com/client/v4';
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -45,11 +50,13 @@ export class CloudflareSiteWorkerDeployer implements SiteWorkerDeployer {
   private readonly apiToken: string;
   private readonly accountId: string;
   private subdomainValue: string | null;
+  private readonly maxWorkers: number;
 
   constructor(config: CloudflareWorkersConfig) {
     this.apiToken = config.apiToken;
     this.accountId = config.accountId;
     this.subdomainValue = config.subdomain?.trim() || null;
+    this.maxWorkers = config.maxWorkers && config.maxWorkers > 0 ? config.maxWorkers : CLOUDFLARE_FREE_WORKER_LIMIT;
   }
 
   private async call<T>(
@@ -95,6 +102,9 @@ export class CloudflareSiteWorkerDeployer implements SiteWorkerDeployer {
       );
     }
     if (status === 404) return new SiteDeployError('cloudflare_not_found', message);
+    if (/code 10037\)|(exceeded|reached).*(limit|maximum).*(script|worker)/i.test(message)) {
+      return new SiteDeployError('worker_limit_reached', `Cloudflare refused a new Worker: the account is at its Worker limit (${message})`);
+    }
     if (status === 429) return new SiteDeployError('cloudflare_rate_limited', 'Cloudflare rate limit reached');
     if (status >= 500) return new SiteDeployError('cloudflare_unavailable', `Cloudflare error ${status}: ${message}`);
     return new SiteDeployError(`cloudflare_http_${status}`, message);
@@ -116,16 +126,40 @@ export class CloudflareSiteWorkerDeployer implements SiteWorkerDeployer {
     return subdomain ? `https://${name}.${subdomain}.workers.dev` : null;
   }
 
-  /** A Worker with this name that MonCha did not create (no site tag) is never replaced. */
-  private async assertOwned(name: string, signal?: AbortSignal): Promise<void> {
+  /** A Worker with this name that MonCha did not create (no site tag) is never replaced. True when it exists. */
+  private async assertOwned(name: string, signal?: AbortSignal): Promise<boolean> {
     try {
       const { result } = await this.call<{ tags?: string[] | null }>('GET', `${this.scriptPath(name)}/script-settings`, { signal });
       if (!result?.tags?.includes(SITE_TAG)) {
         throw new SiteDeployError('worker_name_taken', `A Worker named ${name} already exists and was not made by MonCha; it was left untouched`, false);
       }
+      return true;
     } catch (error) {
-      if (error instanceof SiteDeployError && error.code === 'cloudflare_not_found') return;
+      if (error instanceof SiteDeployError && error.code === 'cloudflare_not_found') return false;
       throw error;
+    }
+  }
+
+  private async listScripts(signal?: AbortSignal): Promise<Array<{ id: string; tags?: string[] | null }>> {
+    const { result } = await this.call<Array<{ id: string; tags?: string[] | null }>>(
+      'GET',
+      `/accounts/${this.accountId}/workers/scripts`,
+      { signal },
+    );
+    return result ?? [];
+  }
+
+  async preflight(input: { name: string; signal?: AbortSignal }): Promise<void> {
+    const { name, signal } = input;
+    if (!NAME.test(name)) throw new SiteDeployError('worker_bad_name', `"${name}" is not a valid Worker name`, false);
+    if (await this.assertOwned(name, signal)) return;
+    const total = (await this.listScripts(signal)).length;
+    if (total >= this.maxWorkers) {
+      throw new SiteDeployError(
+        'worker_limit_reached',
+        `The Cloudflare account already has ${total} of ${this.maxWorkers} Workers, so ${name} cannot get its own Worker. ` +
+          'Upgrade to Workers Paid (500 Workers) and set CLOUDFLARE_WORKERS_LIMIT=500 on the worker',
+      );
     }
   }
 
@@ -167,7 +201,7 @@ export class CloudflareSiteWorkerDeployer implements SiteWorkerDeployer {
     if (!NAME.test(name)) throw new SiteDeployError('worker_bad_name', `"${name}" is not a valid Worker name`, false);
     if (!input.files.length) throw new SiteDeployError('nothing_to_deploy', 'No files found for this copy', false);
 
-    await this.assertOwned(name, signal);
+    await this.preflight({ name, signal });
     const completion = await this.uploadAssets(name, input.files, signal);
 
     const metadata = {
@@ -191,16 +225,20 @@ export class CloudflareSiteWorkerDeployer implements SiteWorkerDeployer {
   }
 
   async check(): Promise<SiteWorkerCheck> {
-    const result: SiteWorkerCheck = { subdomain: null, canRead: false, siteWorkers: null, totalWorkers: null, error: null };
+    const result: SiteWorkerCheck = {
+      subdomain: null,
+      canRead: false,
+      siteWorkers: null,
+      totalWorkers: null,
+      workerLimit: this.maxWorkers,
+      error: null,
+    };
     try {
       result.subdomain = await this.subdomain();
-      const { result: scripts } = await this.call<Array<{ id: string; tags?: string[] | null }>>(
-        'GET',
-        `/accounts/${this.accountId}/workers/scripts`,
-      );
+      const scripts = await this.listScripts();
       result.canRead = true;
-      result.totalWorkers = scripts?.length ?? 0;
-      result.siteWorkers = (scripts ?? []).filter((s) => s.tags?.includes(SITE_TAG)).length;
+      result.totalWorkers = scripts.length;
+      result.siteWorkers = scripts.filter((s) => s.tags?.includes(SITE_TAG)).length;
     } catch (error) {
       result.error = error instanceof SiteDeployError ? `${error.code}: ${error.message}` : String(error);
     }
@@ -208,12 +246,21 @@ export class CloudflareSiteWorkerDeployer implements SiteWorkerDeployer {
   }
 }
 
-/** CLOUDFLARE_API_TOKEN plus CLOUDFLARE_ACCOUNT_ID (falls back to R2_ACCOUNT_ID, the same account). */
+/**
+ * CLOUDFLARE_API_TOKEN plus CLOUDFLARE_ACCOUNT_ID (falls back to R2_ACCOUNT_ID, the same account).
+ * CLOUDFLARE_WORKERS_LIMIT is the plan's Worker limit (default 100 for Workers Free; 500 on Workers Paid).
+ */
 export function cloudflareWorkersConfigFromEnv(env: Env = process.env): CloudflareWorkersConfig | null {
   const apiToken = env.CLOUDFLARE_API_TOKEN?.trim();
   const accountId = (env.CLOUDFLARE_ACCOUNT_ID?.trim() || env.R2_ACCOUNT_ID?.trim()) ?? '';
   if (!apiToken || !/^[a-f0-9]{32}$/i.test(accountId)) return null;
-  return { apiToken, accountId, subdomain: env.CLOUDFLARE_WORKERS_SUBDOMAIN?.trim() || null };
+  const limit = Number(env.CLOUDFLARE_WORKERS_LIMIT?.trim());
+  return {
+    apiToken,
+    accountId,
+    subdomain: env.CLOUDFLARE_WORKERS_SUBDOMAIN?.trim() || null,
+    maxWorkers: Number.isInteger(limit) && limit > 0 ? limit : CLOUDFLARE_FREE_WORKER_LIMIT,
+  };
 }
 
 /** Returns null without a token and account (copies are then not deployed). */

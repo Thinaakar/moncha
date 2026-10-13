@@ -455,6 +455,8 @@ export type SiteWorkerCheck = {
   siteWorkers: number | null;
   /** All Workers on the account (the plan limit counts these). */
   totalWorkers: number | null;
+  /** Most Workers the account may have (100 on Workers Free, 500 on Workers Paid). */
+  workerLimit?: number | null;
   error: string | null;
 };
 
@@ -462,6 +464,11 @@ export type SiteWorkerCheck = {
 export interface SiteWorkerDeployer {
   /** The URL a Worker with this name gets, or null when the account subdomain is unknown. */
   urlFor(name: string): Promise<string | null>;
+  /**
+   * Cheap checks before the copy's files are read: the name is free or MonCha's, and a new Worker fits the account's
+   * Worker limit (`worker_limit_reached` otherwise). `deploy` runs the same checks.
+   */
+  preflight?(input: { name: string; signal?: AbortSignal }): Promise<void>;
   deploy(input: { name: string; files: SiteWorkerFile[]; signal?: AbortSignal }): Promise<SiteWorkerDeployResult>;
   check?(): Promise<SiteWorkerCheck>;
 }

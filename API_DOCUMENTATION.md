@@ -945,8 +945,9 @@ starts only after the copy's GitHub push is done.
 * **`404`** unknown copy · **`409 not_ready`** · **`409 deploy_in_progress`** · **`503 deploy_not_configured`**.
 
 #### 26d. `GET /api/v1/site-automation/deploy-check`
-Editor-only Cloudflare check: `{ configured, keys, subdomain, urlPattern, canRead, siteWorkers, totalWorkers, error,
-checkedAt }`. See `apps/worker/API.md` §41d.
+Editor-only Cloudflare check: `{ configured, keys, subdomain, urlPattern, canRead, siteWorkers, totalWorkers,
+workerLimit, error, checkedAt }`. New site Workers stop at `CLOUDFLARE_WORKERS_LIMIT` (default 100, Workers Free) with
+`deploy.error` `worker_limit_reached`, without using up tries; redeploys are not blocked. See `apps/worker/API.md` §41c.
 
 #### 26b. Public copy links
 Copy summaries carry `publicUrl`: the Worker URL once deployed, else the older shared link

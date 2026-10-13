@@ -22,7 +22,10 @@ const DEPLOY_STATUS: Record<SiteWorkerDeploy['status'], { label: string; variant
   failed: { label: 'Deploy failed', variant: 'destructive' },
 };
 
+export const isWorkerLimit = (error: string | null | undefined) => Boolean(error?.startsWith('worker_limit_reached'));
+
 function deployStatus(deploy: SiteWorkerDeploy) {
+  if (deploy.status === 'pending' && isWorkerLimit(deploy.error)) return { label: 'Worker limit reached', variant: 'warning' as const };
   if (deploy.status === 'pending' && deploy.error) return { label: 'Retrying', variant: 'warning' as const };
   return DEPLOY_STATUS[deploy.status];
 }
@@ -235,7 +238,9 @@ export function LiveWebsiteCard({ snapshot }: { snapshot: SiteSnapshotDetail }) 
                   ? 'Deploys right after the GitHub repository is updated…'
                   : 'Waiting for the worker to deploy…'
                 : deployFailed
-                  ? 'Not live yet: the last deploy failed'
+                  ? isWorkerLimit(deploy?.error)
+                    ? 'Not live yet: the Cloudflare Worker limit is reached'
+                    : 'Not live yet: the last deploy failed'
                   : snapshot.deployConfigured
                     ? 'Not deployed yet'
                     : 'Cloudflare deploys are not set up on the worker'
@@ -252,7 +257,9 @@ export function LiveWebsiteCard({ snapshot }: { snapshot: SiteSnapshotDetail }) 
               <p className="font-medium">
                 {deploy.status === 'failed'
                   ? `Deploy gave up after ${deploy.attempts} tries`
-                  : `Deploy failed; try ${deploy.attempts + 1} of ${deploy.maxAttempts} runs ${deploy.nextAt ? formatEta(deploy.nextAt) : 'soon'}`}
+                  : isWorkerLimit(deploy.error)
+                    ? `The Cloudflare account has no room for another Worker; checking again ${deploy.nextAt ? formatEta(deploy.nextAt) : 'later'}`
+                    : `Deploy failed; try ${deploy.attempts + 1} of ${deploy.maxAttempts} runs ${deploy.nextAt ? formatEta(deploy.nextAt) : 'soon'}`}
               </p>
               {deploy.error && <p className="mt-0.5 font-mono text-xs break-all text-muted-foreground">{deploy.error}</p>}
             </div>

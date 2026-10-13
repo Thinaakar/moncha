@@ -1868,7 +1868,13 @@ The summary's `deploy` object (and `siteName`, e.g. `"ja-edu-sg"`):
 | 503 | `deploy_not_configured` | `CLOUDFLARE_API_TOKEN` or the account id missing |
 
 Common `deploy.error` codes: `cloudflare_bad_token` (needs Workers Scripts: Edit), `worker_name_taken`,
-`cloudflare_rate_limited`, `cloudflare_http_400` (e.g. the account's Worker limit: 100 free, 500 paid).
+`cloudflare_rate_limited`, `worker_limit_reached`.
+
+Worker limit: before reading a copy's files, the worker checks whether the deploy creates a new Worker and, if so,
+whether the account already has `CLOUDFLARE_WORKERS_LIMIT` Workers (default 100, Workers Free; set 500 on Workers
+Paid). At the limit, or when Cloudflare itself refuses a new Worker, the deploy stays `pending` with
+`error` `worker_limit_reached: …`, does not use up a try, and is checked again 6 hours later (or right away with this
+route). Redeploys of a website's existing Worker are never blocked.
 
 Backfill (newest copy per website, from `apps/worker`): `pnpm sites:backfill -- --limit 10` queues them for the
 worker; add `--dry-run` to list them, `--run` to publish from this machine, `--only github|worker`, `--site ja-edu-sg`.
@@ -1930,6 +1936,7 @@ the token is never returned. The worker runs the same check at start-up and logs
   "canRead": true,
   "siteWorkers": 3,
   "totalWorkers": 7,
+  "workerLimit": 100,
   "error": null,
   "checkedAt": "2026-10-13T09:30:00.000Z"
 }

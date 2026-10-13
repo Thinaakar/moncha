@@ -35,9 +35,13 @@ export type SiteWorkerDeployDeps = {
   now?: () => Date;
 };
 
+/** How long a deploy waits when the Cloudflare account has no room for another Worker. */
+export const SITE_WORKER_LIMIT_WAIT_MS = 6 * 60 * 60_000;
+
 export type SiteWorkerDeployOutcome =
   | { status: 'deployed'; snapshotId: string; name: string; url: string; files: number }
-  | { status: 'retry' | 'failed'; snapshotId: string; error: string };
+  | { status: 'retry' | 'failed'; snapshotId: string; error: string }
+  | { status: 'limit_reached'; snapshotId: string; error: string; retryAt: Date };
 
 function errorText(error: unknown): { code: string; text: string; retryable: boolean } {
   if (error instanceof SiteDeployError) {
@@ -59,6 +63,8 @@ export async function deploySiteSnapshotToWorker(
   const now = deps.now ?? (() => new Date());
   const { tenantId, id: snapshotId } = snapshot;
   try {
+    const name = siteName(snapshot);
+    await deps.deployer.preflight?.({ name, signal });
     const manifest = await readSiteManifest(
       deps.store,
       snapshot.storagePrefix,
@@ -71,7 +77,6 @@ export async function deploySiteSnapshotToWorker(
       .filter((f) => f.bytes.byteLength > 0 && f.bytes.byteLength <= SITE_WORKER_MAX_FILE_BYTES)
       .map((f) => ({ path: f.path, bytes: f.bytes, contentType: f.contentType }));
 
-    const name = siteName(snapshot);
     const result = await deps.deployer.deploy({ name, files, signal });
     await deps.snapshots.update(tenantId, snapshotId, {
       workerStatus: 'deployed',
@@ -87,6 +92,19 @@ export async function deploySiteSnapshotToWorker(
   } catch (error) {
     const { code, text, retryable } = errorText(error);
     const shutdown = code === 'worker_shutdown' || Boolean(signal?.aborted);
+    if (code === 'worker_limit_reached' && !shutdown) {
+      // Not this copy's fault: give the try back and wait until someone frees or adds Worker room.
+      const retryAt = new Date(now().getTime() + SITE_WORKER_LIMIT_WAIT_MS);
+      await deps.snapshots.update(tenantId, snapshotId, {
+        workerStatus: 'pending',
+        workerAttempts: Math.max(0, snapshot.workerAttempts - 1),
+        workerError: text,
+        workerNextAt: retryAt,
+        workerLockedAt: null,
+      });
+      deps.logger.error('site_worker_limit_reached', { snapshotId, tenantId, error: text, retryAt: retryAt.toISOString() });
+      return { status: 'limit_reached', snapshotId, error: text, retryAt };
+    }
     const next = retryAfterError({
       attempts: snapshot.workerAttempts,
       maxAttempts: SITE_WORKER_MAX_ATTEMPTS,

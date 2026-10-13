@@ -583,6 +583,8 @@ export type SiteDeployCheckResult = {
   siteWorkers: number | null;
   /** All Workers on the account; the plan limit (100 free, 500 paid) counts these. */
   totalWorkers: number | null;
+  /** The Worker limit the worker deploys up to (CLOUDFLARE_WORKERS_LIMIT, default 100). Older API versions omit it. */
+  workerLimit?: number | null;
   error: string | null;
   checkedAt: string;
 };

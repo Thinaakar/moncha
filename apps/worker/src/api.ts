@@ -721,6 +721,7 @@ route('GET', '/api/v1/site-automation/deploy-check', async ({ req, tenantId }) =
     canRead: check?.canRead ?? false,
     siteWorkers: check?.siteWorkers ?? null,
     totalWorkers: check?.totalWorkers ?? null,
+    workerLimit: check?.workerLimit ?? null,
     error: deployer ? (check?.error ?? null) : 'CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID (or R2_ACCOUNT_ID) must be set',
     checkedAt: new Date().toISOString(),
   };

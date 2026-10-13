@@ -13,6 +13,7 @@ import {
   deploySiteSnapshotToWorker,
   requestSiteWorkerDeploy,
   SITE_WORKER_BACKOFF_MS,
+  SITE_WORKER_LIMIT_WAIT_MS,
   SITE_WORKER_MAX_ATTEMPTS,
   siteWorkerPaths,
   SiteWorkerRequestError,
@@ -113,6 +114,25 @@ describe('site Worker deploy', () => {
     });
     const outcome = await deploySiteSnapshotToWorker(deps, snapshot({ workerStatus: 'deploying', workerAttempts: SITE_WORKER_MAX_ATTEMPTS }));
     expect(outcome.status).toBe('failed');
+  });
+
+  it('waits without using a try when the account has no room for another Worker', async () => {
+    const { deps, patches, calls } = setup(ok);
+    const reads: string[] = [];
+    const getBytes = deps.store.getBytes;
+    deps.store.getBytes = async (key) => {
+      reads.push(key);
+      return getBytes(key);
+    };
+    deps.deployer.preflight = async () => {
+      throw new SiteDeployError('worker_limit_reached', 'The Cloudflare account already has 100 of 100 Workers');
+    };
+    const outcome = await deploySiteSnapshotToWorker(deps, snapshot({ workerStatus: 'deploying', workerAttempts: 2 }));
+    expect(outcome).toMatchObject({ status: 'limit_reached', retryAt: new Date(NOW.getTime() + SITE_WORKER_LIMIT_WAIT_MS) });
+    expect(patches[0]).toMatchObject({ workerStatus: 'pending', workerAttempts: 1, workerLockedAt: null });
+    expect(patches[0]!.workerError).toContain('worker_limit_reached');
+    expect(reads).toHaveLength(0);
+    expect(calls).toHaveLength(0);
   });
 
   it('gives up at once when the copy files are gone from R2', async () => {

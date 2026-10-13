@@ -31,8 +31,12 @@ export const COPY_STEPS: Record<SiteCopyStep, { label: string; icon: LucideIcon;
   live: { label: 'Live', icon: Radio, active: 'The website is live' },
 };
 
+const workerLimit = (progress: SiteCopyProgress) =>
+  progress.step === 'deploying_url' && Boolean(progress.error?.startsWith('worker_limit_reached'));
+
 function badgeFor(progress: SiteCopyProgress): { label: string; variant: BadgeVariant } {
   const label = COPY_STEPS[progress.step].label;
+  if (workerLimit(progress)) return { label: 'Worker limit reached', variant: 'warning' };
   switch (progress.state) {
     case 'done':
       return progress.step === 'live' ? { label: 'Live', variant: 'success' } : { label: 'Ready', variant: 'success' };
@@ -108,6 +112,7 @@ function StepDot({ step, state }: { step: SiteCopyStep; state: SiteCopyStepState
 function currentNote(progress: SiteCopyProgress): string | null {
   const { state, step, since, nextAt } = progress;
   if (state === 'active') return since ? `Started ${formatRelative(since)}` : 'In progress';
+  if (workerLimit(progress)) return nextAt ? `Checks again ${formatEta(nextAt)}` : 'Worker limit reached';
   if (state === 'retrying') return nextAt ? `Retrying ${formatEta(nextAt)}` : 'Retrying soon';
   if (state === 'failed') return 'Stopped';
   if (state === 'waiting') return nextAt ? `Starts ${formatEta(nextAt)}` : step === 'queued' ? 'Waiting for its turn' : 'Starts soon';
@@ -117,6 +122,7 @@ function currentNote(progress: SiteCopyProgress): string | null {
 
 function headline(progress: SiteCopyProgress): string {
   const meta = COPY_STEPS[progress.step];
+  if (workerLimit(progress)) return 'Waiting for room on Cloudflare: the account is at its Worker limit';
   switch (progress.state) {
     case 'done':
       return progress.step === 'live' ? 'The website is live on its own URL' : 'The website copy is ready';

@@ -103,6 +103,41 @@ describe('CloudflareSiteWorkerDeployer', () => {
     expect(calls).toHaveLength(1);
   });
 
+  it('refuses a new Worker when the account is at its Worker limit, before uploading anything', async () => {
+    const calls = mockCloudflare(({ path }) => {
+      if (path.endsWith('/script-settings')) return { status: 404, body: { success: false, errors: [{ code: 10007, message: 'not found' }] } };
+      if (path.endsWith('/workers/scripts')) return { status: 200, body: { success: true, result: [{ id: 'a' }, { id: 'b' }] } };
+      return { status: 500, body: {} };
+    });
+    const small = new CloudflareSiteWorkerDeployer({ apiToken: 'cf-token', accountId: ACCOUNT, subdomain: 'x', maxWorkers: 2 });
+    await expect(small.deploy({ name: 'new-site', files: FILES })).rejects.toMatchObject({ code: 'worker_limit_reached', retryable: true });
+    expect(calls.map((c) => c.path.split('/').pop())).toEqual(['script-settings', 'scripts']);
+  });
+
+  it('still redeploys an existing site Worker at the limit', async () => {
+    const calls = mockCloudflare(({ path }) => {
+      if (path.endsWith('/script-settings')) return { status: 200, body: { success: true, result: { tags: ['moncha-site'] } } };
+      if (path.endsWith('/assets-upload-session')) return { status: 200, body: { success: true, result: { jwt: 'done-jwt', buckets: [] } } };
+      return { status: 200, body: { success: true, result: {} } };
+    });
+    const small = new CloudflareSiteWorkerDeployer({ apiToken: 'cf-token', accountId: ACCOUNT, subdomain: 'x', maxWorkers: 1 });
+    await expect(small.deploy({ name: 'ja-edu-sg', files: FILES })).resolves.toMatchObject({ name: 'ja-edu-sg' });
+    expect(calls.some((c) => c.path.endsWith('/workers/scripts'))).toBe(false);
+  });
+
+  it("maps Cloudflare's own script limit error to worker_limit_reached", async () => {
+    mockCloudflare(({ method, path }) => {
+      if (path.endsWith('/script-settings')) return { status: 404, body: { success: false, errors: [{ code: 10007, message: 'not found' }] } };
+      if (path.endsWith('/workers/scripts') && method === 'GET') return { status: 200, body: { success: true, result: [] } };
+      if (path.endsWith('/assets-upload-session')) return { status: 200, body: { success: true, result: { jwt: 'done-jwt', buckets: [] } } };
+      if (method === 'PUT') {
+        return { status: 400, body: { success: false, errors: [{ code: 10037, message: 'You have exceeded the limit of 100 scripts' }] } };
+      }
+      return { status: 200, body: { success: true, result: {} } };
+    });
+    await expect(deployer().deploy({ name: 'new-site', files: FILES })).rejects.toMatchObject({ code: 'worker_limit_reached' });
+  });
+
   it('explains a token without Workers access', async () => {
     mockCloudflare(() => ({ status: 403, body: { success: false, errors: [{ code: 10000, message: 'Authentication error' }] } }));
     await expect(deployer().deploy({ name: 'ja-edu-sg', files: FILES })).rejects.toMatchObject({ code: 'cloudflare_bad_token' });
@@ -127,7 +162,14 @@ describe('CloudflareSiteWorkerDeployer', () => {
         ? { status: 200, body: { success: true, result: [{ id: 'a', tags: ['moncha-site'] }, { id: 'moncha-backend', tags: [] }] } }
         : { status: 500, body: {} },
     );
-    expect(await deployer().check()).toEqual({ subdomain: 'vinothjv4-tech', canRead: true, siteWorkers: 1, totalWorkers: 2, error: null });
+    expect(await deployer().check()).toEqual({
+      subdomain: 'vinothjv4-tech',
+      canRead: true,
+      siteWorkers: 1,
+      totalWorkers: 2,
+      workerLimit: 100,
+      error: null,
+    });
   });
 });
 
@@ -137,7 +179,9 @@ describe('cloudflareWorkersConfigFromEnv', () => {
       apiToken: 't',
       accountId: ACCOUNT,
       subdomain: null,
+      maxWorkers: 100,
     });
+    expect(cloudflareWorkersConfigFromEnv({ CLOUDFLARE_API_TOKEN: 't', R2_ACCOUNT_ID: ACCOUNT, CLOUDFLARE_WORKERS_LIMIT: '500' })?.maxWorkers).toBe(500);
     expect(cloudflareWorkersConfigFromEnv({ R2_ACCOUNT_ID: ACCOUNT })).toBeNull();
     expect(cloudflareWorkersConfigFromEnv({ CLOUDFLARE_API_TOKEN: 't', CLOUDFLARE_ACCOUNT_ID: 'nope' })).toBeNull();
   });
