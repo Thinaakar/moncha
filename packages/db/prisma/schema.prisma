@@ -217,7 +217,8 @@ model Lead {
   updatedAt           DateTime          @updatedAt
   tenant              Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   company             Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  websiteAudits       WebsiteAudit[]
+  latestAudit         WebsiteAudit?     @relation("LeadLatestAudit", fields: [latestAuditId], references: [id], onDelete: SetNull)
+  websiteAudits       WebsiteAudit[]    @relation("LeadAudits")
   reviewTasks         ReviewTask[]
   auditLogs           AuditLog[]
   siteSnapshots       SiteSnapshot[]
@@ -260,7 +261,8 @@ model Website {
   lastCheckedAt DateTime?
   tenant        Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   company       Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  audits        WebsiteAudit[]
+  latestAudit   WebsiteAudit? @relation("WebsiteLatestAudit", fields: [latestAuditId], references: [id], onDelete: SetNull)
+  audits        WebsiteAudit[] @relation("WebsiteAudits")
 
   @@index([tenantId, status])
 }
@@ -294,8 +296,10 @@ model WebsiteAudit {
   llmCompletionTokens Int?
   auditedAt           DateTime          @default(now())
   tenant              Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  website             Website           @relation(fields: [websiteId], references: [id], onDelete: Cascade)
-  lead                Lead              @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  website             Website           @relation("WebsiteAudits", fields: [websiteId], references: [id], onDelete: Cascade)
+  lead                Lead              @relation("LeadAudits", fields: [leadId], references: [id], onDelete: Cascade)
+  latestForLeads      Lead[]            @relation("LeadLatestAudit")
+  latestForWebsites   Website[]         @relation("WebsiteLatestAudit")
   evidenceItems       EvidenceItem[]
   detectedChannels    DetectedChannel[]
   reviewTasks         ReviewTask[]
@@ -398,6 +402,9 @@ model JobRun {
   finishedAt  DateTime?
   createdAt   DateTime  @default(now())
   tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  siteSnapshot        SiteSnapshot?        @relation("SiteSnapshotJob")
+  crawlSiteSnapshots  SiteSnapshot[]       @relation("SiteSnapshotCrawlJob")
+  siteAutomationCrawl SiteAutomationCrawl?
 
   @@unique([tenantId, dedupeKey])
   @@index([status, runAfter])
@@ -564,6 +571,8 @@ model SiteSnapshot {
   finishedAt          DateTime?
   tenant              Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   lead                Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  job                 JobRun?   @relation("SiteSnapshotJob", fields: [jobId], references: [id], onDelete: SetNull)
+  crawlJob            JobRun?   @relation("SiteSnapshotCrawlJob", fields: [crawlJobId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, leadId, createdAt])
   @@index([tenantId, createdAt])
@@ -610,6 +619,7 @@ model SiteAutomationCrawl {
   completedAt     DateTime?
   createdAt       DateTime  @default(now())
   tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  crawlJob        JobRun    @relation(fields: [crawlJobId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, status, crawlFinishedAt])
   @@index([tenantId, crawlFinishedAt])
