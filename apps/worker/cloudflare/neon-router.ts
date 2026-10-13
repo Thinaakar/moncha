@@ -22,8 +22,6 @@ import {
   createManualLead,
   createSchedule,
   currentUser,
-  DEMO_ADMIN_EMAIL,
-  demoAdminLogin,
   loginUser,
   logoutUser,
   registerUser,
@@ -203,14 +201,6 @@ export async function handleNeonApi(
       if (pathname === '/api/v1/auth/login' && method === 'POST') {
         const input = passwordLoginSchema.parse(await readJson(request));
         return jsonResponse(await loginUser(auth, { ...input, tenantId }), 200, cors);
-      }
-      const demoEnabled = typeof env.DEMO_LOGIN_ENABLED === 'string' && env.DEMO_LOGIN_ENABLED.trim().toLowerCase() === 'true';
-      if (pathname === '/api/v1/auth/demo' && method === 'GET') {
-        return jsonResponse({ enabled: demoEnabled, email: demoEnabled ? DEMO_ADMIN_EMAIL : null }, 200, cors);
-      }
-      if (pathname === '/api/v1/auth/demo' && method === 'POST') {
-        if (!demoEnabled) throw new HttpError(404, 'not_found', 'Demo login is turned off');
-        return jsonResponse(await demoAdminLogin(auth, { tenantId }), 200, cors);
       }
       if (pathname === '/api/v1/auth/logout' && method === 'POST') {
         return jsonResponse(await logoutUser(auth, { token }), 200, cors);

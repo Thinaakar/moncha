@@ -5,8 +5,6 @@ import {
   bearerToken,
   changePassword,
   currentUser,
-  DEMO_ADMIN_EMAIL,
-  demoAdminLogin,
   FORGOT_PASSWORD_REPLY,
   hashPassword,
   loginUser,
@@ -136,24 +134,6 @@ describe('auth use cases', () => {
     expect(await logoutUser(deps, { token: login.token })).toEqual({ ok: true });
     await expect(currentUser(deps, { token: login.token })).rejects.toMatchObject({ status: 401 });
     expect(await currentUser(deps, { token: reg.token })).toMatchObject({ email: 'ana@example.com' });
-  });
-
-  it('signs in as the demo admin, creating the account once with an unknown password', async () => {
-    const { deps, users } = memoryDeps();
-    const first = await demoAdminLogin(deps, { tenantId: TENANT });
-    expect(first.user).toMatchObject({ email: DEMO_ADMIN_EMAIL, role: 'admin', name: 'Demo admin', tenantId: TENANT });
-    expect(await currentUser(deps, { token: first.token })).toMatchObject({ role: 'admin' });
-
-    const second = await demoAdminLogin(deps, { tenantId: TENANT });
-    expect(second.user.id).toBe(first.user.id);
-    expect(users).toHaveLength(1);
-    expect(users[0]!.passwordHash).toMatch(/^pbkdf2_sha256\$/);
-  });
-
-  it('refuses the demo login when the demo email belongs to a non-admin', async () => {
-    const { deps } = memoryDeps();
-    await registerUser(deps, { tenantId: TENANT, email: DEMO_ADMIN_EMAIL, password: 'pass-1234' });
-    await expect(demoAdminLogin(deps, { tenantId: TENANT })).rejects.toMatchObject({ code: 'conflict' });
   });
 
   it('rejects a duplicate email with 409', async () => {

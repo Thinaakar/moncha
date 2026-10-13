@@ -171,29 +171,6 @@ export async function registerUser(
   return startSession(deps, user);
 }
 
-export const DEMO_ADMIN_EMAIL = 'demo-admin@moncha.local';
-
-/**
- * One-click sign-in as the tenant's demo admin, for demos. The account is created on first use with a random
- * password nobody knows, so it can only be entered through this route. Callers must gate it behind a setting.
- */
-export async function demoAdminLogin(deps: AuthDeps, input: { tenantId: string }): Promise<AuthSession> {
-  const existing = await deps.users.findByEmail(input.tenantId, DEMO_ADMIN_EMAIL);
-  const user =
-    existing ??
-    (await deps.users.create({
-      tenantId: input.tenantId,
-      email: DEMO_ADMIN_EMAIL,
-      name: 'Demo admin',
-      role: 'admin',
-      passwordHash: await hashPassword(randomToken()),
-    })) ??
-    (await deps.users.findByEmail(input.tenantId, DEMO_ADMIN_EMAIL));
-  if (!user) throw new AuthError('service_unavailable', 'The demo account could not be created');
-  if (user.role !== 'admin') throw new AuthError('conflict', `${DEMO_ADMIN_EMAIL} exists but is not an admin`);
-  return startSession(deps, user);
-}
-
 const INVALID_LOGIN = 'Invalid email or password';
 
 export async function loginUser(
