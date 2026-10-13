@@ -1606,7 +1606,6 @@ private R2 bucket under `sites/{tenantId}/{snapshotId}/`:
 | `source.html` | The HTML exactly as served (same bytes, charset and SHA-256 as view-source) |
 | `rendered.html` | The DOM after the browser ran the page's scripts |
 | `index.html` | `source.html` with only asset URLs rewritten to the local copies, for offline viewing |
-| `demo.html` | `index.html` plus the MonCha chatbot widget (`moncha-widget.js`) |
 | `brand.json` | Business name, logo, colors, fonts, contact, services, hours, greeting and FAQs (Gemini via OpenRouter, checked against the page) |
 | `manifest.json` | Assets, skipped assets with reasons, redirects, rewrite counts, exceptions and limits |
 | `screenshot-desktop.png`, `screenshot-mobile.png` | 1440 px and 390 px screenshots |
@@ -1670,7 +1669,7 @@ domain), `origin` (`auto` or `manual`). **200 OK** `{ "items", "total", "page", 
 
 ### 33. GET `/api/v1/site-snapshots/:id`
 
-**200 OK**: the summary plus `brand`, `previewBase` (`site-files/<token>/`), `files` (`index`, `demo`, `source`,
+**200 OK**: the summary plus `brand`, `previewBase` (`site-files/<token>/`), `files` (`index`, `source`,
 `rendered`, `desktop`, `mobile`) and `manifest`. The last three are `null` until the copy is `done`. Also
 `githubConfigured` (the worker has `GITHUB_TOKEN` and `GITHUB_SITES_REPO`) and `githubRepo` (`owner/name` or `null`).
 **404** for an unknown copy or one in another tenant.
@@ -1726,7 +1725,7 @@ starts: the snapshot and its job both become `failed` with reason `cancelled`. *
 
 When `GITHUB_TOKEN` and `GITHUB_SITES_REPO` are set, the worker pushes every finished copy to the sites repo by
 itself, as one commit under `sites/{domain}/{copyId}/` on `GITHUB_SITES_BRANCH` (default `main`). Pushed files:
-`index.html`, `demo.html`, `source.html`, `rendered.html`, `moncha-widget.js`, `brand.json`, `manifest.json` and the
+`index.html`, `source.html`, `rendered.html`, `brand.json`, `manifest.json` and the
 CSS and JS assets (`assets/...`). Images, fonts and screenshots stay in R2 only.
 
 A GitHub problem never fails the copy: it stays `done`, `github.error` explains the problem and the worker retries
@@ -1792,20 +1791,20 @@ worker runs the same check once at start-up and logs it as `site_github_check`.
 `error` explains a failed step, e.g. `github_bad_token: …`, `github_forbidden: Token cannot write …` (read-only
 token), `github_not_found: …` (no access to the repo) or `github_branch_missing: …` (empty repo).
 
-### 41b. Public demo links (`publicUrl`)
+### 41b. Public copy links (`publicUrl`)
 
 Every copy summary (lists, lead copies, copy detail) has `publicUrl`: a public, no-login link to the copy's
-`demo.html`, or `null` when the copy is not `done` or `SITE_PUBLIC_BASE_URL` is not set.
+`index.html`, or `null` when the copy is not `done` or `SITE_PUBLIC_BASE_URL` is not set.
 
 ```
-https://moncha-sites.pages.dev/sites/{domain}/{copyId}/demo.html
+https://moncha-sites.pages.dev/sites/{domain}/{copyId}/index.html
 ```
 
 The links are served by the Cloudflare Pages project in `apps/worker/sites-pages`: a Pages Function bound to the
-R2 bucket reads `sites/{tenantId}/{copyId}/{file}` and returns it as is, so the relative asset links in `demo.html`
+R2 bucket reads `sites/{tenantId}/{copyId}/{file}` and returns it as is, so the relative asset links in `index.html`
 resolve to the same copy. There is no build or deploy per copy; a copy is live the moment it is `done`.
 
-- GET and HEAD only. `/sites/{domain}/{copyId}/` redirects to `demo.html`. Unknown copies or files return 404.
+- GET and HEAD only. `/sites/{domain}/{copyId}/` redirects to `index.html`. Unknown copies or files return 404.
 - Every response has `x-robots-tag: noindex, nofollow, noarchive` and `robots.txt` disallows all crawling.
 - `source.html` and `rendered.html` are served as plain text so the captured scripts never run from them.
 - Responses are cached for 1 hour (`cache-control: public, max-age=3600`) and support `if-none-match`.

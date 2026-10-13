@@ -465,7 +465,7 @@ async function previewBaseFor(snapshot: SiteSnapshotRecord): Promise<string | nu
 const summarize = async (snapshot: SiteSnapshotRecord | SiteSnapshotListItem) =>
   siteSummary(snapshot, await previewBaseFor(snapshot));
 
-/** Public demo link on the sites Pages project, which serves the copy's R2 files directly. */
+/** Public link on the sites Pages project, which serves the copy's R2 files directly. */
 function publicUrlFor(snapshot: SiteSnapshotRecord | SiteSnapshotListItem): string | null {
   const base = siteAgentConfig().publicBaseUrl;
   if (!base || snapshot.status !== 'done' || !('company' in snapshot)) return null;
@@ -710,7 +710,6 @@ route('GET', '/api/v1/site-snapshots/:id', async ({ tenantId, params }) => {
     files: previewBase
       ? {
           index: `${previewBase}index.html`,
-          demo: `${previewBase}demo.html`,
           source: `${previewBase}source.html`,
           rendered: `${previewBase}rendered.html`,
           desktop: `${previewBase}screenshot-desktop.png`,

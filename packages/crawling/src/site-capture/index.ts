@@ -24,7 +24,6 @@ import { collectCssUrls, collectHtmlUrls, rewriteCss, rewriteHtml, type UrlResol
 import { describeFetchError, safeFetch, SafeFetchError, type SafeFetchResult } from './safe-fetch';
 import { isTrackingUrl } from './skip-rules';
 
-export { MONCHA_WIDGET_JS } from './moncha-widget.js';
 export { assetStoragePath, relativeStoredPath } from './asset-paths';
 export { detectCharset, decodeText } from './charset';
 export { rewriteHtml, rewriteCss, collectHtmlUrls } from './rewriter';

@@ -17,7 +17,6 @@ import {
   type SiteSnapshotRepo,
   type SiteStore,
 } from '../ports';
-import { demoConfigFromBrand, injectDemo, WIDGET_FILE } from '../site/demo-injection';
 import { brandFromEvidence } from '../site/evidence-brand';
 
 export const SITE_JOB_TIMEOUT_MS = 240_000;
@@ -46,7 +45,6 @@ export type SiteSnapshotJobDeps = {
   store: SiteStore;
   llmUsage?: LlmUsageRepo;
   maxLlmCallsPerDay?: number;
-  widgetJs: string;
   /** When the sites repo is configured, a finished copy is queued for a GitHub push. */
   githubEnabled?: boolean;
   logger: Logger;
@@ -111,7 +109,7 @@ function llmBudget(deps: SiteSnapshotJobDeps, tenantId: string, now: () => Date)
 }
 
 /**
- * Runs one site_snapshot job: capture, brand extraction, demo build and upload of every file under
+ * Runs one site_snapshot job: capture, brand extraction and upload of every file under
  * `sites/{tenantId}/{snapshotId}/`. A retry reuses the same snapshot and overwrites its objects.
  */
 export async function runSiteSnapshotJob(
@@ -202,24 +200,13 @@ export async function runSiteSnapshotJob(
     }
     if (signal.aborted) throw new SiteCaptureError('timeout');
 
-    const logoPath = brand.logo
-      ? (capture.manifest.assets.find((a) => a.id === brand.logo!.assetId)?.storedPath ?? null)
-      : null;
-    const demo = injectDemo(capture.indexHtml, demoConfigFromBrand(brand, logoPath));
-    const exceptions = [...capture.manifest.exceptions];
-    if (demo.cspNeutralized) {
-      exceptions.push({ file: 'demo.html', kind: 'meta_csp_neutralized', detail: `${demo.cspNeutralized} tag(s)` });
-      warnings.push('meta_csp_neutralized');
-    }
-    const manifest: SiteManifest = { ...capture.manifest, snapshotId, exceptions };
+    const manifest: SiteManifest = { ...capture.manifest, snapshotId };
 
     const htmlType = `text/html; charset=${capture.source.charset}`;
     const uploads: Upload[] = [
       { path: 'source.html', bytes: capture.source.bytes, contentType: htmlType },
       { path: 'rendered.html', bytes: encoder.encode(capture.renderedHtml), contentType: 'text/html; charset=utf-8' },
       { path: 'index.html', bytes: capture.indexHtml, contentType: htmlType },
-      { path: 'demo.html', bytes: demo.bytes, contentType: htmlType },
-      { path: WIDGET_FILE, bytes: encoder.encode(deps.widgetJs), contentType: 'text/javascript; charset=utf-8' },
       { path: 'brand.json', bytes: json(brand), contentType: 'application/json; charset=utf-8' },
       { path: 'manifest.json', bytes: json(manifest), contentType: 'application/json; charset=utf-8' },
       ...capture.files.map((f) => ({ path: f.path, bytes: f.bytes, contentType: f.contentType })),

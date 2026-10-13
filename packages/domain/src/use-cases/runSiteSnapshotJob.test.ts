@@ -198,7 +198,6 @@ function setup(over: Partial<SiteSnapshotJobDeps> = {}, jobOver: Partial<JobRunR
     store,
     llmUsage,
     maxLlmCallsPerDay: 10,
-    widgetJs: '/* widget */',
     logger: silent,
     ...over,
   };
@@ -225,10 +224,8 @@ describe('runSiteSnapshotJob', () => {
       [
         'assets/cdn.x.com/logo.png',
         'brand.json',
-        'demo.html',
         'index.html',
         'manifest.json',
-        'moncha-widget.js',
         'rendered.html',
         'screenshot-desktop.png',
         'screenshot-mobile.png',
@@ -236,10 +233,7 @@ describe('runSiteSnapshotJob', () => {
       ].map((k) => `sites/t1/snap1/${k}`),
     );
     const index = dec(s.objects.get('sites/t1/snap1/index.html')!.bytes);
-    const demo = dec(s.objects.get('sites/t1/snap1/demo.html')!.bytes);
-    expect(index).not.toContain('data-moncha-demo');
-    expect(demo).toContain('data-moncha-demo');
-    expect(demo).toContain('"logoPath":"assets/cdn.x.com/logo.png"');
+    expect(index).not.toContain('moncha-widget');
     expect(Buffer.from(s.objects.get('sites/t1/snap1/source.html')!.bytes).equals(Buffer.from(captureResult().source.bytes))).toBe(true);
     const manifest = JSON.parse(dec(s.objects.get('sites/t1/snap1/manifest.json')!.bytes));
     expect(manifest.snapshotId).toBe('snap1');

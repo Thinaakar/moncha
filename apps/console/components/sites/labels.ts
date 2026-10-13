@@ -50,7 +50,7 @@ export function isPermanentFailure(reason: string | null | undefined) {
 const WARNINGS: Record<string, string> = {
   js_rendered_site: 'Built with JavaScript: the served HTML has little content, so the offline copy may look incomplete.',
   meta_csp_present: 'The page has its own Content-Security-Policy tag, which may block parts of the offline copy.',
-  meta_csp_neutralized: 'The page CSP tag was disabled in demo.html only, so the widget can run.',
+  meta_csp_neutralized: 'Older copy: the page CSP tag was disabled in its demo page only.',
   base_href_neutralized: 'The <base href> tag was pointed at the copy so local assets resolve.',
   rewrite_skipped_utf16: 'UTF-16 page: index.html is an unmodified copy of the source.',
   asset_limit_reached: 'Asset limit reached; some files were not copied.',

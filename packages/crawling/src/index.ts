@@ -23,7 +23,6 @@ export {
 export {
   MonchaSiteCapturer,
   DEFAULT_SITE_LIMITS,
-  MONCHA_WIDGET_JS,
   assetStoragePath,
   relativeStoredPath,
   detectCharset,

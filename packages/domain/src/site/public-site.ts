@@ -1,9 +1,9 @@
 /**
- * Public demo links: `{base}/sites/{domain}/{copyId}/demo.html`. The sites Pages project serves them straight
+ * Public links: `{base}/sites/{domain}/{copyId}/index.html`. The sites Pages project serves them straight
  * from the copy's R2 files, so a link works as soon as the copy is done. Kept free of imports so the Pages
  * Function can bundle this file on its own.
  */
-export const PUBLIC_SITE_ENTRY = 'demo.html';
+export const PUBLIC_SITE_ENTRY = 'index.html';
 
 const DOMAIN = /^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/;
 const COPY_ID = /^[a-z0-9]{20,40}$/;

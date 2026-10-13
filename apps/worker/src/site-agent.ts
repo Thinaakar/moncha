@@ -18,7 +18,7 @@ export type SiteAgentConfig = {
   model: string | undefined;
   llmTimeoutMs: number;
   limits: { maxAssets: number; maxFileBytes: number; maxTotalBytes: number };
-  /** Origin of the sites Pages project that serves public demo links; null hides the links. */
+  /** Origin of the sites Pages project that serves public copy links; null hides the links. */
   publicBaseUrl: string | null;
   /** R2 and the preview secret are both required; otherwise copies cannot be stored or viewed. */
   ready: boolean;

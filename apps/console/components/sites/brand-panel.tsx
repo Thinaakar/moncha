@@ -1,6 +1,6 @@
 'use client';
 
-import { Bot, Clock, Globe, ImageOff, Mail, MapPin, MessageCircle, Palette, Phone, Sparkles, Type } from 'lucide-react';
+import { Clock, Globe, ImageOff, Mail, MapPin, MessageCircle, Palette, Phone, Sparkles, Type } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { EmptyState } from '@/components/app/states';
@@ -228,44 +228,6 @@ export function BrandPanel({
           </CardContent>
         </Card>
       </div>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Bot className="size-4 text-primary" /> Chatbot demo content
-          </CardTitle>
-          <CardDescription>Greeting and answers the MonCha widget shows in demo.html</CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-6 lg:grid-cols-[minmax(0,320px)_1fr]">
-          <div className="overflow-hidden rounded-xl border shadow-sm">
-            <div className="px-4 py-3 text-sm font-semibold text-white" style={{ background: brand.colors.primary ?? '#1877f2' }}>
-              {brand.businessName ?? 'Assistant'}
-            </div>
-            <div className="space-y-2 bg-muted/30 p-4">
-              <p className="max-w-[85%] rounded-2xl rounded-tl-sm bg-card px-3 py-2 text-sm shadow-xs">{brand.chatbot.greeting}</p>
-              <div className="flex flex-wrap gap-1.5 pt-1">
-                {brand.chatbot.faqs.slice(0, 4).map((f, i) => (
-                  <span key={i} className="rounded-full border bg-card px-2.5 py-1 text-xs">
-                    {f.question}
-                  </span>
-                ))}
-              </div>
-            </div>
-          </div>
-          {brand.chatbot.faqs.length ? (
-            <dl className="divide-y rounded-lg border">
-              {brand.chatbot.faqs.map((f, i) => (
-                <div key={i} className="space-y-1 px-4 py-3">
-                  <dt className="text-sm font-medium">{f.question}</dt>
-                  <dd className="text-sm text-muted-foreground">{f.answer}</dd>
-                </div>
-              ))}
-            </dl>
-          ) : (
-            <p className="text-sm text-muted-foreground">No FAQs were generated.</p>
-          )}
-        </CardContent>
-      </Card>
     </div>
   );
 }

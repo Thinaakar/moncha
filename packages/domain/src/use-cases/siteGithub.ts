@@ -8,7 +8,6 @@ import {
   type SiteSnapshotRepo,
   type SiteStore,
 } from '../ports';
-import { WIDGET_FILE } from '../site/demo-injection';
 
 /** Total tries before the push is marked failed; the waits between them are SITE_GITHUB_BACKOFF_MS. */
 export const SITE_GITHUB_MAX_ATTEMPTS = 6;
@@ -17,7 +16,7 @@ export const SITE_GITHUB_BACKOFF_MS = [60_000, 5 * 60_000, 15 * 60_000, 60 * 60_
 export const SITE_GITHUB_STALE_MS = 10 * 60_000;
 
 /** Root files of a copy that are pushed; screenshots stay in R2. */
-const ROOT_FILES = ['index.html', 'demo.html', 'source.html', 'rendered.html', WIDGET_FILE, 'brand.json', 'manifest.json'];
+const ROOT_FILES = ['index.html', 'source.html', 'rendered.html', 'brand.json', 'manifest.json'];
 const CODE_ASSET = /\.(css|js|mjs)$/i;
 
 /** Folder name for a copy's domain: lowercase host without `www.`, safe for a git path. */
@@ -70,7 +69,7 @@ async function readFiles(store: SiteStore, prefix: string, paths: string[]): Pro
     while (next < paths.length) {
       const path = paths[next++]!;
       const bytes = await store.getBytes(`${prefix}${path}`);
-      // Copies made before a file existed (e.g. the widget) simply push without it.
+      // Copies made before a file existed simply push without it.
       if (bytes) files.push({ path, bytes });
     }
   };

@@ -77,7 +77,7 @@ export function WebsiteCopyCard({ leadId, hasWebsite }: { leadId: string; hasWeb
         <CardTitle className="flex items-center gap-2">
           <ScanEye className="size-4 text-primary" /> Website copy
         </CardTitle>
-        <CardDescription>Offline copy of the homepage, its brand, and a MonCha chatbot demo</CardDescription>
+        <CardDescription>Offline copy of the homepage and its brand</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         {error ? (
@@ -86,7 +86,7 @@ export function WebsiteCopyCard({ leadId, hasWebsite }: { leadId: string; hasWeb
           <Skeleton className="aspect-[16/10] w-full" />
         ) : !latest ? (
           <p className="rounded-lg border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
-            {hasWebsite ? 'No copy yet. Create one to preview the site offline and build the demo.' : 'This lead has no website to copy.'}
+            {hasWebsite ? 'No copy yet. Create one to preview the site offline.' : 'This lead has no website to copy.'}
           </p>
         ) : (
           <>

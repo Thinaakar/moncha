@@ -20,7 +20,6 @@ const FILES = [
   { name: 'source.html', description: 'HTML exactly as served (view-source)' },
   { name: 'rendered.html', description: 'DOM after the page scripts ran' },
   { name: 'index.html', description: 'Source with asset URLs pointed at the local copies' },
-  { name: 'demo.html', description: 'index.html plus the MonCha widget' },
   { name: 'brand.json', description: 'Brand details' },
   { name: 'manifest.json', description: 'Assets, skipped files, redirects and exceptions' },
   { name: 'screenshot-desktop.png', description: '1440 px wide, full page' },

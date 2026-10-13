@@ -4,9 +4,9 @@ import { parsePublicSitePath, publicSiteUrl } from './public-site';
 const ID = 'cmv4xvpje00rzny0urf1ewcu5';
 
 describe('publicSiteUrl', () => {
-  it('builds the demo link under the base', () => {
+  it('builds the copy link under the base', () => {
     expect(publicSiteUrl('https://moncha-sites.pages.dev/', 'spacerent.sg', ID)).toBe(
-      `https://moncha-sites.pages.dev/sites/spacerent.sg/${ID}/demo.html`,
+      `https://moncha-sites.pages.dev/sites/spacerent.sg/${ID}/index.html`,
     );
   });
 });

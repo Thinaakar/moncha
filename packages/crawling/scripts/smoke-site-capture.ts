@@ -5,31 +5,10 @@
  */
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { injectDemo, WIDGET_FILE, type SiteBrand } from '@moncha/domain';
 import { closeRenderBrowser } from '../src/render-pass.ts';
-import { MONCHA_WIDGET_JS, MonchaSiteCapturer } from '../src/site-capture/index.ts';
+import { MonchaSiteCapturer } from '../src/site-capture/index.ts';
 
 const OUT_ROOT = path.resolve(process.cwd(), '.site-smoke');
-
-function placeholderBrand(title: string | null): SiteBrand {
-  return {
-    businessName: title,
-    logo: null,
-    colors: { primary: null, secondary: null, accent: null, background: null, text: null },
-    fonts: { heading: null, body: null },
-    contact: { phones: [], emails: [], address: null, whatsapp: null },
-    services: [],
-    hours: [],
-    hoursText: null,
-    socialLinks: [],
-    language: null,
-    tone: null,
-    chatbot: { greeting: `Hi! Welcome to ${title ?? 'our site'}. How can we help?`, faqs: [] },
-    confidence: 0,
-    notes: 'smoke test placeholder',
-    source: 'evidence',
-  };
-}
 
 async function captureOne(url: string) {
   const started = Date.now();
@@ -44,26 +23,9 @@ async function captureOne(url: string) {
     await writeFile(file, bytes);
   };
 
-  const primary = result.evidence.colors.find((c) => c.usage === 'button-background')?.value ?? null;
-  const brand = placeholderBrand(result.evidence.title);
-  brand.colors.primary = primary;
-  const demo = injectDemo(result.indexHtml, {
-    businessName: brand.businessName,
-    greeting: brand.chatbot.greeting,
-    faqs: [],
-    colors: { primary, background: null, text: null },
-    phone: result.evidence.links.tel[0] ?? null,
-    email: result.evidence.links.mailto[0] ?? null,
-    whatsapp: null,
-    language: result.evidence.lang,
-    logoPath: null,
-  });
-
   await write('source.html', result.source.bytes);
   await write('rendered.html', result.renderedHtml);
   await write('index.html', result.indexHtml);
-  await write('demo.html', demo.bytes);
-  await write(WIDGET_FILE, MONCHA_WIDGET_JS);
   await write('manifest.json', JSON.stringify({ snapshotId: 'smoke', ...result.manifest }, null, 2));
   await write('evidence.json', JSON.stringify(result.evidence, null, 2));
   if (result.screenshots.desktop) await write('screenshot-desktop.png', result.screenshots.desktop);

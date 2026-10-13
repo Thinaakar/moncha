@@ -50,7 +50,7 @@ export function SitesView() {
     <div>
       <PageHeader
         title="Website copies"
-        description="Offline copies of lead homepages with their brand details and a MonCha chatbot demo. Start one from a lead's page, or let the automation copy new qualified leads after each crawl."
+        description="Offline copies of lead homepages with their brand details. Start one from a lead's page, or let the automation copy new qualified leads after each crawl."
         actions={
           automation.data && (
             <button

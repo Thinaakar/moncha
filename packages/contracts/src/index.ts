@@ -440,7 +440,7 @@ export type SiteSnapshotSummary = {
   /** GitHub push of the code files; null when never queued. Older API versions omit it. */
   github?: SiteGithubPush | null;
   /**
-   * Public demo link (`https://moncha-sites.pages.dev/sites/{domain}/{copyId}/demo.html`) once done; null while
+   * Public link (`https://moncha-sites.pages.dev/sites/{domain}/{copyId}/index.html`) once done; null while
    * running, after a failure or when the worker has no SITE_PUBLIC_BASE_URL. Older API versions omit it.
    */
   publicUrl?: string | null;
@@ -468,7 +468,8 @@ export type SiteGithubPush = {
 
 export type SiteSnapshotFiles = {
   index: string;
-  demo: string;
+  /** Widget demo page; only older API versions return it. */
+  demo?: string;
   source: string;
   rendered: string;
   desktop: string;

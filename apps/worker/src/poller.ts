@@ -41,7 +41,6 @@ import {
   closeRenderBrowser,
   defaultEvidenceRoot,
   LocalDiskEvidenceStore,
-  MONCHA_WIDGET_JS,
   MonchaSiteCapturer,
   MonchaWebsiteAuditor,
 } from '@moncha/crawling';
@@ -251,7 +250,6 @@ function startSiteSnapshot(job: JobRunRecord, store: SiteStore) {
       store,
       llmUsage: new PrismaLlmUsageRepository(prisma),
       maxLlmCallsPerDay: Number(process.env.LLM_MAX_CALLS_PER_DAY || 0) || undefined,
-      widgetJs: MONCHA_WIDGET_JS,
       githubEnabled: Boolean(githubPublisher),
       logger,
     },

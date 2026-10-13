@@ -4,7 +4,7 @@ import { ExternalLink, Radio } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { CopyButton } from '@/components/app/widgets';
 
-/** Opens the copy's public demo link (sites Pages project). Hidden until the API returns one. */
+/** Opens the copy's public link (sites Pages project). Hidden until the API returns one. */
 export function LiveSiteButton({
   url,
   size = 'default',

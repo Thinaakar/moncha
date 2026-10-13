@@ -824,11 +824,10 @@ curl -X GET http://127.0.0.1:8080/health
 ---
 
 ### 15–20. Website copies (Website Copy Agent)
-One run copies a lead's homepage for offline viewing and builds a chatbot demo of it. The worker
+One run copies a lead's homepage for offline viewing and extracts its brand. The worker
 (`site_snapshot` job) stores everything in the private R2 bucket under `sites/{tenantId}/{snapshotId}/`:
 `source.html` (exact bytes as served), `rendered.html`, `index.html` (source with only asset URLs rewritten),
-`demo.html` (index plus the MonCha widget), `brand.json`, `manifest.json`, `screenshot-desktop.png`,
-`screenshot-mobile.png`, `moncha-widget.js` and `assets/...`.
+`brand.json`, `manifest.json`, `screenshot-desktop.png`, `screenshot-mobile.png` and `assets/...`.
 
 These routes need `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` and `SITE_PREVIEW_SECRET`;
 otherwise they answer `503 site_agent_not_configured`. On Cloudflare they always go to the container.
@@ -861,7 +860,7 @@ the source URL, company name and domain.
 
 #### 18. `GET /api/v1/site-snapshots/:id`
 The summary plus `brand` (see `siteBrandSchema` in `@moncha/contracts`), `previewBase` (`site-files/<token>/`),
-`files { index, demo, source, rendered, desktop, mobile }` and `manifest` (`assets[]`, `skipped[]`, `exceptions[]`,
+`files { index, source, rendered, desktop, mobile }` and `manifest` (`assets[]`, `skipped[]`, `exceptions[]`,
 `redirects[]`, `rewrites`, `limits`). `previewBase`, `files` and `manifest` are `null` until the copy is `done`.
 
 #### 19. `GET /api/v1/site-snapshots/:id/source`
@@ -914,8 +913,8 @@ curl -X PUT http://127.0.0.1:4000/api/v1/site-automation \
 
 #### 26. `POST /api/v1/site-snapshots/:id/github-push`
 With `GITHUB_TOKEN` and `GITHUB_SITES_REPO` set (branch `GITHUB_SITES_BRANCH`, default `main`), the worker pushes
-every finished copy by itself as one commit under `sites/{domain}/{copyId}/`: the four HTML files,
-`moncha-widget.js`, `brand.json`, `manifest.json` and the CSS/JS assets. Images, fonts and screenshots stay in R2.
+every finished copy by itself as one commit under `sites/{domain}/{copyId}/`: the three HTML files,
+`brand.json`, `manifest.json` and the CSS/JS assets. Images, fonts and screenshots stay in R2.
 A GitHub failure never fails the copy; the worker retries after 1 min, 5 min, 15 min, 1 h and 3 h, then marks the
 push `failed`. This route queues a push now (an older copy, a retry, or a push again).
 * **Headers**: `Authorization: Bearer <token>` (role `admin` or `operator`).
@@ -929,8 +928,8 @@ Editor-only connectivity check of the sites repo: `{ configured, keys, repo, bra
 canWrite, branchHead, folderPattern, error, checkedAt }`. Write access is proven by creating an unreferenced blob, so
 the branch never moves. `keys` holds booleans only; the token is never returned. See `apps/worker/API.md` §41a.
 
-#### 26b. Public demo links
-Copy summaries carry `publicUrl` (`{SITE_PUBLIC_BASE_URL}/sites/{domain}/{copyId}/demo.html`, or `null` until the
+#### 26b. Public copy links
+Copy summaries carry `publicUrl` (`{SITE_PUBLIC_BASE_URL}/sites/{domain}/{copyId}/index.html`, or `null` until the
 copy is `done`). The Cloudflare Pages project in `apps/worker/sites-pages` serves these straight from the R2 bucket.
 See `apps/worker/API.md` §41b.
 

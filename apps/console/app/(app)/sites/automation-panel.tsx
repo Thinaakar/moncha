@@ -106,7 +106,7 @@ function SettingsCard({ state }: { state: SiteAutomationState }) {
             )}
           </CardTitle>
           <CardDescription>
-            After each country crawl, copy the homepages of its new qualified leads so demos are ready without clicking.
+            After each country crawl, copy the homepages of its new qualified leads so copies are ready without clicking.
           </CardDescription>
         </div>
         <Tooltip content={canEdit ? (state.enabled ? 'Turn off' : 'Turn on') : 'Viewers cannot change this'}>

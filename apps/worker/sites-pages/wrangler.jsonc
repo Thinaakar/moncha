@@ -1,4 +1,4 @@
-// Public demo links for website copies: https://moncha-sites.pages.dev/sites/{domain}/{copyId}/demo.html
+// Public links for website copies: https://moncha-sites.pages.dev/sites/{domain}/{copyId}/index.html
 // The Function under functions/sites reads the copy's files from the worker's private R2 bucket; nothing is
 // built or uploaded per copy. Deploy: pnpm --filter @moncha/worker sites:deploy
 // Must stay .jsonc: Wrangler prefers apps/worker/wrangler.jsonc over a wrangler.toml in this folder.

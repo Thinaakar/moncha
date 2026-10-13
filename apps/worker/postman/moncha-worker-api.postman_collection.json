@@ -479,10 +479,6 @@
           "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/{{previewBase}}index.html" }
         },
         {
-          "name": "File - demo.html (with widget)",
-          "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/{{previewBase}}demo.html" }
-        },
-        {
           "name": "File - source.html download",
           "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/{{previewBase}}source.html?download=1" }
         },

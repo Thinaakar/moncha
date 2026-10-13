@@ -128,9 +128,9 @@ describe('site GitHub push', () => {
 
   it('pushes HTML, CSS, JS and the JSON files but no images or fonts', () => {
     const paths = siteGithubPaths({ assets: ASSETS });
-    expect(paths).toEqual(
-      expect.arrayContaining(['index.html', 'demo.html', 'source.html', 'rendered.html', 'moncha-widget.js', 'brand.json', 'manifest.json']),
-    );
+    expect(paths).toEqual(expect.arrayContaining(['index.html', 'source.html', 'rendered.html', 'brand.json', 'manifest.json']));
+    expect(paths).not.toContain('demo.html');
+    expect(paths).not.toContain('moncha-widget.js');
     expect(paths).toContain('assets/ja.edu.sg/wp-content/theme.css');
     expect(paths).toContain('assets/ja.edu.sg/wp-includes/jquery.min.js');
     expect(paths.some((p) => p.endsWith('.png') || p.endsWith('.woff2'))).toBe(false);
@@ -141,12 +141,11 @@ describe('site GitHub push', () => {
     const outcome = await pushSiteSnapshotToGithub(deps, snapshot());
     expect(outcome.status).toBe('pushed');
     expect(calls[0]!.folder).toBe('sites/ja.edu.sg/snap1');
-    // moncha-widget.js is missing from this store, so it is skipped instead of failing the push.
+    // The store still has demo.html from an older copy; it is no longer pushed.
     expect(calls[0]!.files.map((f) => f.path)).toEqual([
       'assets/ja.edu.sg/wp-content/theme.css',
       'assets/ja.edu.sg/wp-includes/jquery.min.js',
       'brand.json',
-      'demo.html',
       'index.html',
       'manifest.json',
       'rendered.html',

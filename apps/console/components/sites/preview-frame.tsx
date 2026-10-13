@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Bot, ExternalLink, FileCode2, Monitor, RotateCw, Smartphone, Tablet, TriangleAlert } from 'lucide-react';
+import { ExternalLink, Monitor, RotateCw, Smartphone, Tablet, TriangleAlert } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { InlineAlert } from '@/components/app/states';
 import { Segmented } from '@/components/sites/tabs';
@@ -9,7 +9,6 @@ import { siteFileUrl } from '@/lib/queries';
 import { useUrlState } from '@/lib/use-url-state';
 import type { SiteSnapshotFiles } from '@/lib/types';
 
-type Mode = 'original' | 'demo';
 type Device = 'desktop' | 'tablet' | 'mobile';
 
 const DEVICES: Record<Device, { width: number; height: number; label: string }> = {
@@ -38,10 +37,8 @@ function useWidth<T extends HTMLElement>() {
  */
 export function PreviewFrame({ files, warnings }: { files: SiteSnapshotFiles; warnings: string[] }) {
   const url = useUrlState();
-  const mode: Mode = url.get('view') === 'demo' ? 'demo' : 'original';
   const requestedDevice = url.get('device') as Device;
   const device: Device = Object.hasOwn(DEVICES, requestedDevice) ? requestedDevice : 'desktop';
-  const setMode = (value: Mode) => url.set({ view: value === 'original' ? null : value });
   const setDevice = (value: Device) => url.set({ device: value === 'desktop' ? null : value });
   const [reloads, setReloads] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -50,12 +47,12 @@ export function PreviewFrame({ files, warnings }: { files: SiteSnapshotFiles; wa
   // The signed links change when the snapshot is refetched; keep the loaded page until the user acts.
   const latest = useRef(files);
   latest.current = files;
-  const current = () => siteFileUrl(mode === 'demo' ? latest.current.demo : latest.current.index);
+  const current = () => siteFileUrl(latest.current.index);
   const [src, setSrc] = useState(current);
   useEffect(() => {
     setSrc(current());
     setLoading(true);
-  }, [mode, reloads]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [reloads]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const size = DEVICES[device];
   const scale = containerWidth > 0 ? Math.min(1, containerWidth / size.width) : 1;
@@ -65,15 +62,6 @@ export function PreviewFrame({ files, warnings }: { files: SiteSnapshotFiles; wa
   return (
     <div className="space-y-4">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-        <Segmented
-          label="Preview version"
-          value={mode}
-          onChange={setMode}
-          options={[
-            { value: 'original', label: 'Original copy', icon: FileCode2 },
-            { value: 'demo', label: 'MonCha demo', icon: Bot },
-          ]}
-        />
         <Segmented
           label="Device width"
           value={device}
@@ -106,9 +94,9 @@ export function PreviewFrame({ files, warnings }: { files: SiteSnapshotFiles; wa
           the other tabs show the real page.
         </InlineAlert>
       )}
-      {metaCsp && mode === 'original' && (
+      {metaCsp && (
         <InlineAlert variant="info" icon={TriangleAlert} title="The page sets its own Content-Security-Policy">
-          It is kept unchanged in the original copy and may block some local files. The demo version disables it.
+          It is kept unchanged in the copy and may block some local files.
         </InlineAlert>
       )}
 
@@ -124,7 +112,7 @@ export function PreviewFrame({ files, warnings }: { files: SiteSnapshotFiles; wa
           )}
           <iframe
             key={`${src}-${reloads}`}
-            title={mode === 'demo' ? 'MonCha demo preview' : 'Offline website copy'}
+            title="Offline website copy"
             src={src}
             sandbox="allow-scripts"
             referrerPolicy="no-referrer"
