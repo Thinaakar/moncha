@@ -107,8 +107,10 @@ Common error codes:
 | **23** | `/api/v1/site-automation` | `GET` | **READ** | Copy automation settings and today's count |
 | **24** | `/api/v1/site-automation` | `PUT` | **UPDATE** | Turns copy automation on or off (signed-in editor) |
 | **25** | `/api/v1/site-automation/crawls` | `GET` | **READ** | Crawls followed by the automation and their copies |
-| **26** | `/api/v1/site-snapshots/:id/github-push` | `POST` | **UPDATE** | Pushes a finished copy to the GitHub sites repo now (signed-in editor) |
-| **26a** | `/api/v1/site-automation/github-check` | `GET` | **READ** | GitHub sites repo connectivity: read and write access, token never returned (signed-in editor) |
+| **26** | `/api/v1/site-snapshots/:id/github-push` | `POST` | **UPDATE** | Pushes a finished copy to its website's own GitHub repo now (signed-in editor) |
+| **26a** | `/api/v1/site-automation/github-check` | `GET` | **READ** | GitHub connectivity for the site repos, token never returned (signed-in editor) |
+| **26c** | `/api/v1/site-snapshots/:id/deploy` | `POST` | **UPDATE** | Deploys a finished copy to its website's own Cloudflare Worker now (signed-in editor) |
+| **26d** | `/api/v1/site-automation/deploy-check` | `GET` | **READ** | Cloudflare Workers connectivity, token never returned (signed-in editor) |
 
 ---
 
@@ -911,27 +913,43 @@ curl -X PUT http://127.0.0.1:4000/api/v1/site-automation \
   -d '{"enabled":true}'
 ```
 
+One website = one GitHub repository = one Cloudflare Worker = one URL. The site name is the domain without `www.`,
+dots as dashes (`ja.edu.sg` → `ja-edu-sg`); summaries carry it as `siteName`. A newer copy of the same website
+updates the same repo and Worker.
+
 #### 26. `POST /api/v1/site-snapshots/:id/github-push`
-With `GITHUB_TOKEN` and `GITHUB_SITES_REPO` set (branch `GITHUB_SITES_BRANCH`, default `main`), the worker pushes
-every finished copy by itself as one commit under `sites/{domain}/{copyId}/`: the three HTML files,
-`brand.json`, `manifest.json` and the CSS/JS assets. Images, fonts and screenshots stay in R2.
-A GitHub failure never fails the copy; the worker retries after 1 min, 5 min, 15 min, 1 h and 3 h, then marks the
-push `failed`. This route queues a push now (an older copy, a retry, or a push again).
+With `GITHUB_TOKEN` and `GITHUB_SITES_OWNER` (or the owner of `GITHUB_SITES_REPO`) set, the worker pushes every
+finished copy by itself to the private repo `{owner}/{siteName}`, creating it when missing (topics `moncha-site` plus
+`auto-copy` or `manual-copy`). Layout: `README.md`, `wrangler.jsonc`, `public/` (the website with all assets) and
+`moncha/` (brand.json, manifest.json, source.html). A GitHub failure never fails the copy; the worker retries after
+1 min, 5 min, 15 min, 1 h and 3 h, then marks the push `failed`. This route queues a push now.
 * **Headers**: `Authorization: Bearer <token>` (role `admin` or `operator`).
 * **`202 Accepted`** `{ "queued": true }`.
 * **`github` on the summary**: `{ status: pending|pushing|pushed|failed, attempts, maxAttempts, nextAt, commitSha,
-  commitUrl, folderUrl, error, pushedAt }`. The detail response also has `githubConfigured` and `githubRepo`.
+  commitUrl, folderUrl, repo, error, pushedAt }`. The detail response also has `githubConfigured` and `githubRepo`.
 * **`404`** unknown copy · **`409 not_ready`** copy not done · **`409 push_in_progress`** · **`503 github_not_configured`**.
 
 #### 26a. `GET /api/v1/site-automation/github-check`
-Editor-only connectivity check of the sites repo: `{ configured, keys, repo, branch, private, canPush, canRead,
-canWrite, branchHead, folderPattern, error, checkedAt }`. Write access is proven by creating an unreferenced blob, so
-the branch never moves. `keys` holds booleans only; the token is never returned. See `apps/worker/API.md` §41a.
+Editor-only check that the token is valid and can see the owner: `{ configured, keys, repo, owner, login, ownerType,
+canRead, folderPattern, error, checkedAt }` (older fields `branch`, `private`, `canPush`, `canWrite`, `branchHead`
+stay for compatibility). Nothing is created; the token is never returned. See `apps/worker/API.md` §41a.
+
+#### 26c. `POST /api/v1/site-snapshots/:id/deploy`
+With `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` (or `R2_ACCOUNT_ID`) set, the worker deploys every finished
+copy by itself as the static-assets Worker `{siteName}` at `https://{siteName}.{subdomain}.workers.dev`. Same retries
+as GitHub. This route queues a deploy now (an older copy, a retry or a redeploy).
+* **`202 Accepted`** `{ "queued": true }`.
+* **`deploy` on the summary**: `{ status: pending|deploying|deployed|failed, attempts, maxAttempts, nextAt, name, url,
+  error, deployedAt }`. The detail response also has `deployConfigured`.
+* **`404`** unknown copy · **`409 not_ready`** · **`409 deploy_in_progress`** · **`503 deploy_not_configured`**.
+
+#### 26d. `GET /api/v1/site-automation/deploy-check`
+Editor-only Cloudflare check: `{ configured, keys, subdomain, urlPattern, canRead, siteWorkers, totalWorkers, error,
+checkedAt }`. See `apps/worker/API.md` §41d.
 
 #### 26b. Public copy links
-Copy summaries carry `publicUrl` (`{SITE_PUBLIC_BASE_URL}/sites/{domain}/{copyId}/index.html`, or `null` until the
-copy is `done`). The Cloudflare Pages project in `apps/worker/sites-pages` serves these straight from the R2 bucket.
-See `apps/worker/API.md` §41b.
+Copy summaries carry `publicUrl`: the Worker URL once deployed, else the older shared link
+(`{SITE_PUBLIC_BASE_URL}/sites/{domain}/{copyId}/index.html`) when configured, else `null`. See `apps/worker/API.md` §41b.
 
 ---
 

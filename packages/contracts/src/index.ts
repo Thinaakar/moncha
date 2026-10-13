@@ -437,13 +437,38 @@ export type SiteSnapshotSummary = {
   company?: { id: string; name: string; domain: string | null };
   /** Proxy-relative path (`site-files/<token>/screenshot-desktop.png`) once done. */
   thumbnailPath: string | null;
-  /** GitHub push of the code files; null when never queued. Older API versions omit it. */
-  github?: SiteGithubPush | null;
   /**
-   * Public link (`https://moncha-sites.pages.dev/sites/{domain}/{copyId}/index.html`) once done; null while
-   * running, after a failure or when the worker has no SITE_PUBLIC_BASE_URL. Older API versions omit it.
+   * The website's name, e.g. `ja-edu-sg` for ja.edu.sg: the name of its GitHub repo and Cloudflare Worker.
+   * Older API versions omit it.
+   */
+  siteName?: string;
+  /** Push to the website's own GitHub repo; null when never queued. Older API versions omit it. */
+  github?: SiteGithubPush | null;
+  /** Deploy to the website's own Cloudflare Worker; null when never queued. Older API versions omit it. */
+  deploy?: SiteWorkerDeploy | null;
+  /**
+   * Public link once done: the Worker URL (`https://{siteName}.{subdomain}.workers.dev`) when deployed, else the older
+   * shared Pages link when the worker has SITE_PUBLIC_BASE_URL; null otherwise. Older API versions omit it.
    */
   publicUrl?: string | null;
+};
+
+/** Same lifecycle as SiteGithubStatus: pending, deploying, deployed, or failed after repeated errors. */
+export type SiteWorkerStatus = 'pending' | 'deploying' | 'deployed' | 'failed';
+
+export type SiteWorkerDeploy = {
+  status: SiteWorkerStatus;
+  attempts: number;
+  maxAttempts: number;
+  /** Next try while `pending`. */
+  nextAt: string | null;
+  /** Worker script name (the site name). */
+  name: string | null;
+  /** `https://{name}.{subdomain}.workers.dev` once deployed. */
+  url: string | null;
+  /** Last Cloudflare error; kept while a retry is waiting. */
+  error: string | null;
+  deployedAt: string | null;
 };
 
 /**
@@ -460,7 +485,10 @@ export type SiteGithubPush = {
   nextAt: string | null;
   commitSha: string | null;
   commitUrl: string | null;
+  /** The website's repo page (`https://github.com/{owner}/{siteName}`); older copies point at a folder of the shared repo. */
   folderUrl: string | null;
+  /** `owner/name` of the website's own repo once pushed. Older API versions omit it. */
+  repo?: string | null;
   /** Last GitHub error; kept while a retry is waiting. */
   error: string | null;
   pushedAt: string | null;
@@ -481,25 +509,52 @@ export type SiteSnapshotDetail = SiteSnapshotSummary & {
   previewBase: string | null;
   files: SiteSnapshotFiles | null;
   manifest: SiteManifest | null;
-  /** The worker has GITHUB_TOKEN and GITHUB_SITES_REPO, so copies can be pushed. */
+  /** The worker has a GitHub token and owner, so copies can be pushed. */
   githubConfigured?: boolean;
-  /** `owner/name` of the sites repo when configured. */
+  /** Where this website's repo lives (or will live): `owner/siteName`. */
   githubRepo?: string | null;
+  /** The worker has Cloudflare credentials, so copies can be deployed as Workers. Older API versions omit it. */
+  deployConfigured?: boolean;
 };
 
-/** `GET /api/v1/site-automation/github-check`: sites repo connectivity. Key presence only, never values. */
+/** `GET /api/v1/site-automation/github-check`: GitHub connectivity. Key presence only, never values. */
 export type SiteGithubCheckResult = {
   configured: boolean;
-  keys: { GITHUB_TOKEN: boolean; GITHUB_SITES_REPO: boolean; GITHUB_SITES_BRANCH: boolean };
+  keys: { GITHUB_TOKEN: boolean; GITHUB_SITES_REPO: boolean; GITHUB_SITES_BRANCH: boolean; GITHUB_SITES_OWNER?: boolean };
+  /** `owner/{site}`: one private repo per website. */
   repo: string | null;
   branch: string | null;
+  /** Site repos are always created private. */
   private: boolean | null;
   canPush: boolean | null;
+  /** The token is valid and can see the owner. */
   canRead: boolean;
   canWrite: boolean;
   branchHead: string | null;
-  /** Where each copy is pushed: `sites/{domain}/{copyId}/`. */
+  /** Where each website goes: `{owner}/{siteName}` (one repo per website). */
   folderPattern: string;
+  /** Account that owns the site repos. Older API versions omit it. */
+  owner?: string | null;
+  /** Login the token belongs to. */
+  login?: string | null;
+  ownerType?: 'user' | 'org' | null;
+  error: string | null;
+  checkedAt: string;
+};
+
+/** `GET /api/v1/site-automation/deploy-check`: Cloudflare Workers connectivity. Key presence only, never values. */
+export type SiteDeployCheckResult = {
+  configured: boolean;
+  keys: { CLOUDFLARE_API_TOKEN: boolean; CLOUDFLARE_ACCOUNT_ID: boolean; R2_ACCOUNT_ID: boolean };
+  /** `{subdomain}.workers.dev` of the account. */
+  subdomain: string | null;
+  /** `https://{siteName}.{subdomain}.workers.dev` */
+  urlPattern: string | null;
+  canRead: boolean;
+  /** Site Workers already deployed. */
+  siteWorkers: number | null;
+  /** All Workers on the account; the plan limit (100 free, 500 paid) counts these. */
+  totalWorkers: number | null;
   error: string | null;
   checkedAt: string;
 };

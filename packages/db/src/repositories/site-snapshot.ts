@@ -11,6 +11,8 @@ import type {
   SiteSnapshotPatch,
   SiteSnapshotRecord,
   SiteSnapshotRepo,
+  SiteWorkerRequestResult,
+  SiteWorkerStatus,
 } from '@moncha/domain';
 import { clampPage, clampPageSize, siteStoragePrefix } from '@moncha/domain';
 import { mapJob } from './job-run';
@@ -54,6 +56,14 @@ function mapSnapshot(row: SiteSnapshot): SiteSnapshotRecord {
     githubFolderUrl: row.githubFolderUrl,
     githubError: row.githubError,
     githubPushedAt: row.githubPushedAt,
+    githubRepo: row.githubRepo,
+    workerStatus: (row.workerStatus as SiteWorkerStatus | null) ?? null,
+    workerAttempts: row.workerAttempts,
+    workerNextAt: row.workerNextAt,
+    workerName: row.workerName,
+    workerUrl: row.workerUrl,
+    workerError: row.workerError,
+    workerDeployedAt: row.workerDeployedAt,
     createdAt: row.createdAt,
     finishedAt: row.finishedAt,
   };
@@ -285,6 +295,37 @@ export class PrismaSiteSnapshotRepository implements SiteSnapshotRepo {
     const { count } = await this.db.siteSnapshot.updateMany({
       where: { id, tenantId, status: 'done', OR: [{ githubStatus: null }, { githubStatus: { not: 'pushing' } }] },
       data: { githubStatus: 'pending', githubAttempts: 0, githubNextAt: now, githubError: null, githubLockedAt: null },
+    });
+    return count ? 'queued' : 'busy';
+  }
+
+  async claimWorkerDeploy(now: Date, staleBefore: Date): Promise<SiteSnapshotListItem | null> {
+    const rows = await this.db.$queryRaw<Array<{ id: string; tenantId: string }>>`
+      UPDATE "SiteSnapshot" AS s
+      SET "workerStatus" = 'deploying', "workerLockedAt" = ${now}, "workerAttempts" = s."workerAttempts" + 1
+      WHERE s.id = (
+        SELECT id FROM "SiteSnapshot"
+        WHERE status = 'done'
+          AND (
+            ("workerStatus" = 'pending' AND ("workerNextAt" IS NULL OR "workerNextAt" <= ${now}))
+            OR ("workerStatus" = 'deploying' AND "workerLockedAt" < ${staleBefore})
+          )
+        ORDER BY "workerNextAt" ASC NULLS FIRST, "createdAt" ASC
+        LIMIT 1
+        FOR UPDATE SKIP LOCKED
+      )
+      RETURNING s.id, s."tenantId"`;
+    const claimed = rows[0];
+    return claimed ? this.get(claimed.tenantId, claimed.id) : null;
+  }
+
+  async requestWorkerDeploy(tenantId: string, id: string, now: Date): Promise<SiteWorkerRequestResult> {
+    const snapshot = await this.db.siteSnapshot.findFirst({ where: { id, tenantId }, select: { status: true } });
+    if (!snapshot) return 'not_found';
+    if (snapshot.status !== 'done') return 'not_done';
+    const { count } = await this.db.siteSnapshot.updateMany({
+      where: { id, tenantId, status: 'done', OR: [{ workerStatus: null }, { workerStatus: { not: 'deploying' } }] },
+      data: { workerStatus: 'pending', workerAttempts: 0, workerNextAt: now, workerError: null, workerLockedAt: null },
     });
     return count ? 'queued' : 'busy';
   }

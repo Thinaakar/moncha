@@ -28,8 +28,15 @@ export { ResendMailer, createResendMailerFromEnv, passwordResetEmailContent } fr
 export { R2SiteStore, createR2SiteStoreFromEnv, r2ConfigFromEnv, type R2Config } from './r2';
 export { MemorySiteStore } from './memory-site-store';
 export {
-  GitHubSitePublisher,
+  GitHubSiteRepoPublisher,
   createGitHubSitePublisherFromEnv,
   githubSitesConfigFromEnv,
   type GitHubSitesConfig,
 } from './github';
+export {
+  CloudflareSiteWorkerDeployer,
+  assetHash,
+  cloudflareWorkersConfigFromEnv,
+  createCloudflareSiteWorkerDeployerFromEnv,
+  type CloudflareWorkersConfig,
+} from './cloudflare-workers';

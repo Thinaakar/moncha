@@ -425,6 +425,27 @@
           ]
         },
         {
+          "name": "Deploy copy to its Cloudflare Worker",
+          "request": { "method": "POST", "url": "{{baseUrl}}/api/v1/site-snapshots/{{snapshotId}}/deploy" },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('queued, or 409/503 when not possible', () => pm.expect(pm.response.code).to.be.oneOf([202, 409, 503]));"]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GitHub connection check",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/site-automation/github-check" }
+        },
+        {
+          "name": "Cloudflare Workers connection check",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/site-automation/deploy-check" }
+        },
+        {
           "name": "Copy automation settings",
           "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/site-automation" }
         },

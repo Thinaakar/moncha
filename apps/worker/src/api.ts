@@ -24,6 +24,7 @@ import {
   updateProfileSchema,
   type SiteAutomationCrawl,
   type SiteAutomationState,
+  type SiteDeployCheckResult,
   type SiteGithubCheckResult,
   type SiteManifest,
   type SiteQueue,
@@ -90,12 +91,16 @@ import {
   SiteAutomationError,
   SiteCancelError,
   requestSiteGithubPush,
+  requestSiteWorkerDeploy,
   SITE_GITHUB_MAX_ATTEMPTS,
+  SITE_WORKER_MAX_ATTEMPTS,
   SiteGithubRequestError,
+  SiteWorkerRequestError,
   updateSiteAutomationSettings,
   publicSiteUrl,
   signPreviewToken,
   siteGithubDomain,
+  siteName,
   siteStoragePrefix,
   SiteSnapshotRequestError,
   verifyPreviewToken,
@@ -105,7 +110,7 @@ import {
 } from '@moncha/domain';
 import { createResendMailerFromEnv } from '@moncha/integrations';
 import { CsvImportError, SOURCE_IMPORT_JOB_TYPES, sourceImportView, startCsvImport, type CsvSqlClient } from './csv-import';
-import { siteAgentConfig, siteAutoCopyEnabled, siteGithubPublisher } from './site-agent';
+import { siteAgentConfig, siteAutoCopyEnabled, siteGithubPublisher, siteWorkerDeployer } from './site-agent';
 import { workerHealth } from './worker-health';
 
 // Local test API for Postman: exposes the same use cases the console routes call.
@@ -465,10 +470,12 @@ async function previewBaseFor(snapshot: SiteSnapshotRecord): Promise<string | nu
 const summarize = async (snapshot: SiteSnapshotRecord | SiteSnapshotListItem) =>
   siteSummary(snapshot, await previewBaseFor(snapshot));
 
-/** Public link on the sites Pages project, which serves the copy's R2 files directly. */
+/** The website's own Worker once deployed; otherwise the older shared Pages link (serves the copy's R2 files). */
 function publicUrlFor(snapshot: SiteSnapshotRecord | SiteSnapshotListItem): string | null {
+  if (snapshot.status !== 'done') return null;
+  if (snapshot.workerStatus === 'deployed' && snapshot.workerUrl) return snapshot.workerUrl;
   const base = siteAgentConfig().publicBaseUrl;
-  if (!base || snapshot.status !== 'done' || !('company' in snapshot)) return null;
+  if (!base || !('company' in snapshot)) return null;
   return publicSiteUrl(base, siteGithubDomain(snapshot), snapshot.id);
 }
 
@@ -498,7 +505,7 @@ function siteSummary(snapshot: SiteSnapshotRecord | SiteSnapshotListItem, previe
     crawlJobId: snapshot.crawlJobId,
     createdAt: snapshot.createdAt.toISOString(),
     finishedAt: snapshot.finishedAt?.toISOString() ?? null,
-    ...('company' in snapshot ? { company: snapshot.company } : {}),
+    ...('company' in snapshot ? { company: snapshot.company, siteName: siteName(snapshot) } : {}),
     thumbnailPath: previewBase ? `${previewBase}screenshot-desktop.png` : null,
     github: snapshot.githubStatus
       ? {
@@ -509,8 +516,21 @@ function siteSummary(snapshot: SiteSnapshotRecord | SiteSnapshotListItem, previe
           commitSha: snapshot.githubCommitSha,
           commitUrl: snapshot.githubCommitUrl,
           folderUrl: snapshot.githubFolderUrl,
+          repo: snapshot.githubRepo,
           error: snapshot.githubError,
           pushedAt: snapshot.githubPushedAt?.toISOString() ?? null,
+        }
+      : null,
+    deploy: snapshot.workerStatus
+      ? {
+          status: snapshot.workerStatus,
+          attempts: snapshot.workerAttempts,
+          maxAttempts: SITE_WORKER_MAX_ATTEMPTS,
+          nextAt: snapshot.workerNextAt?.toISOString() ?? null,
+          name: snapshot.workerName,
+          url: snapshot.workerUrl,
+          error: snapshot.workerError,
+          deployedAt: snapshot.workerDeployedAt?.toISOString() ?? null,
         }
       : null,
     publicUrl: publicUrlFor(snapshot),
@@ -641,31 +661,59 @@ route('PUT', '/api/v1/site-automation', async ({ req, tenantId, body }) => {
   return { json: await automationState(tenantId) };
 });
 
-// Sites repo connectivity: reads the repo and branch and proves write access without moving the branch.
+// GitHub connectivity: the token is valid and can see the account the site repos go to. Nothing is created.
 route('GET', '/api/v1/site-automation/github-check', async ({ req, tenantId }) => {
   await requireEditor(req, tenantId, 'check the GitHub connection');
   const keys = {
     GITHUB_TOKEN: Boolean(process.env.GITHUB_TOKEN?.trim()),
     GITHUB_SITES_REPO: Boolean(process.env.GITHUB_SITES_REPO?.trim()),
     GITHUB_SITES_BRANCH: Boolean(process.env.GITHUB_SITES_BRANCH?.trim()),
+    GITHUB_SITES_OWNER: Boolean(process.env.GITHUB_SITES_OWNER?.trim()),
   };
   const publisher = siteGithubPublisher();
   const check = publisher?.check ? await publisher.check() : null;
   const json: SiteGithubCheckResult = {
     configured: Boolean(publisher),
     keys,
-    repo: publisher?.repo ?? null,
+    repo: publisher ? `${publisher.owner}/{siteName}` : null,
     branch: publisher?.branch ?? null,
-    private: check?.private ?? null,
-    canPush: check?.canPush ?? null,
+    private: publisher ? true : null,
+    canPush: null,
     canRead: check?.canRead ?? false,
-    canWrite: check?.canWrite ?? false,
-    branchHead: check?.branchHead ?? null,
-    folderPattern: 'sites/{domain}/{copyId}/',
-    error: publisher ? (check?.error ?? null) : 'GITHUB_TOKEN and GITHUB_SITES_REPO must both be set',
+    canWrite: false,
+    branchHead: null,
+    folderPattern: publisher ? `${publisher.owner}/{siteName}` : '{owner}/{siteName}',
+    owner: publisher?.owner ?? null,
+    login: check?.login ?? null,
+    ownerType: check?.ownerType ?? null,
+    error: publisher ? (check?.error ?? null) : 'GITHUB_TOKEN and GITHUB_SITES_OWNER (or GITHUB_SITES_REPO) must be set',
     checkedAt: new Date().toISOString(),
   };
-  logger.info('site_github.check', { tenantId, repo: json.repo, canRead: json.canRead, canWrite: json.canWrite, error: json.error });
+  logger.info('site_github.check', { tenantId, owner: json.owner, canRead: json.canRead, error: json.error });
+  return { json };
+});
+
+// Cloudflare connectivity: reads the account's workers.dev subdomain and Worker list. Nothing is deployed.
+route('GET', '/api/v1/site-automation/deploy-check', async ({ req, tenantId }) => {
+  await requireEditor(req, tenantId, 'check the Cloudflare connection');
+  const deployer = siteWorkerDeployer();
+  const check = deployer?.check ? await deployer.check() : null;
+  const json: SiteDeployCheckResult = {
+    configured: Boolean(deployer),
+    keys: {
+      CLOUDFLARE_API_TOKEN: Boolean(process.env.CLOUDFLARE_API_TOKEN?.trim()),
+      CLOUDFLARE_ACCOUNT_ID: Boolean(process.env.CLOUDFLARE_ACCOUNT_ID?.trim()),
+      R2_ACCOUNT_ID: Boolean(process.env.R2_ACCOUNT_ID?.trim()),
+    },
+    subdomain: check?.subdomain ?? null,
+    urlPattern: check?.subdomain ? `https://{siteName}.${check.subdomain}.workers.dev` : null,
+    canRead: check?.canRead ?? false,
+    siteWorkers: check?.siteWorkers ?? null,
+    totalWorkers: check?.totalWorkers ?? null,
+    error: deployer ? (check?.error ?? null) : 'CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID (or R2_ACCOUNT_ID) must be set',
+    checkedAt: new Date().toISOString(),
+  };
+  logger.info('site_worker.check', { tenantId, canRead: json.canRead, siteWorkers: json.siteWorkers, error: json.error });
   return { json };
 });
 
@@ -718,16 +766,17 @@ route('GET', '/api/v1/site-snapshots/:id', async ({ tenantId, params }) => {
       : null,
     manifest,
     githubConfigured: Boolean(siteGithubPublisher()),
-    githubRepo: siteGithubPublisher()?.repo ?? null,
+    githubRepo: snapshot.githubRepo ?? (siteGithubPublisher() ? `${siteGithubPublisher()!.owner}/${siteName(snapshot)}` : null),
+    deployConfigured: Boolean(siteWorkerDeployer()),
   };
   return { json };
 });
 
-// Pushes a done copy to the sites repo now: first push of an older copy, or a retry after a failure.
+// Pushes a done copy to its own repo now: first push of an older copy, or a retry after a failure.
 route('POST', '/api/v1/site-snapshots/:id/github-push', async ({ req, tenantId, params }) => {
   await requireEditor(req, tenantId, 'push website copies to GitHub');
   if (!siteGithubPublisher()) {
-    throw new HttpError(503, 'github_not_configured', 'GitHub push needs GITHUB_TOKEN and GITHUB_SITES_REPO in apps/worker/.env');
+    throw new HttpError(503, 'github_not_configured', 'GitHub push needs GITHUB_TOKEN and GITHUB_SITES_OWNER in apps/worker/.env');
   }
   try {
     const result = await requestSiteGithubPush({ snapshots: siteSnapshots }, { tenantId, id: params.id! });
@@ -738,6 +787,30 @@ route('POST', '/api/v1/site-snapshots/:id/github-push', async ({ req, tenantId, 
       if (error.code === 'not_found') throw new HttpError(404, 'not_found', 'Website copy not found');
       if (error.code === 'not_done') throw new HttpError(409, 'not_ready', 'Only finished copies can be pushed');
       throw new HttpError(409, 'push_in_progress', 'This copy is being pushed right now');
+    }
+    throw error;
+  }
+});
+
+// Deploys a done copy to its website's Worker now: first deploy of an older copy, a retry, or a redeploy.
+route('POST', '/api/v1/site-snapshots/:id/deploy', async ({ req, tenantId, params }) => {
+  await requireEditor(req, tenantId, 'deploy website copies');
+  if (!siteWorkerDeployer()) {
+    throw new HttpError(
+      503,
+      'deploy_not_configured',
+      'Worker deploys need CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID in apps/worker/.env',
+    );
+  }
+  try {
+    const result = await requestSiteWorkerDeploy({ snapshots: siteSnapshots }, { tenantId, id: params.id! });
+    logger.info('site_worker.deploy_requested', { tenantId, snapshotId: params.id });
+    return { status: 202, json: result };
+  } catch (error) {
+    if (error instanceof SiteWorkerRequestError) {
+      if (error.code === 'not_found') throw new HttpError(404, 'not_found', 'Website copy not found');
+      if (error.code === 'not_done') throw new HttpError(409, 'not_ready', 'Only finished copies can be deployed');
+      throw new HttpError(409, 'deploy_in_progress', 'This copy is being deployed right now');
     }
     throw error;
   }

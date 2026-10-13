@@ -245,6 +245,15 @@ export type SiteSnapshotRecord = {
   githubFolderUrl: string | null;
   githubError: string | null;
   githubPushedAt: Date | null;
+  /** `owner/name` of the copy's own repo once pushed. */
+  githubRepo: string | null;
+  workerStatus: SiteWorkerStatus | null;
+  workerAttempts: number;
+  workerNextAt: Date | null;
+  workerName: string | null;
+  workerUrl: string | null;
+  workerError: string | null;
+  workerDeployedAt: Date | null;
   createdAt: Date;
   finishedAt: Date | null;
 };
@@ -257,6 +266,9 @@ export type SiteCopyOrigin = 'manual' | 'auto';
  * after an error), `pushing` is in progress, `failed` means the worker gave up until someone retries.
  */
 export type SiteGithubStatus = 'pending' | 'pushing' | 'pushed' | 'failed';
+
+/** Cloudflare Worker deploy of a finished copy; same lifecycle as SiteGithubStatus. */
+export type SiteWorkerStatus = 'pending' | 'deploying' | 'deployed' | 'failed';
 
 export type SiteSnapshotListItem = SiteSnapshotRecord & {
   company: { id: string; name: string; domain: string | null };
@@ -308,10 +320,19 @@ export type SiteSnapshotPatch = Partial<
     | 'githubFolderUrl'
     | 'githubError'
     | 'githubPushedAt'
+    | 'githubRepo'
+    | 'workerStatus'
+    | 'workerAttempts'
+    | 'workerNextAt'
+    | 'workerName'
+    | 'workerUrl'
+    | 'workerError'
+    | 'workerDeployedAt'
   >
-> & { githubLockedAt?: Date | null };
+> & { githubLockedAt?: Date | null; workerLockedAt?: Date | null };
 
 export type SiteGithubRequestResult = 'queued' | 'not_found' | 'not_done' | 'busy';
+export type SiteWorkerRequestResult = SiteGithubRequestResult;
 
 export type SiteSnapshotListQuery = {
   page?: number;
@@ -355,33 +376,94 @@ export interface SiteSnapshotRepo {
   claimGithubPush(now: Date, staleBefore: Date): Promise<SiteSnapshotListItem | null>;
   /** Queues a push of a done copy now (first push, or again after `failed` or `pushed`). */
   requestGithubPush(tenantId: string, id: string, now: Date): Promise<SiteGithubRequestResult>;
+  /** Same as claimGithubPush for the Cloudflare Worker deploy (`pending` or stale `deploying` becomes `deploying`). */
+  claimWorkerDeploy(now: Date, staleBefore: Date): Promise<SiteSnapshotListItem | null>;
+  /** Queues a Worker deploy of a done copy now (first deploy, or again after `failed` or `deployed`). */
+  requestWorkerDeploy(tenantId: string, id: string, now: Date): Promise<SiteWorkerRequestResult>;
 }
 
 export type SiteGithubFile = { path: string; bytes: Uint8Array };
 
-export type SiteGithubPublishResult = { commitSha: string; commitUrl: string; folderUrl: string };
+/** The copy's own repository: one website, one repo. */
+export type SiteGithubRepoSpec = {
+  /** Repo name under the publisher's owner, e.g. `ja-edu-sg`. */
+  name: string;
+  description: string;
+  homepage: string | null;
+  topics: string[];
+};
 
-/** Connectivity check of the sites repo; never carries the token. */
-export type SiteGithubCheck = {
+export type SiteGithubPublishResult = {
+  /** `owner/name` */
   repo: string;
+  repoUrl: string;
+  commitSha: string;
+  commitUrl: string;
+  /** The repo did not exist and was created for this push. */
+  created: boolean;
+};
+
+/** Connectivity check of the GitHub account the site repos go to; never carries the token. */
+export type SiteGithubCheck = {
+  owner: string;
   branch: string;
-  private: boolean | null;
-  /** The repo's own permission flag for the token's user; fine-grained tokens can still be narrower. */
-  canPush: boolean | null;
-  /** The token read the repo, the branch ref and its head commit. */
+  /** Login the token belongs to. */
+  login: string | null;
+  /** `user` when repos are created on the token's own account, `org` for an organization. */
+  ownerType: 'user' | 'org' | null;
+  /** The token is valid and can see the owner. */
   canRead: boolean;
-  /** The token created a git blob, which needs Contents: Read and write. The branch is not moved. */
-  canWrite: boolean;
-  branchHead: string | null;
   error: string | null;
 };
 
-/** Pushes one folder of files to a git repo as a single commit. */
+/** Pushes a copy's files to its own repository as one commit, creating the repo when it is missing. */
 export interface SiteGithubPublisher {
-  readonly repo: string;
+  readonly owner: string;
   readonly branch: string;
-  publish(input: { folder: string; files: SiteGithubFile[]; message: string; signal?: AbortSignal }): Promise<SiteGithubPublishResult>;
+  publish(input: {
+    repo: SiteGithubRepoSpec;
+    files: SiteGithubFile[];
+    message: string;
+    signal?: AbortSignal;
+  }): Promise<SiteGithubPublishResult>;
   check?(): Promise<SiteGithubCheck>;
+}
+
+export type SiteWorkerFile = { path: string; bytes: Uint8Array; contentType: string };
+
+export type SiteWorkerDeployResult = { name: string; url: string };
+
+/** Connectivity check of the Cloudflare account the site Workers go to; never carries the token. */
+export type SiteWorkerCheck = {
+  /** `{subdomain}.workers.dev` of the account. */
+  subdomain: string | null;
+  /** The token can list the account's Workers. */
+  canRead: boolean;
+  /** Site Workers already on the account. */
+  siteWorkers: number | null;
+  /** All Workers on the account (the plan limit counts these). */
+  totalWorkers: number | null;
+  error: string | null;
+};
+
+/** Deploys a copy as its own static-assets Cloudflare Worker on `{name}.{subdomain}.workers.dev`. */
+export interface SiteWorkerDeployer {
+  /** The URL a Worker with this name gets, or null when the account subdomain is unknown. */
+  urlFor(name: string): Promise<string | null>;
+  deploy(input: { name: string; files: SiteWorkerFile[]; signal?: AbortSignal }): Promise<SiteWorkerDeployResult>;
+  check?(): Promise<SiteWorkerCheck>;
+}
+
+/** `retryable` is false when trying again cannot help without someone changing something. */
+export class SiteDeployError extends Error {
+  constructor(
+    readonly code: string,
+    message?: string,
+    readonly retryable = true,
+  ) {
+    super(message ?? code);
+    this.name = 'SiteDeployError';
+  }
 }
 
 /** `retryable` is false when trying again cannot help without someone changing something (e.g. the copy's files are gone). */

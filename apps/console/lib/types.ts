@@ -25,6 +25,8 @@ import type {
   SiteSnapshotQueued,
   SiteSnapshotSource,
   SiteSnapshotSummary,
+  SiteWorkerDeploy,
+  SiteWorkerStatus,
   WebsiteStatus,
 } from '@moncha/contracts';
 
@@ -50,6 +52,8 @@ export type {
   SiteSnapshotQueued,
   SiteSnapshotSource,
   SiteSnapshotSummary,
+  SiteWorkerDeploy,
+  SiteWorkerStatus,
 };
 
 /** Result the worker stores on a finished `site_snapshot` job. */

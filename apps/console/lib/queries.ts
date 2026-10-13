@@ -53,15 +53,24 @@ export const qk = {
 
 const isTerminal = (status: JobStatus | undefined) => status === 'done' || status === 'failed';
 
-/** Poll a finished copy while its GitHub push is running or about to retry. */
-function githubPollMs(snapshot: SiteSnapshotSummary | undefined): number | null {
-  const github = snapshot?.github;
-  if (!github) return null;
-  if (github.status === 'pushing') return 3_000;
-  if (github.status !== 'pending') return null;
-  const wait = github.nextAt ? new Date(github.nextAt).getTime() - Date.now() : 0;
+function publishPollMs(step: { status: string; nextAt: string | null } | null | undefined, busy: string): number | null {
+  if (!step) return null;
+  if (step.status === busy) return 3_000;
+  if (step.status !== 'pending') return null;
+  const wait = step.nextAt ? new Date(step.nextAt).getTime() - Date.now() : 0;
   return wait < 2 * 60_000 ? 5_000 : 60_000;
 }
+
+/** Poll a finished copy while its GitHub push or Worker deploy is running or about to retry. */
+function githubPollMs(snapshot: SiteSnapshotSummary | undefined): number | null {
+  const waits = [publishPollMs(snapshot?.github, 'pushing'), publishPollMs(snapshot?.deploy, 'deploying')].filter(
+    (ms): ms is number => ms !== null,
+  );
+  return waits.length ? Math.min(...waits) : null;
+}
+
+/** Any copy in the list whose push or deploy is in progress. */
+const anyPublishing = (items: SiteSnapshotSummary[] | undefined) => Boolean(items?.some((s) => (githubPollMs(s) ?? Infinity) <= 5_000));
 
 export function useQueueCounts() {
   return useQuery({ queryKey: qk.counts, queryFn: () => api<QueueCounts>('leads/counts'), refetchInterval: 30_000 });
@@ -173,7 +182,8 @@ export function useSiteSnapshots(params: SiteListParams) {
     queryKey: qk.siteList(params),
     queryFn: () => api<Paginated<SiteSnapshotSummary>>('site-snapshots', { query: params }),
     placeholderData: keepPreviousData,
-    refetchInterval: (q) => (q.state.data?.items.some((s) => !isTerminal(s.status)) ? 4_000 : 60_000),
+    refetchInterval: (q) =>
+      q.state.data?.items.some((s) => !isTerminal(s.status)) || anyPublishing(q.state.data?.items) ? 4_000 : 60_000,
   });
 }
 
@@ -181,7 +191,7 @@ export function useLeadSiteSnapshots(leadId: string) {
   return useQuery({
     queryKey: qk.leadSites(leadId),
     queryFn: async () => (await api<{ items: SiteSnapshotSummary[] }>(`leads/${leadId}/site-snapshots`)).items,
-    refetchInterval: (q) => (q.state.data?.some((s) => !isTerminal(s.status)) ? 4_000 : false),
+    refetchInterval: (q) => (q.state.data?.some((s) => !isTerminal(s.status)) || anyPublishing(q.state.data) ? 4_000 : false),
   });
 }
 
@@ -203,6 +213,14 @@ export function useSiteSnapshot(id: string) {
 export function useGithubPushSiteSnapshot() {
   return useApiMutation(
     (id: string) => api<{ queued: true }>(`site-snapshots/${id}/github-push`, { method: 'POST' }),
+    [qk.sites],
+  );
+}
+
+/** Queues a deploy of a finished copy to its website's Cloudflare Worker (first deploy, retry or redeploy). */
+export function useDeploySiteSnapshot() {
+  return useApiMutation(
+    (id: string) => api<{ queued: true }>(`site-snapshots/${id}/deploy`, { method: 'POST' }),
     [qk.sites],
   );
 }

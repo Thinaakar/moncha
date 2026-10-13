@@ -24,10 +24,12 @@ import {
 } from '@moncha/db';
 import {
   createConsoleLogger,
+  deploySiteSnapshotToWorker,
   enqueueDueSchedules,
   pushSiteSnapshotToGithub,
   resolveCountry,
   SITE_GITHUB_STALE_MS,
+  SITE_WORKER_STALE_MS,
   runCountryDiscoveryJob,
   runSiteSnapshotJob,
   runWebsiteAuditJob,
@@ -46,7 +48,7 @@ import {
 } from '@moncha/crawling';
 import { createOpenRouterFromEnv, GeminiBrandExtractor } from '@moncha/integrations';
 import { countryCrawlDeps, discoveryBudget, liveCountryCrawls } from './country-crawls';
-import { siteAgentConfig, siteAutoCopyEnabled, siteGithubPublisher } from './site-agent';
+import { siteAgentConfig, siteAutoCopyEnabled, siteGithubPublisher, siteWorkerDeployer } from './site-agent';
 
 const WORKER_ID = `worker-${process.env.HOSTNAME || 'local'}-${randomUUID().slice(0, 8)}`;
 const CONCURRENCY = Math.max(1, Number(process.env.WORKER_CONCURRENCY || 3));
@@ -85,6 +87,8 @@ const siteBrandExtractor = llm
 const activeSiteSnapshots = new Set<Promise<void>>();
 const githubPublisher = siteGithubPublisher();
 let activeGithubPush: Promise<void> | null = null;
+const workerDeployer = siteWorkerDeployer();
+let activeWorkerDeploy: Promise<void> | null = null;
 const siteSnapshots = new PrismaSiteSnapshotRepository(prisma);
 const siteAutomation = new PrismaSiteAutomationRepository(prisma);
 
@@ -251,6 +255,7 @@ function startSiteSnapshot(job: JobRunRecord, store: SiteStore) {
       llmUsage: new PrismaLlmUsageRepository(prisma),
       maxLlmCallsPerDay: Number(process.env.LLM_MAX_CALLS_PER_DAY || 0) || undefined,
       githubEnabled: Boolean(githubPublisher),
+      workerEnabled: Boolean(workerDeployer),
       logger,
     },
     { job, timeoutMs: siteAgent.jobTimeoutMs, signal: crawlAbort.signal },
@@ -265,7 +270,7 @@ function startSiteSnapshot(job: JobRunRecord, store: SiteStore) {
   activeSiteSnapshots.add(run);
 }
 
-/** Pushes finished copies to the sites repo, one at a time; GitHub problems never change a copy's status. */
+/** Pushes finished copies to their own repos, one at a time; GitHub problems never change a copy's status. */
 async function githubTick() {
   if (!githubPublisher || !siteAgent.store || activeGithubPush || crawlAbort.signal.aborted) return;
   const now = new Date();
@@ -273,7 +278,13 @@ async function githubTick() {
   if (!snapshot) return;
   const store = siteAgent.store;
   activeGithubPush = pushSiteSnapshotToGithub(
-    { snapshots: siteSnapshots, store, publisher: githubPublisher, logger },
+    {
+      snapshots: siteSnapshots,
+      store,
+      publisher: githubPublisher,
+      logger,
+      liveUrlFor: workerDeployer ? (name) => workerDeployer.urlFor(name) : undefined,
+    },
     snapshot,
     crawlAbort.signal,
   )
@@ -285,6 +296,27 @@ async function githubTick() {
       activeGithubPush = null;
     });
   await activeGithubPush;
+}
+
+/** Deploys finished copies as their own Cloudflare Workers, one at a time; deploy problems never change a copy's status. */
+async function workerDeployTick() {
+  if (!workerDeployer || !siteAgent.store || activeWorkerDeploy || crawlAbort.signal.aborted) return;
+  const now = new Date();
+  const snapshot = await withDbRetry(() => siteSnapshots.claimWorkerDeploy(now, new Date(now.getTime() - SITE_WORKER_STALE_MS)));
+  if (!snapshot) return;
+  activeWorkerDeploy = deploySiteSnapshotToWorker(
+    { snapshots: siteSnapshots, store: siteAgent.store, deployer: workerDeployer, logger },
+    snapshot,
+    crawlAbort.signal,
+  )
+    .then((outcome) => logger.info('site_worker_outcome', { ...outcome }))
+    .catch((error) =>
+      logger.error('site_worker_error', { snapshotId: snapshot.id, message: error instanceof Error ? error.message : String(error) }),
+    )
+    .finally(() => {
+      activeWorkerDeploy = null;
+    });
+  await activeWorkerDeploy;
 }
 
 async function every(errorEvent: string, ms: number, fn: () => Promise<void>) {
@@ -309,13 +341,19 @@ async function main() {
     siteAgent: siteAgent.ready,
     siteAutoCopy: siteAgent.ready && siteAutoCopyEnabled(),
     siteConcurrency: siteAgent.concurrency,
-    githubSites: githubPublisher ? `${githubPublisher.repo}@${githubPublisher.branch}` : false,
+    githubSites: githubPublisher ? `${githubPublisher.owner}/{site}@${githubPublisher.branch}` : false,
+    workerSites: Boolean(workerDeployer),
     schedulerTickMs: SCHEDULER_TICK_MS,
     ...discoveryBudget(),
   });
   if (githubPublisher?.check) {
     void githubPublisher.check().then((check) =>
       check.error ? logger.error('site_github_check', { ...check }) : logger.info('site_github_check', { ...check }),
+    );
+  }
+  if (workerDeployer?.check) {
+    void workerDeployer.check().then((check) =>
+      check.error ? logger.error('site_worker_check', { ...check }) : logger.info('site_worker_check', { ...check }),
     );
   }
 
@@ -329,7 +367,7 @@ async function main() {
       apiServer.close();
     }
     crawlAbort.abort();
-    const running = [activeCrawl, ...activeSiteSnapshots, activeGithubPush].filter(Boolean);
+    const running = [activeCrawl, ...activeSiteSnapshots, activeGithubPush, activeWorkerDeploy].filter(Boolean);
     if (running.length) {
       await Promise.race([Promise.all(running), new Promise((r) => setTimeout(r, SHUTDOWN_WAIT_MS))]);
     }
@@ -369,6 +407,7 @@ async function main() {
     every('csv_tick_error', POLL_MS, csvTick),
     every('site_tick_error', POLL_MS, siteTick),
     every('github_tick_error', POLL_MS, githubTick),
+    every('worker_deploy_tick_error', POLL_MS, workerDeployTick),
   ]);
 }
 

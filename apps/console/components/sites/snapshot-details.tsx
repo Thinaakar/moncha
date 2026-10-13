@@ -69,7 +69,7 @@ export function SnapshotDetails({ snapshot }: { snapshot: SiteSnapshotDetail }) 
                 </span>
               </DetailRow>
               {snapshot.publicUrl && (
-                <DetailRow label="Live site">
+                <DetailRow label="Live website">
                   <LiveSiteLink url={snapshot.publicUrl} full />
                 </DetailRow>
               )}

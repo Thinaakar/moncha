@@ -32,7 +32,7 @@ import { failureText } from '@/components/sites/labels';
 import { formatEta, OriginBadge } from '@/components/sites/automation';
 import { CancelCopyButton } from '@/components/sites/cancel-copy';
 import { GithubLinkButton, GithubPushAlert, GithubStatusBadge } from '@/components/sites/github-push';
-import { LiveSiteButton } from '@/components/sites/live-site';
+import { LiveSiteButton, LiveWebsiteCard } from '@/components/sites/live-site';
 import { PreviewFrame } from '@/components/sites/preview-frame';
 import { SnapshotDetails } from '@/components/sites/snapshot-details';
 import { SourceViewer } from '@/components/sites/source-viewer';
@@ -234,6 +234,7 @@ export function SiteSnapshotView({ id }: { id: string }) {
           The copy finished, but the file links could not be created. Check the site agent settings on the backend.
         </InlineAlert>
       )}
+      <LiveWebsiteCard snapshot={snapshot} />
       <GithubPushAlert snapshot={snapshot} />
 
       <TabBar<Tab>

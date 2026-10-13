@@ -1,27 +1,30 @@
 import { describe, expect, it } from 'vitest';
 import {
   SiteGithubError,
-  type SiteGithubFile,
   type SiteGithubPublisher,
   type SiteManifestAsset,
-  type SiteSnapshotListItem,
   type SiteSnapshotPatch,
   type SiteSnapshotRepo,
   type SiteStore,
 } from '../ports';
 import { createConsoleLogger } from '../logger';
+import { FIXTURE_NOW, siteSnapshotFixture } from './__fixtures__/site-snapshot';
 import {
   pushSiteSnapshotToGithub,
   requestSiteGithubPush,
   SITE_GITHUB_BACKOFF_MS,
   SITE_GITHUB_MAX_ATTEMPTS,
+  SITE_REPO_TOPIC,
   siteGithubDomain,
-  siteGithubPaths,
+  siteName,
+  siteRepoPaths,
+  siteRepoSpec,
   SiteGithubRequestError,
 } from './siteGithub';
 
-const NOW = new Date('2026-10-09T10:00:00.000Z');
+const NOW = FIXTURE_NOW;
 const enc = new TextEncoder();
+const dec = new TextDecoder();
 
 function asset(storedPath: string, kind: SiteManifestAsset['kind']): SiteManifestAsset {
   return { id: storedPath, url: `https://ja.edu.sg/${storedPath}`, storedPath, contentType: '', bytes: 1, sha256: '', kind, discoveredBy: ['html'] };
@@ -34,64 +37,25 @@ const ASSETS = [
   asset('assets/fonts.gstatic.com/roboto.woff2', 'font'),
 ];
 
-function snapshot(over: Partial<SiteSnapshotListItem> = {}): SiteSnapshotListItem {
-  return {
-    id: 'snap1',
-    tenantId: 't1',
-    leadId: 'lead1',
-    jobId: 'job1',
-    status: 'done',
-    sourceUrl: 'https://www.ja.edu.sg/',
-    finalUrl: 'https://www.ja.edu.sg/',
-    httpStatus: 200,
-    storagePrefix: 'sites/t1/snap1/',
-    sourceHash: null,
-    sourceBytes: null,
-    sourceCharset: 'utf-8',
-    assetCount: 4,
-    skippedAssetCount: 0,
-    totalBytes: 0,
-    brand: null,
-    llmModel: null,
-    llmPromptTokens: null,
-    llmCompletionTokens: null,
-    warnings: [],
-    failureReason: null,
-    failureDetail: null,
-    attempts: 1,
-    origin: 'auto',
-    crawlJobId: 'crawl1',
-    githubStatus: 'pushing',
-    githubAttempts: 1,
-    githubNextAt: null,
-    githubCommitSha: null,
-    githubCommitUrl: null,
-    githubFolderUrl: null,
-    githubError: null,
-    githubPushedAt: null,
-    createdAt: NOW,
-    finishedAt: NOW,
-    company: { id: 'c1', name: 'Jurong Academy', domain: 'ja.edu.sg' },
-    ...over,
-  };
-}
+const snapshot = siteSnapshotFixture;
 
-function setup(publish: SiteGithubPublisher['publish'], storeFiles?: Record<string, string>) {
-  const files: Record<string, string> = storeFiles ?? {
-    'sites/t1/snap1/manifest.json': JSON.stringify({ assets: ASSETS }),
-    'sites/t1/snap1/index.html': '<html>',
-    'sites/t1/snap1/demo.html': '<html>demo',
-    'sites/t1/snap1/source.html': '<html>src',
-    'sites/t1/snap1/rendered.html': '<html>dom',
-    'sites/t1/snap1/brand.json': '{}',
-    'sites/t1/snap1/assets/ja.edu.sg/wp-content/theme.css': 'body{}',
-    'sites/t1/snap1/assets/ja.edu.sg/wp-includes/jquery.min.js': 'x',
-    'sites/t1/snap1/assets/ja.edu.sg/wp-content/logo.png': 'png',
-  };
+const STORE_FILES: Record<string, string> = {
+  'sites/t1/snap1/manifest.json': JSON.stringify({ assets: ASSETS }),
+  'sites/t1/snap1/index.html': '<html>',
+  'sites/t1/snap1/source.html': '<html>src',
+  'sites/t1/snap1/rendered.html': '<html>dom',
+  'sites/t1/snap1/brand.json': '{}',
+  'sites/t1/snap1/screenshot-desktop.png': 'png',
+  'sites/t1/snap1/assets/ja.edu.sg/wp-content/theme.css': 'body{}',
+  'sites/t1/snap1/assets/ja.edu.sg/wp-includes/jquery.min.js': 'x',
+  'sites/t1/snap1/assets/ja.edu.sg/wp-content/logo.png': 'png',
+};
+
+function setup(publish: SiteGithubPublisher['publish'], storeFiles: Record<string, string> = STORE_FILES) {
   const store: SiteStore = {
     put: async () => {},
     get: async () => null,
-    getBytes: async (key) => (key in files ? enc.encode(files[key]) : null),
+    getBytes: async (key) => (key in storeFiles ? enc.encode(storeFiles[key]) : null),
   };
   const patches: SiteSnapshotPatch[] = [];
   const snapshots = {
@@ -100,65 +64,118 @@ function setup(publish: SiteGithubPublisher['publish'], storeFiles?: Record<stri
       return null;
     },
   } as unknown as SiteSnapshotRepo;
-  const calls: Array<{ folder: string; files: SiteGithubFile[]; message: string }> = [];
+  const calls: Array<Parameters<SiteGithubPublisher['publish']>[0]> = [];
   const publisher: SiteGithubPublisher = {
-    repo: 'Thinaakar/moncha-sites',
+    owner: 'Thinaakar',
     branch: 'main',
     publish: async (input) => {
       calls.push(input);
       return publish(input);
     },
   };
-  const deps = { snapshots, store, publisher, logger: createConsoleLogger(), now: () => NOW };
+  const deps = {
+    snapshots,
+    store,
+    publisher,
+    logger: createConsoleLogger(),
+    liveUrlFor: async (name: string) => `https://${name}.vinothjv4-tech.workers.dev`,
+    now: () => NOW,
+  };
   return { deps, patches, calls };
 }
 
-const ok: SiteGithubPublisher['publish'] = async () => ({
+const ok: SiteGithubPublisher['publish'] = async ({ repo }) => ({
+  repo: `Thinaakar/${repo.name}`,
+  repoUrl: `https://github.com/Thinaakar/${repo.name}`,
   commitSha: 'abc123',
-  commitUrl: 'https://github.com/Thinaakar/moncha-sites/commit/abc123',
-  folderUrl: 'https://github.com/Thinaakar/moncha-sites/tree/main/sites/ja.edu.sg/snap1',
+  commitUrl: `https://github.com/Thinaakar/${repo.name}/commit/abc123`,
+  created: true,
 });
 
-describe('site GitHub push', () => {
-  it('names the folder after the domain without www', () => {
+describe('site names', () => {
+  it('uses the domain without www, dots as dashes', () => {
     expect(siteGithubDomain(snapshot())).toBe('ja.edu.sg');
-    expect(siteGithubDomain(snapshot({ company: { id: 'c', name: 'x', domain: null } }))).toBe('ja.edu.sg');
-    expect(siteGithubDomain(snapshot({ company: { id: 'c', name: 'x', domain: 'WWW.Foo_Bar.com' } }))).toBe('foo-bar.com');
+    expect(siteName(snapshot())).toBe('ja-edu-sg');
+    expect(siteName(snapshot({ company: { id: 'c', name: 'x', domain: null } }))).toBe('ja-edu-sg');
+    expect(siteName(snapshot({ company: { id: 'c', name: 'x', domain: 'WWW.Foo_Bar.co.uk' } }))).toBe('foo-bar-co-uk');
   });
 
-  it('pushes HTML, CSS, JS and the JSON files but no images or fonts', () => {
-    const paths = siteGithubPaths({ assets: ASSETS });
-    expect(paths).toEqual(expect.arrayContaining(['index.html', 'source.html', 'rendered.html', 'brand.json', 'manifest.json']));
-    expect(paths).not.toContain('demo.html');
-    expect(paths).not.toContain('moncha-widget.js');
-    expect(paths).toContain('assets/ja.edu.sg/wp-content/theme.css');
-    expect(paths).toContain('assets/ja.edu.sg/wp-includes/jquery.min.js');
-    expect(paths.some((p) => p.endsWith('.png') || p.endsWith('.woff2'))).toBe(false);
+  it('fits one DNS label and never ends with a dash', () => {
+    const name = siteName(snapshot({ company: { id: 'c', name: 'x', domain: `${'a'.repeat(62)}.b.com` } }));
+    expect(name.length).toBeLessThanOrEqual(63);
+    expect(name).toMatch(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/);
   });
 
-  it('commits sites/{domain}/{id}/ and records the commit link', async () => {
+  it('falls back to the copy id without a usable domain', () => {
+    const name = siteName(snapshot({ id: 'CmAbc123', sourceUrl: 'not a url', finalUrl: null, company: { id: 'c', name: 'x', domain: null } }));
+    expect(name).toBe('copy-cmabc123');
+  });
+});
+
+describe('site repo', () => {
+  it('puts the website under public/ and the copy data under moncha/', () => {
+    const paths = siteRepoPaths({ assets: ASSETS });
+    expect(paths).toEqual(
+      expect.arrayContaining([
+        { key: 'index.html', path: 'public/index.html' },
+        { key: 'assets/ja.edu.sg/wp-content/logo.png', path: 'public/assets/ja.edu.sg/wp-content/logo.png' },
+        { key: 'brand.json', path: 'moncha/brand.json' },
+        { key: 'manifest.json', path: 'moncha/manifest.json' },
+        { key: 'source.html', path: 'moncha/source.html' },
+      ]),
+    );
+    expect(paths.some((p) => p.key.startsWith('screenshot') || p.key === 'rendered.html')).toBe(false);
+  });
+
+  it('marks automatic and manual copies in the description and topics', () => {
+    expect(siteRepoSpec(snapshot(), null)).toMatchObject({
+      name: 'ja-edu-sg',
+      description: 'Jurong Academy (ja.edu.sg) · Automatic website copy by MonCha',
+      topics: [SITE_REPO_TOPIC, 'auto-copy'],
+    });
+    expect(siteRepoSpec(snapshot({ origin: 'manual' }), 'https://x.dev').topics).toEqual([SITE_REPO_TOPIC, 'manual-copy']);
+  });
+
+  it('pushes the whole website with a README and wrangler.jsonc, and records the repo', async () => {
     const { deps, patches, calls } = setup(ok);
     const outcome = await pushSiteSnapshotToGithub(deps, snapshot());
-    expect(outcome.status).toBe('pushed');
-    expect(calls[0]!.folder).toBe('sites/ja.edu.sg/snap1');
-    // The store still has demo.html from an older copy; it is no longer pushed.
-    expect(calls[0]!.files.map((f) => f.path)).toEqual([
-      'assets/ja.edu.sg/wp-content/theme.css',
-      'assets/ja.edu.sg/wp-includes/jquery.min.js',
-      'brand.json',
-      'index.html',
-      'manifest.json',
-      'rendered.html',
-      'source.html',
-    ]);
-    expect(calls[0]!.message).toContain('ja.edu.sg (snap1)');
+    expect(outcome).toMatchObject({ status: 'pushed', repo: 'Thinaakar/ja-edu-sg' });
+    const call = calls[0]!;
+    expect(call.repo.name).toBe('ja-edu-sg');
+    expect(call.repo.homepage).toBe('https://ja-edu-sg.vinothjv4-tech.workers.dev');
+    expect(call.files.map((f) => f.path)).toEqual([
+      'moncha/brand.json',
+      'moncha/manifest.json',
+      'moncha/source.html',
+      'public/assets/ja.edu.sg/wp-content/logo.png',
+      'public/assets/ja.edu.sg/wp-content/theme.css',
+      'public/assets/ja.edu.sg/wp-includes/jquery.min.js',
+      'public/index.html',
+      'README.md',
+      'wrangler.jsonc',
+    ].sort((a, b) => a.localeCompare(b)));
+    const readme = dec.decode(call.files.find((f) => f.path === 'README.md')!.bytes);
+    expect(readme).toContain('# Jurong Academy');
+    expect(readme).toContain('[ja-edu-sg.vinothjv4-tech.workers.dev](https://ja-edu-sg.vinothjv4-tech.workers.dev)');
+    expect(readme).toContain('Automatic (copied by the copy automation');
+    const wrangler = JSON.parse(dec.decode(call.files.find((f) => f.path === 'wrangler.jsonc')!.bytes));
+    expect(wrangler).toMatchObject({ name: 'ja-edu-sg', assets: { directory: './public' } });
+    expect(call.message).toContain('Copy type: Automatic');
     expect(patches[0]).toMatchObject({
       githubStatus: 'pushed',
-      githubCommitUrl: 'https://github.com/Thinaakar/moncha-sites/commit/abc123',
+      githubRepo: 'Thinaakar/ja-edu-sg',
+      githubFolderUrl: 'https://github.com/Thinaakar/ja-edu-sg',
+      githubCommitUrl: 'https://github.com/Thinaakar/ja-edu-sg/commit/abc123',
       githubError: null,
       githubPushedAt: NOW,
     });
     expect(patches[0]).not.toHaveProperty('status');
+  });
+
+  it('prefers the deployed Worker URL for the repo homepage', async () => {
+    const { deps, calls } = setup(ok);
+    await pushSiteSnapshotToGithub(deps, snapshot({ workerUrl: 'https://ja-edu-sg.other.workers.dev' }));
+    expect(calls[0]!.repo.homepage).toBe('https://ja-edu-sg.other.workers.dev');
   });
 
   it('keeps the copy done and schedules a retry with backoff when GitHub fails', async () => {
@@ -174,6 +191,15 @@ describe('site GitHub push', () => {
     });
     expect(patches[0]!.githubError).toContain('github_bad_token');
     expect(patches[0]).not.toHaveProperty('status');
+  });
+
+  it('gives up at once on an error that a retry cannot fix', async () => {
+    const { deps, patches } = setup(async () => {
+      throw new SiteGithubError('github_repo_taken', 'exists', false);
+    });
+    const outcome = await pushSiteSnapshotToGithub(deps, snapshot());
+    expect(outcome.status).toBe('failed');
+    expect(patches[0]).toMatchObject({ githubStatus: 'failed', githubNextAt: null });
   });
 
   it('gives up after the last attempt', async () => {

@@ -37,7 +37,7 @@ export function GithubStatusBadge({ github }: { github: SiteGithubPush }) {
   );
 }
 
-/** Opens the copy's folder in the sites repo once it is pushed. */
+/** Opens the website's repo once it is pushed. */
 export function GithubLinkButton({
   github,
   size = 'default',
@@ -137,8 +137,9 @@ export function GithubDetailsCard({ snapshot }: { snapshot: SiteSnapshotDetail }
           <Github className="size-4 text-primary" /> GitHub
         </CardTitle>
         <CardDescription>
-          HTML, CSS, JS, brand.json and manifest.json{snapshot.githubRepo ? ` in ${snapshot.githubRepo}` : ''}. Images, fonts and
-          screenshots stay in R2, so the GitHub folder opens without them.
+          The whole website in its own private repo{snapshot.githubRepo ? ` (${snapshot.githubRepo})` : ''}: the site under{' '}
+          <code className="font-mono text-xs">public/</code>, brand.json and manifest.json under{' '}
+          <code className="font-mono text-xs">moncha/</code>, and a wrangler.jsonc for the Worker.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -156,7 +157,7 @@ export function GithubDetailsCard({ snapshot }: { snapshot: SiteSnapshotDetail }
             <DetailRow label="Status">
               <GithubStatusBadge github={github} />
             </DetailRow>
-            <DetailRow label="Folder">
+            <DetailRow label="Repository">
               {github.folderUrl ? (
                 <a href={github.folderUrl} target="_blank" rel="noreferrer noopener" className="inline-flex items-center gap-1 text-primary hover:underline break-all">
                   {github.folderUrl.replace(/^https:\/\/github\.com\//, '')} <ExternalLink className="size-3 shrink-0" />

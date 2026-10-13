@@ -45,8 +45,10 @@ export type SiteSnapshotJobDeps = {
   store: SiteStore;
   llmUsage?: LlmUsageRepo;
   maxLlmCallsPerDay?: number;
-  /** When the sites repo is configured, a finished copy is queued for a GitHub push. */
+  /** When GitHub is configured, a finished copy is queued for a push to its own repo. */
   githubEnabled?: boolean;
+  /** When Cloudflare is configured, a finished copy is queued for a deploy to its own Worker. */
+  workerEnabled?: boolean;
   logger: Logger;
   now?: () => Date;
 };
@@ -241,6 +243,9 @@ export async function runSiteSnapshotJob(
       finishedAt: now(),
       ...(deps.githubEnabled
         ? { githubStatus: 'pending' as const, githubAttempts: 0, githubNextAt: now(), githubError: null }
+        : {}),
+      ...(deps.workerEnabled
+        ? { workerStatus: 'pending' as const, workerAttempts: 0, workerNextAt: now(), workerError: null }
         : {}),
     });
     await finishJob('done', {

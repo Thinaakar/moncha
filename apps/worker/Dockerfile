@@ -6,6 +6,10 @@ FROM mcr.microsoft.com/playwright:v1.63.0-noble
 ENV PNPM_HOME=/pnpm \
     PATH=/pnpm:$PATH \
     CI=true
+# git pushes each website copy to its own GitHub repo.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git \
+ && rm -rf /var/lib/apt/lists/*
 RUN corepack enable
 
 WORKDIR /app

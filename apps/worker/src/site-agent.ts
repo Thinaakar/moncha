@@ -1,5 +1,9 @@
-import type { SiteGithubPublisher, SiteStore } from '@moncha/domain';
-import { createGitHubSitePublisherFromEnv, createR2SiteStoreFromEnv } from '@moncha/integrations';
+import type { SiteGithubPublisher, SiteStore, SiteWorkerDeployer } from '@moncha/domain';
+import {
+  createCloudflareSiteWorkerDeployerFromEnv,
+  createGitHubSitePublisherFromEnv,
+  createR2SiteStoreFromEnv,
+} from '@moncha/integrations';
 
 const MB = 1024 * 1024;
 
@@ -18,7 +22,7 @@ export type SiteAgentConfig = {
   model: string | undefined;
   llmTimeoutMs: number;
   limits: { maxAssets: number; maxFileBytes: number; maxTotalBytes: number };
-  /** Origin of the sites Pages project that serves public copy links; null hides the links. */
+  /** Origin of the older shared sites Pages project; used only for copies that have no Worker yet. */
   publicBaseUrl: string | null;
   /** R2 and the preview secret are both required; otherwise copies cannot be stored or viewed. */
   ready: boolean;
@@ -63,10 +67,21 @@ export function siteAgentConfig(): SiteAgentConfig {
 
 let cachedPublisher: SiteGithubPublisher | null | undefined;
 
-/** GITHUB_TOKEN + GITHUB_SITES_REPO (+ GITHUB_SITES_BRANCH, default main); null skips the push. */
+/**
+ * GITHUB_TOKEN + GITHUB_SITES_OWNER (or the owner of GITHUB_SITES_REPO), GITHUB_SITES_BRANCH default main.
+ * Each website gets its own private repo under the owner; null skips the push.
+ */
 export function siteGithubPublisher(): SiteGithubPublisher | null {
   if (cachedPublisher === undefined) cachedPublisher = createGitHubSitePublisherFromEnv(process.env);
   return cachedPublisher;
+}
+
+let cachedDeployer: SiteWorkerDeployer | null | undefined;
+
+/** CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID (or R2_ACCOUNT_ID): each website becomes its own Worker; null skips it. */
+export function siteWorkerDeployer(): SiteWorkerDeployer | null {
+  if (cachedDeployer === undefined) cachedDeployer = createCloudflareSiteWorkerDeployerFromEnv(process.env);
+  return cachedDeployer;
 }
 
 /** SITE_AUTO_COPY=false switches the copy automation off on this worker, whatever the console setting says. */

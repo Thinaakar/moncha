@@ -582,6 +582,20 @@ model SiteSnapshot {
   githubFolderUrl     String?
   githubError         String?
   githubPushedAt      DateTime?
+  /// owner/name of the copy's own GitHub repo (one website, one repo).
+  githubRepo          String?
+  /// Cloudflare Worker deploy: null (not deployed), pending, deploying, deployed or failed (gave up).
+  workerStatus        String?
+  workerAttempts      Int       @default(0)
+  /// Earliest time the worker may (re)try the deploy.
+  workerNextAt        DateTime?
+  workerLockedAt      DateTime?
+  /// Worker script name, the same as the repo name (e.g. ja-edu-sg).
+  workerName          String?
+  /// https://{workerName}.{subdomain}.workers.dev
+  workerUrl           String?
+  workerError         String?
+  workerDeployedAt    DateTime?
   createdAt           DateTime  @default(now())
   finishedAt          DateTime?
   tenant              Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -595,6 +609,7 @@ model SiteSnapshot {
   @@index([tenantId, origin, createdAt])
   @@index([crawlJobId])
   @@index([githubStatus, githubNextAt])
+  @@index([workerStatus, workerNextAt])
 }
 
 enum SiteCopyOrigin {

@@ -82,8 +82,10 @@ copies) were added on 2026-10-08.
 | 38 | GET | `/api/v1/site-automation` | Read | Copy automation settings and today's count | 200 | SiteAutomationSettings, SiteAutomationCrawl, SiteSnapshot |
 | 39 | PUT | `/api/v1/site-automation` | Update | Turn copy automation on or off (editor session) | 200 | SiteAutomationSettings |
 | 40 | GET | `/api/v1/site-automation/crawls` | Read | Crawls followed by the automation and their copies | 200 | SiteAutomationCrawl, JobRun, SiteSnapshot |
-| 41 | POST | `/api/v1/site-snapshots/:id/github-push` | Update | Push a finished copy to the GitHub sites repo now (editor session) | 202 | SiteSnapshot |
-| 41a | GET | `/api/v1/site-automation/github-check` | Read | Check the GitHub sites repo connection: read and write access (editor session) | 200 | - |
+| 41 | POST | `/api/v1/site-snapshots/:id/github-push` | Update | Push a finished copy to its website's own GitHub repo now (editor session) | 202 | SiteSnapshot |
+| 41a | GET | `/api/v1/site-automation/github-check` | Read | Check the GitHub connection for the site repos (editor session) | 200 | - |
+| 41c | POST | `/api/v1/site-snapshots/:id/deploy` | Update | Deploy a finished copy to its website's own Cloudflare Worker now (editor session) | 202 | SiteSnapshot |
+| 41d | GET | `/api/v1/site-automation/deploy-check` | Read | Check the Cloudflare Workers connection (editor session) | 200 | - |
 
 The only PATCH is #20. To change a schedule time, delete the old one (#6) and create the new one (#5).
 
@@ -1671,7 +1673,8 @@ domain), `origin` (`auto` or `manual`). **200 OK** `{ "items", "total", "page", 
 
 **200 OK**: the summary plus `brand`, `previewBase` (`site-files/<token>/`), `files` (`index`, `source`,
 `rendered`, `desktop`, `mobile`) and `manifest`. The last three are `null` until the copy is `done`. Also
-`githubConfigured` (the worker has `GITHUB_TOKEN` and `GITHUB_SITES_REPO`) and `githubRepo` (`owner/name` or `null`).
+`githubConfigured` (the worker has a GitHub token and owner), `githubRepo` (`owner/{siteName}`, the website's repo, or
+`null`) and `deployConfigured` (the worker has Cloudflare credentials).
 **404** for an unknown copy or one in another tenant.
 
 ### 34. GET `/api/v1/site-snapshots/:id/source`
@@ -1723,10 +1726,25 @@ starts: the snapshot and its job both become `failed` with reason `cancelled`. *
 
 ### 41. POST `/api/v1/site-snapshots/:id/github-push`
 
-When `GITHUB_TOKEN` and `GITHUB_SITES_REPO` are set, the worker pushes every finished copy to the sites repo by
-itself, as one commit under `sites/{domain}/{copyId}/` on `GITHUB_SITES_BRANCH` (default `main`). Pushed files:
-`index.html`, `source.html`, `rendered.html`, `brand.json`, `manifest.json` and the
-CSS and JS assets (`assets/...`). Images, fonts and screenshots stay in R2 only.
+One website = one GitHub repo. When `GITHUB_TOKEN` and `GITHUB_SITES_OWNER` (or `GITHUB_SITES_REPO`, whose owner is
+used) are set, the worker pushes every finished copy to the website's own private repo `{owner}/{siteName}` by
+itself, as one commit on `GITHUB_SITES_BRANCH` (default `main`). `siteName` is the domain without `www.`, dots as
+dashes (`ja.edu.sg` → `ja-edu-sg`). The repo is created when missing, with the description
+`{Company} ({domain}) · Automatic|Manual website copy by MonCha`, the live Worker URL as homepage and the topics
+`moncha-site` plus `auto-copy` or `manual-copy`. An existing repo without the `moncha-site` topic is never touched
+(`github_repo_taken`). A newer copy of the same website becomes a new commit in the same repo; its tree is exactly
+the new copy, so files that are gone are removed. Repo layout:
+
+```
+README.md          company, original URL, live URL, copy type (automatic/manual), capture date, copy ID
+wrangler.jsonc     the same static-assets Worker, for `npx wrangler deploy`
+public/            the website: index.html plus every copied asset (images, fonts, CSS, JS)
+moncha/            brand.json, manifest.json, source.html (HTML exactly as served)
+```
+
+The push uses the git CLI (one push per copy whatever the number of files); screenshots and `rendered.html` stay in
+R2. The token needs Repository access "All repositories" with Administration: Read and write (to create repos) and
+Contents: Read and write.
 
 A GitHub problem never fails the copy: it stays `done`, `github.error` explains the problem and the worker retries
 after 1 min, 5 min, 15 min, 1 h and 3 h (6 tries), then sets `github.status` to `failed`. This route queues a push
@@ -1743,15 +1761,17 @@ The summary's `github` object:
   "maxAttempts": 6,
   "nextAt": null,
   "commitSha": "4f1c2e9...",
-  "commitUrl": "https://github.com/Thinaakar/moncha-sites/commit/4f1c2e9...",
-  "folderUrl": "https://github.com/Thinaakar/moncha-sites/tree/main/sites/ja.edu.sg/cmuzhzprg0005g52oxa945s3h",
+  "commitUrl": "https://github.com/Thinaakar/ja-edu-sg/commit/4f1c2e9...",
+  "folderUrl": "https://github.com/Thinaakar/ja-edu-sg",
+  "repo": "Thinaakar/ja-edu-sg",
   "error": null,
   "pushedAt": "2026-10-09T10:03:12.000Z"
 }
 ```
 
 `status` is `pending` (waiting for the worker; with `error` set it is a scheduled retry at `nextAt`), `pushing`,
-`pushed` or `failed`.
+`pushed` or `failed`. Copies pushed before per-site repos keep their old `folderUrl` in the shared repo and have no
+`repo`.
 
 | Status | `code` | When |
 |---|---|---|
@@ -1760,47 +1780,121 @@ The summary's `github` object:
 | 404 | `not_found` | Unknown copy |
 | 409 | `not_ready` | The copy is not `done` |
 | 409 | `push_in_progress` | The worker is pushing this copy right now |
-| 503 | `github_not_configured` | `GITHUB_TOKEN` or `GITHUB_SITES_REPO` missing |
+| 503 | `github_not_configured` | `GITHUB_TOKEN` or the owner missing |
+
+Common `github.error` codes: `github_cannot_create_repo` (token lacks Administration write or All repositories),
+`github_forbidden` (token cannot push), `github_repo_taken` (a repo with that name exists that is not a MonCha
+site repo, or the token cannot see it), `github_bad_token`, `github_rate_limited`, `git_failed`.
 
 ### 41a. GET `/api/v1/site-automation/github-check`
 
-Checks the sites repo connection with the worker's own settings. It reads the repo, the branch ref and its head
-commit, then creates one unreferenced git blob to prove the token has Contents: Read and write. No commit is made and
-the branch does not move. The token is never returned or logged; `keys` only says which variables are set. The
-worker runs the same check once at start-up and logs it as `site_github_check`.
+Checks the GitHub connection with the worker's own settings: the token is valid, belongs to `login`, and can see the
+owner (`ownerType` `user` means repos are created with `/user/repos`, `org` with `/orgs/{owner}/repos`). Nothing is
+created. The token is never returned or logged; `keys` only says which variables are set. The worker runs the same
+check once at start-up and logs it as `site_github_check`.
 
 **Headers:** `authorization: Bearer <token>` (role `admin` or `operator`). **200 OK**:
 
 ```json
 {
   "configured": true,
-  "keys": { "GITHUB_TOKEN": true, "GITHUB_SITES_REPO": true, "GITHUB_SITES_BRANCH": true },
-  "repo": "Thinaakar/moncha-sites",
+  "keys": { "GITHUB_TOKEN": true, "GITHUB_SITES_REPO": true, "GITHUB_SITES_BRANCH": true, "GITHUB_SITES_OWNER": true },
+  "repo": "Thinaakar/{siteName}",
   "branch": "main",
   "private": true,
-  "canPush": true,
+  "canPush": null,
   "canRead": true,
-  "canWrite": true,
-  "branchHead": "1dcff22c5db1b7740b65596f2b7076decc90e682",
-  "folderPattern": "sites/{domain}/{copyId}/",
+  "canWrite": false,
+  "branchHead": null,
+  "folderPattern": "Thinaakar/{siteName}",
+  "owner": "Thinaakar",
+  "login": "Thinaakar",
+  "ownerType": "user",
   "error": null,
-  "checkedAt": "2026-10-12T13:30:00.000Z"
+  "checkedAt": "2026-10-13T09:30:00.000Z"
 }
 ```
 
-`error` explains a failed step, e.g. `github_bad_token: …`, `github_forbidden: Token cannot write …` (read-only
-token), `github_not_found: …` (no access to the repo) or `github_branch_missing: …` (empty repo).
+`canPush`, `canWrite` and `branchHead` belong to the older shared repo and are always `null`/`false` now; whether
+the token can create repos shows on the first push (`github_cannot_create_repo`).
+
+### 41c. POST `/api/v1/site-snapshots/:id/deploy`
+
+One website = one Cloudflare Worker = one URL. When `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` (or
+`R2_ACCOUNT_ID`) are set, the worker deploys every finished copy by itself as a static-assets Worker named
+`{siteName}`, live at `https://{siteName}.{subdomain}.workers.dev` (the subdomain is read from the account, or
+`CLOUDFLARE_WORKERS_SUBDOMAIN`). It uploads `index.html` (served at `/`) and every asset through the Workers API (no
+wrangler), tags the Worker `moncha-site` and turns on its workers.dev route. A newer copy of the same website
+redeploys the same Worker, so the URL never changes. A Worker with that name that has no `moncha-site` tag is never
+replaced (`worker_name_taken`). Files over 25 MB are skipped (Cloudflare's per-file limit).
+
+Retries work like GitHub pushes (1 min, 5 min, 15 min, 1 h, 3 h; 6 tries); a deploy problem never fails the copy.
+This route queues a deploy right away: first deploy of an older copy, a retry, or a redeploy.
+
+**Headers:** `authorization: Bearer <token>` (role `admin` or `operator`). **202 Accepted** `{ "queued": true }`.
+
+The summary's `deploy` object (and `siteName`, e.g. `"ja-edu-sg"`):
+
+```json
+{
+  "status": "deployed",
+  "attempts": 1,
+  "maxAttempts": 6,
+  "nextAt": null,
+  "name": "ja-edu-sg",
+  "url": "https://ja-edu-sg.vinothjv4-tech.workers.dev",
+  "error": null,
+  "deployedAt": "2026-10-13T09:24:27.000Z"
+}
+```
+
+`status` is `pending`, `deploying`, `deployed` or `failed`; `null` when the copy was never queued.
+
+| Status | `code` | When |
+|---|---|---|
+| 401 | `unauthorized` | No bearer token, or an invalid one |
+| 403 | `forbidden` | Viewer role, or a user of another tenant |
+| 404 | `not_found` | Unknown copy |
+| 409 | `not_ready` | The copy is not `done` |
+| 409 | `deploy_in_progress` | The worker is deploying this copy right now |
+| 503 | `deploy_not_configured` | `CLOUDFLARE_API_TOKEN` or the account id missing |
+
+Common `deploy.error` codes: `cloudflare_bad_token` (needs Workers Scripts: Edit), `worker_name_taken`,
+`cloudflare_rate_limited`, `cloudflare_http_400` (e.g. the account's Worker limit: 100 free, 500 paid).
+
+Backfill (newest copy per website, from `apps/worker`): `pnpm sites:backfill -- --limit 10` queues them for the
+worker; add `--dry-run` to list them, `--run` to publish from this machine, `--only github|worker`, `--site ja-edu-sg`.
+
+### 41d. GET `/api/v1/site-automation/deploy-check`
+
+Reads the account's workers.dev subdomain and its Worker list with the worker's own settings. Nothing is deployed;
+the token is never returned. The worker runs the same check at start-up and logs it as `site_worker_check`.
+
+```json
+{
+  "configured": true,
+  "keys": { "CLOUDFLARE_API_TOKEN": true, "CLOUDFLARE_ACCOUNT_ID": false, "R2_ACCOUNT_ID": true },
+  "subdomain": "vinothjv4-tech",
+  "urlPattern": "https://{siteName}.vinothjv4-tech.workers.dev",
+  "canRead": true,
+  "siteWorkers": 3,
+  "totalWorkers": 7,
+  "error": null,
+  "checkedAt": "2026-10-13T09:30:00.000Z"
+}
+```
 
 ### 41b. Public copy links (`publicUrl`)
 
-Every copy summary (lists, lead copies, copy detail) has `publicUrl`: a public, no-login link to the copy's
-`index.html`, or `null` when the copy is not `done` or `SITE_PUBLIC_BASE_URL` is not set.
+Every copy summary (lists, lead copies, copy detail) has `publicUrl`: the website's Worker URL once
+`deploy.status` is `deployed`. Before that (or without Cloudflare) it falls back to the older shared link below when
+`SITE_PUBLIC_BASE_URL` is set, else `null`; always `null` when the copy is not `done`.
 
 ```
 https://moncha-sites.pages.dev/sites/{domain}/{copyId}/index.html
 ```
 
-The links are served by the Cloudflare Pages project in `apps/worker/sites-pages`: a Pages Function bound to the
+The shared links are served by the Cloudflare Pages project in `apps/worker/sites-pages`: a Pages Function bound to the
 R2 bucket reads `sites/{tenantId}/{copyId}/{file}` and returns it as is, so the relative asset links in `index.html`
 resolve to the same copy. There is no build or deploy per copy; a copy is live the moment it is `done`.
 
@@ -1959,7 +2053,8 @@ The API only stores requests. The work is done by the background worker (`apps/w
 | `POST /api/v1/source-imports` | Import files over 1,000 rows, and audit the imported leads' websites |
 | `POST /api/v1/leads/:id/site-snapshots` | Capture the homepage, extract the brand and upload the copy to R2 |
 | `PUT /api/v1/site-automation` with `enabled: true` | Queue copies for qualified leads after each finished crawl |
-| `POST /api/v1/site-snapshots/:id/github-push` (and every finished copy) | Push the copy's code files to the GitHub sites repo |
+| `POST /api/v1/site-snapshots/:id/github-push` (and every finished copy) | Push the website to its own GitHub repo |
+| `POST /api/v1/site-snapshots/:id/deploy` (and every finished copy) | Deploy the website to its own Cloudflare Worker |
 
 On the deployed backend the worker container is not running (the Cloudflare account has no Containers access), so
 these jobs stay `pending` until a worker runs, for example `pnpm --filter @moncha/worker start` locally.

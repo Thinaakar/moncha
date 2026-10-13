@@ -15,7 +15,7 @@ import { SearchInput } from '@/components/app/widgets';
 import { CopyError } from '@/components/sites/copy-error';
 import { OriginBadge } from '@/components/sites/automation';
 import { GithubStatusBadge } from '@/components/sites/github-push';
-import { LiveSiteLink } from '@/components/sites/live-site';
+import { LiveWebsiteCell } from '@/components/sites/live-site';
 import { TabBar } from '@/components/sites/tabs';
 import { siteFileUrl, useSiteAutomation, useSiteQueue, useSiteSnapshots } from '@/lib/queries';
 import { useUrlState } from '@/lib/use-url-state';
@@ -189,8 +189,8 @@ function CopiesPanel() {
                   <TableHead>Started by</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Error</TableHead>
-                  <TableHead>Live site</TableHead>
-                  <TableHead>GitHub</TableHead>
+                  <TableHead>Live website</TableHead>
+                  <TableHead>GitHub repo</TableHead>
                   <TableHead className="text-right">Assets</TableHead>
                   <TableHead className="text-right">Size</TableHead>
                   <TableHead className="text-right">Created</TableHead>
@@ -240,7 +240,7 @@ function CopiesPanel() {
                         )}
                       </TableCell>
                       <TableCell>
-                        <LiveSiteLink url={s.publicUrl} />
+                        <LiveWebsiteCell snapshot={s} />
                       </TableCell>
                       <TableCell>
                         {s.github?.status === 'pushed' && (s.github.folderUrl || s.github.commitUrl) ? (
@@ -249,9 +249,11 @@ function CopiesPanel() {
                             target="_blank"
                             rel="noreferrer noopener"
                             onClick={(e) => e.stopPropagation()}
-                            className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+                            title={s.github.repo ?? undefined}
+                            className="inline-flex max-w-44 items-center gap-1 text-xs font-medium text-primary hover:underline"
                           >
-                            <Github className="size-3.5" /> View
+                            <Github className="size-3.5 shrink-0" />
+                            <span className="truncate font-mono">{s.github.repo?.split('/')[1] ?? 'View'}</span>
                           </a>
                         ) : s.github ? (
                           <GithubStatusBadge github={s.github} />

@@ -49,7 +49,8 @@ import {
   NeonSessionRepo,
   NeonWebsiteRepo,
 } from './neon-adapter';
-import { createResendMailerFromEnv } from '@moncha/integrations';
+// Direct file import: the package index also exports Node-only publishers (git, child_process) that Workers cannot bundle.
+import { createResendMailerFromEnv } from '@moncha/integrations/src/resend';
 import { CsvImportError, SOURCE_IMPORT_JOB_TYPES, sourceImportView, startCsvImport } from '../src/csv-import';
 import { workerHealth } from '../src/worker-health';
 
