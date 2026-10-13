@@ -205,7 +205,10 @@ export class PrismaJobRunRepository implements JobRepo {
         FOR UPDATE SKIP LOCKED
         LIMIT ${limit}
       )
-      RETURNING *
+      -- No RETURNING *: Neon's pooler keeps prepared plans across deploys, and they fail once a column is added.
+      RETURNING j.id, j."tenantId", j.type, j.status, j.payload, j.result, j.attempts, j."maxAttempts",
+                j."runAfter", j."lockedAt", j."lockedBy", j."lastError", j."dedupeKey", j."leadId",
+                j."crawlJobId", j."auditId", j."startedAt", j."finishedAt", j."createdAt"
     `;
     return rows.map(mapJob);
   }
