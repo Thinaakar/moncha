@@ -13,6 +13,7 @@ import type {
   SiteSnapshotRepo,
   SiteWorkerRequestResult,
   SiteWorkerStatus,
+  SiteCopyStage,
 } from '@moncha/domain';
 import { clampPage, clampPageSize, siteStoragePrefix } from '@moncha/domain';
 import { mapJob } from './job-run';
@@ -64,6 +65,8 @@ function mapSnapshot(row: SiteSnapshot): SiteSnapshotRecord {
     workerUrl: row.workerUrl,
     workerError: row.workerError,
     workerDeployedAt: row.workerDeployedAt,
+    stage: (row.stage as SiteCopyStage | null) ?? null,
+    stageAt: row.stageAt,
     createdAt: row.createdAt,
     finishedAt: row.finishedAt,
   };
@@ -299,7 +302,8 @@ export class PrismaSiteSnapshotRepository implements SiteSnapshotRepo {
     return count ? 'queued' : 'busy';
   }
 
-  async claimWorkerDeploy(now: Date, staleBefore: Date): Promise<SiteSnapshotListItem | null> {
+  async claimWorkerDeploy(now: Date, staleBefore: Date, options: { afterGithub?: boolean } = {}): Promise<SiteSnapshotListItem | null> {
+    const afterGithub = Boolean(options.afterGithub);
     const rows = await this.db.$queryRaw<Array<{ id: string; tenantId: string }>>`
       UPDATE "SiteSnapshot" AS s
       SET "workerStatus" = 'deploying', "workerLockedAt" = ${now}, "workerAttempts" = s."workerAttempts" + 1
@@ -307,7 +311,8 @@ export class PrismaSiteSnapshotRepository implements SiteSnapshotRepo {
         SELECT id FROM "SiteSnapshot"
         WHERE status = 'done'
           AND (
-            ("workerStatus" = 'pending' AND ("workerNextAt" IS NULL OR "workerNextAt" <= ${now}))
+            ("workerStatus" = 'pending' AND ("workerNextAt" IS NULL OR "workerNextAt" <= ${now})
+              AND (${afterGithub} = false OR "githubStatus" = 'pushed'))
             OR ("workerStatus" = 'deploying' AND "workerLockedAt" < ${staleBefore})
           )
         ORDER BY "workerNextAt" ASC NULLS FIRST, "createdAt" ASC

@@ -596,6 +596,9 @@ model SiteSnapshot {
   workerUrl           String?
   workerError         String?
   workerDeployedAt    DateTime?
+  /// Copy job step while it runs (and the step it failed in): copying, reading_source or building.
+  stage               String?
+  stageAt             DateTime?
   createdAt           DateTime  @default(now())
   finishedAt          DateTime?
   tenant              Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)

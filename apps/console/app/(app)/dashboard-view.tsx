@@ -15,6 +15,7 @@ import {
   UserPlus,
 } from 'lucide-react';
 import { CrawlCopiesCell, formatEta, OriginBadge } from '@/components/sites/automation';
+import { COPY_STEPS } from '@/components/sites/copy-progress';
 import { Button } from '@/components/ui/button';
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -274,7 +275,9 @@ function WebsiteCopiesCard() {
                 <Loader2 className="size-4 shrink-0 animate-spin text-info" />
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium">{current.company?.name ?? 'Copying…'}</p>
-                  <p className="text-xs text-muted-foreground">Done {formatEta(current.estimatedAt)}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {current.progress ? `${COPY_STEPS[current.progress.step].label} · ` : ''}Done {formatEta(current.estimatedAt)}
+                  </p>
                 </div>
                 <OriginBadge origin={current.origin} />
               </Link>

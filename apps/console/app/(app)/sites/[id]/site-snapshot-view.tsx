@@ -31,6 +31,7 @@ import { copyAttemptsSummary } from '@/components/sites/copy-error';
 import { failureText } from '@/components/sites/labels';
 import { formatEta, OriginBadge } from '@/components/sites/automation';
 import { CancelCopyButton } from '@/components/sites/cancel-copy';
+import { COPY_STEPS, CopyProgressBadge, CopyProgressSteps } from '@/components/sites/copy-progress';
 import { GithubLinkButton, GithubPushAlert, GithubStatusBadge } from '@/components/sites/github-push';
 import { LiveSiteButton, LiveWebsiteCard } from '@/components/sites/live-site';
 import { PreviewFrame } from '@/components/sites/preview-frame';
@@ -157,9 +158,13 @@ export function SiteSnapshotView({ id }: { id: string }) {
         title={
           <span className="flex flex-wrap items-center gap-3">
             {company?.name ?? 'Website copy'}
-            <JobStatusBadge status={snapshot.status} />
+            {snapshot.progress && snapshot.failureReason !== 'cancelled' ? (
+              <CopyProgressBadge progress={snapshot.progress} />
+            ) : (
+              <JobStatusBadge status={snapshot.status} />
+            )}
             {snapshot.origin === 'auto' && <OriginBadge origin="auto" />}
-            {snapshot.github && snapshot.github.status !== 'pushed' && snapshot.status === 'done' && (
+            {!snapshot.progress && snapshot.github && snapshot.github.status !== 'pushed' && snapshot.status === 'done' && (
               <GithubStatusBadge github={snapshot.github} />
             )}
           </span>
@@ -194,13 +199,16 @@ export function SiteSnapshotView({ id }: { id: string }) {
         className="pb-0"
       />
 
+      {snapshot.progress && snapshot.failureReason !== 'cancelled' && <CopyProgressSteps progress={snapshot.progress} />}
       {open && (
         <InlineAlert
           variant="info"
           icon={Loader2}
           title={
             snapshot.status === 'running'
-              ? 'Copying the homepage…'
+              ? snapshot.progress
+                ? `${COPY_STEPS[snapshot.progress.step].label}…`
+                : 'Copying the homepage…'
               : queued
                 ? `#${queued.position} in the queue · starts ${formatEta(queued.estimatedAt)}`
                 : 'Waiting for the worker…'

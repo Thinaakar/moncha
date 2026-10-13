@@ -15,6 +15,7 @@ import { CopyError } from '@/components/sites/copy-error';
 import { failureText } from '@/components/sites/labels';
 import { formatEta, OriginBadge } from '@/components/sites/automation';
 import { CancelCopyButton } from '@/components/sites/cancel-copy';
+import { COPY_STEPS, CopyProgressBadge } from '@/components/sites/copy-progress';
 import { LiveWebsiteStrip } from '@/components/sites/live-site';
 import { siteFileUrl, useCreateSiteSnapshot, useLeadSiteSnapshots, useSiteQueue } from '@/lib/queries';
 import { errorMessage } from '@/lib/api';
@@ -107,7 +108,9 @@ export function WebsiteCopyCard({ leadId, hasWebsite }: { leadId: string; hasWeb
                       <>
                         <Loader2 className="size-5 animate-spin text-primary" />
                         {latest.status === 'running'
-                          ? 'Copying the homepage…'
+                          ? latest.progress
+                            ? `${COPY_STEPS[latest.progress.step].label}…`
+                            : 'Copying the homepage…'
                           : queued
                             ? `#${queued.position} in the queue · starts ${formatEta(queued.estimatedAt)}`
                             : 'Waiting for the worker…'}
@@ -128,7 +131,11 @@ export function WebsiteCopyCard({ leadId, hasWebsite }: { leadId: string; hasWeb
               </div>
               <div className="flex items-center justify-between gap-2 border-t bg-card px-3 py-2 text-xs">
                 <span className="flex items-center gap-1.5">
-                  <JobStatusBadge status={latest.status} />
+                  {latest.progress && latest.failureReason !== 'cancelled' ? (
+                    <CopyProgressBadge progress={latest.progress} />
+                  ) : (
+                    <JobStatusBadge status={latest.status} />
+                  )}
                   {latest.origin === 'auto' && <OriginBadge origin="auto" />}
                 </span>
                 <span className="text-muted-foreground">

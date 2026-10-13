@@ -46,6 +46,8 @@ export function siteSnapshotFixture(over: Partial<SiteSnapshotListItem> = {}): S
     workerUrl: null,
     workerError: null,
     workerDeployedAt: null,
+    stage: null,
+    stageAt: null,
     createdAt: FIXTURE_NOW,
     finishedAt: FIXTURE_NOW,
     company: { id: 'c1', name: 'Jurong Academy', domain: 'ja.edu.sg' },

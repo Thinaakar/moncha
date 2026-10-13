@@ -25,7 +25,7 @@ copies) were added on 2026-10-08.
 - [Source imports](#source-imports): CSV import and import status
 - [Worker health](#worker-health): is the background worker running
 - [Reviews](#reviews): list review tasks, get one, resolve one (confirm, mark chatbot, re-audit)
-- [Website copies](#website-copies): copy a lead's homepage, list copies, get one, view source, stored files, queue, cancel, GitHub push
+- [Website copies](#website-copies): copy a lead's homepage, list copies, get one, view source, stored files, queue, cancel, GitHub push, Worker deploy, copy progress
 - [Copy automation](#copy-automation): queue copies for new qualified leads after each country crawl
 - [How a lead's queue is decided](#how-a-leads-queue-is-decided)
 - [Enums](#enums)
@@ -1835,6 +1835,10 @@ replaced (`worker_name_taken`). Files over 25 MB are skipped (Cloudflare's per-f
 Retries work like GitHub pushes (1 min, 5 min, 15 min, 1 h, 3 h; 6 tries); a deploy problem never fails the copy.
 This route queues a deploy right away: first deploy of an older copy, a retry, or a redeploy.
 
+When GitHub is configured too, the Worker is deployed only after the copy's GitHub push is done (`github.status`
+`pushed`), so the URL always serves what the repo holds. A queued deploy waits while the push is pending, retrying
+or failed; a deploy that was already under way when the worker restarted is still finished.
+
 **Headers:** `authorization: Bearer <token>` (role `admin` or `operator`). **202 Accepted** `{ "queued": true }`.
 
 The summary's `deploy` object (and `siteName`, e.g. `"ja-edu-sg"`):
@@ -1868,6 +1872,49 @@ Common `deploy.error` codes: `cloudflare_bad_token` (needs Workers Scripts: Edit
 
 Backfill (newest copy per website, from `apps/worker`): `pnpm sites:backfill -- --limit 10` queues them for the
 worker; add `--dry-run` to list them, `--run` to publish from this machine, `--only github|worker`, `--site ja-edu-sg`.
+With `--run` each website is pushed to GitHub first and its Worker deployed only once that push is done.
+
+### 41e. Copy progress (`progress`)
+
+Every copy summary (lists, lead copies, queue items, copy detail) has `progress`: one ordered list of steps from the
+queue to the live URL, and the step the copy is on now. Older API versions omit it.
+
+| Step | Shown as | When |
+|---|---|---|
+| `queued` | Queued | Waiting in the copy queue |
+| `copying` | Copying website | The worker opens the site and downloads its pages and assets |
+| `reading_source` | Viewing source code | The source is read for the brand, colours and contact details |
+| `building` | Building website | The website files are built and saved to R2 |
+| `updating_git` | Updating Git | Push to the website's own GitHub repo |
+| `deploying_url` | Deploying URL | Deploy to the website's own Cloudflare Worker (after the push) |
+| `live` | Live | The Worker URL is up |
+
+Each step's `state` is `not_started` (not reached, or never queued for this copy), `waiting`, `active`, `retrying`,
+`failed` or `done`. `updating_git` is listed when GitHub is configured or the copy was pushed before;
+`deploying_url` and `live` when Cloudflare is configured or the copy was deployed before. A failed copy keeps the
+step it failed in.
+
+```json
+{
+  "step": "updating_git",
+  "state": "retrying",
+  "error": "github_rate_limited: GitHub rate limit reached until 2026-10-13T12:37:32.000Z",
+  "since": null,
+  "nextAt": "2026-10-13T12:37:32.000Z",
+  "steps": [
+    { "step": "queued", "state": "done" },
+    { "step": "copying", "state": "done" },
+    { "step": "reading_source", "state": "done" },
+    { "step": "building", "state": "done" },
+    { "step": "updating_git", "state": "retrying" },
+    { "step": "deploying_url", "state": "waiting" },
+    { "step": "live", "state": "not_started" }
+  ]
+}
+```
+
+`step` is the first step that is not `done` (the last step once all are); `since` is when the current step started
+(or when the last one finished); `nextAt` is the next try of a waiting or retrying push or deploy.
 
 ### 41d. GET `/api/v1/site-automation/deploy-check`
 

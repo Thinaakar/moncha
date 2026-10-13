@@ -254,6 +254,9 @@ export type SiteSnapshotRecord = {
   workerUrl: string | null;
   workerError: string | null;
   workerDeployedAt: Date | null;
+  /** The copy job's current step while it runs (and the step it failed in); null before it starts. */
+  stage: SiteCopyStage | null;
+  stageAt: Date | null;
   createdAt: Date;
   finishedAt: Date | null;
 };
@@ -269,6 +272,9 @@ export type SiteGithubStatus = 'pending' | 'pushing' | 'pushed' | 'failed';
 
 /** Cloudflare Worker deploy of a finished copy; same lifecycle as SiteGithubStatus. */
 export type SiteWorkerStatus = 'pending' | 'deploying' | 'deployed' | 'failed';
+
+/** Steps of the copy job itself: open the site and download it, read its source for the brand, write the files. */
+export type SiteCopyStage = 'copying' | 'reading_source' | 'building';
 
 export type SiteSnapshotListItem = SiteSnapshotRecord & {
   company: { id: string; name: string; domain: string | null };
@@ -328,6 +334,8 @@ export type SiteSnapshotPatch = Partial<
     | 'workerUrl'
     | 'workerError'
     | 'workerDeployedAt'
+    | 'stage'
+    | 'stageAt'
   >
 > & { githubLockedAt?: Date | null; workerLockedAt?: Date | null };
 
@@ -376,8 +384,12 @@ export interface SiteSnapshotRepo {
   claimGithubPush(now: Date, staleBefore: Date): Promise<SiteSnapshotListItem | null>;
   /** Queues a push of a done copy now (first push, or again after `failed` or `pushed`). */
   requestGithubPush(tenantId: string, id: string, now: Date): Promise<SiteGithubRequestResult>;
-  /** Same as claimGithubPush for the Cloudflare Worker deploy (`pending` or stale `deploying` becomes `deploying`). */
-  claimWorkerDeploy(now: Date, staleBefore: Date): Promise<SiteSnapshotListItem | null>;
+  /**
+   * Same as claimGithubPush for the Cloudflare Worker deploy (`pending` or stale `deploying` becomes `deploying`).
+   * With `afterGithub`, a pending deploy is claimed only once the copy's GitHub push is done, so the Worker serves what
+   * the repo holds; a stale `deploying` row is still resumed.
+   */
+  claimWorkerDeploy(now: Date, staleBefore: Date, options?: { afterGithub?: boolean }): Promise<SiteSnapshotListItem | null>;
   /** Queues a Worker deploy of a done copy now (first deploy, or again after `failed` or `deployed`). */
   requestWorkerDeploy(tenantId: string, id: string, now: Date): Promise<SiteWorkerRequestResult>;
 }

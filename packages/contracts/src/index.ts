@@ -451,6 +451,34 @@ export type SiteSnapshotSummary = {
    * shared Pages link when the worker has SITE_PUBLIC_BASE_URL; null otherwise. Older API versions omit it.
    */
   publicUrl?: string | null;
+  /** Step-by-step progress from the queue to the live URL. Older API versions omit it. */
+  progress?: SiteCopyProgress;
+};
+
+/**
+ * Ordered steps of a website copy: queued, copying the website, reading its source code, building the files,
+ * updating its GitHub repo, deploying its Worker URL, live. The Worker deploy starts only after the GitHub push.
+ */
+export type SiteCopyStep = 'queued' | 'copying' | 'reading_source' | 'building' | 'updating_git' | 'deploying_url' | 'live';
+
+/**
+ * not_started = not reached yet (or never queued), waiting = queued for its turn, active = running now,
+ * retrying = waiting to try again after an error, failed = stopped until someone retries, done = finished.
+ */
+export type SiteCopyStepState = 'not_started' | 'waiting' | 'active' | 'retrying' | 'failed' | 'done';
+
+export type SiteCopyProgress = {
+  /** First step that is not done; the last step once everything is done. */
+  step: SiteCopyStep;
+  state: SiteCopyStepState;
+  /** Error behind a retrying or failed step. */
+  error: string | null;
+  /** When the current step started, or when the last step finished. */
+  since: string | null;
+  /** Next try of a waiting or retrying GitHub push or Worker deploy. */
+  nextAt: string | null;
+  /** GitHub and Worker steps are listed only when configured or already used by this copy. */
+  steps: Array<{ step: SiteCopyStep; state: SiteCopyStepState }>;
 };
 
 /** Same lifecycle as SiteGithubStatus: pending, deploying, deployed, or failed after repeated errors. */

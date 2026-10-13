@@ -15,6 +15,7 @@ import { SearchInput } from '@/components/app/widgets';
 import { CopyError } from '@/components/sites/copy-error';
 import { OriginBadge } from '@/components/sites/automation';
 import { GithubStatusBadge } from '@/components/sites/github-push';
+import { CopyProgressBadge } from '@/components/sites/copy-progress';
 import { LiveWebsiteCell } from '@/components/sites/live-site';
 import { TabBar } from '@/components/sites/tabs';
 import { siteFileUrl, useSiteAutomation, useSiteQueue, useSiteSnapshots } from '@/lib/queries';
@@ -230,7 +231,11 @@ function CopiesPanel() {
                         <OriginBadge origin={s.origin} />
                       </TableCell>
                       <TableCell>
-                        <JobStatusBadge status={s.status} />
+                        {s.progress && s.failureReason !== 'cancelled' ? (
+                          <CopyProgressBadge progress={s.progress} />
+                        ) : (
+                          <JobStatusBadge status={s.status} />
+                        )}
                       </TableCell>
                       <TableCell className="w-72 max-w-72 whitespace-normal">
                         {s.failureReason && s.status !== 'done' ? (

@@ -61,9 +61,18 @@ function publishPollMs(step: { status: string; nextAt: string | null } | null | 
   return wait < 2 * 60_000 ? 5_000 : 60_000;
 }
 
-/** Poll a finished copy while its GitHub push or Worker deploy is running or about to retry. */
+/**
+ * Poll a finished copy while its GitHub push or Worker deploy is running or about to retry.
+ * A pending deploy that waits for the GitHub push follows the push's timing instead of its own.
+ */
 function githubPollMs(snapshot: SiteSnapshotSummary | undefined): number | null {
-  const waits = [publishPollMs(snapshot?.github, 'pushing'), publishPollMs(snapshot?.deploy, 'deploying')].filter(
+  const deployWaitsForGit =
+    snapshot?.deploy?.status === 'pending' &&
+    Boolean(snapshot.progress?.steps.some((s) => s.step === 'updating_git' && s.state !== 'done'));
+  const waits = [
+    publishPollMs(snapshot?.github, 'pushing'),
+    deployWaitsForGit ? null : publishPollMs(snapshot?.deploy, 'deploying'),
+  ].filter(
     (ms): ms is number => ms !== null,
   );
   return waits.length ? Math.min(...waits) : null;

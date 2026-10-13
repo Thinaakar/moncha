@@ -94,11 +94,14 @@ export function DeployButton({
   label,
   size = 'sm',
   variant = 'outline',
+  afterGit = false,
 }: {
   snapshotId: string;
   label: string;
   size?: 'default' | 'sm';
   variant?: 'outline' | 'default';
+  /** The copy's GitHub push is not done yet, so the deploy waits for it. */
+  afterGit?: boolean;
 }) {
   const canEdit = useCanEdit();
   const deploy = useDeploySiteSnapshot();
@@ -106,7 +109,11 @@ export function DeployButton({
   async function run() {
     try {
       await deploy.mutateAsync(snapshotId);
-      toast.success('Queued for Cloudflare', { description: 'The worker deploys it within a few seconds.' });
+      toast.success('Queued for Cloudflare', {
+        description: afterGit
+          ? 'The worker deploys it right after its GitHub repository is updated.'
+          : 'The worker deploys it within a few seconds.',
+      });
     } catch (e) {
       toast.error('Could not queue the deploy', { description: errorMessage(e) });
     }
@@ -191,6 +198,7 @@ export function LiveWebsiteCard({ snapshot }: { snapshot: SiteSnapshotDetail }) 
   const repo = github?.repo ?? snapshot.githubRepo ?? null;
   const repoUrl = github?.status === 'pushed' ? (github.folderUrl ?? github.commitUrl) : null;
   const deployFailed = deploy && (deploy.status === 'failed' || (deploy.status === 'pending' && deploy.error));
+  const gitFirst = Boolean(snapshot.progress?.steps.some((s) => s.step === 'updating_git' && s.state !== 'done'));
 
   return (
     <Card className={cn('overflow-hidden', live && 'border-success/30 bg-gradient-to-br from-success/[0.04] via-transparent to-transparent')}>
@@ -223,7 +231,9 @@ export function LiveWebsiteCard({ snapshot }: { snapshot: SiteSnapshotDetail }) 
             deploy?.status === 'deploying'
               ? 'Deploying to Cloudflare…'
               : deploy?.status === 'pending' && !deploy.error
-                ? 'Waiting for the worker to deploy…'
+                ? gitFirst
+                  ? 'Deploys right after the GitHub repository is updated…'
+                  : 'Waiting for the worker to deploy…'
                 : deployFailed
                   ? 'Not live yet: the last deploy failed'
                   : snapshot.deployConfigured
@@ -298,6 +308,7 @@ export function LiveWebsiteCard({ snapshot }: { snapshot: SiteSnapshotDetail }) 
               snapshotId={snapshot.id}
               label={!deploy ? 'Deploy website' : deploy.status === 'deployed' ? 'Redeploy' : 'Retry deploy'}
               variant={!deploy || deploy.status === 'failed' ? 'default' : 'outline'}
+              afterGit={gitFirst}
             />
           )}
           {snapshot.githubConfigured && github?.status !== 'pushing' && !(github?.status === 'pending' && !github.error) && (

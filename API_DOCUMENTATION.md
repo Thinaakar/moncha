@@ -937,7 +937,8 @@ stay for compatibility). Nothing is created; the token is never returned. See `a
 #### 26c. `POST /api/v1/site-snapshots/:id/deploy`
 With `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` (or `R2_ACCOUNT_ID`) set, the worker deploys every finished
 copy by itself as the static-assets Worker `{siteName}` at `https://{siteName}.{subdomain}.workers.dev`. Same retries
-as GitHub. This route queues a deploy now (an older copy, a retry or a redeploy).
+as GitHub. This route queues a deploy now (an older copy, a retry or a redeploy). With GitHub configured, the deploy
+starts only after the copy's GitHub push is done.
 * **`202 Accepted`** `{ "queued": true }`.
 * **`deploy` on the summary**: `{ status: pending|deploying|deployed|failed, attempts, maxAttempts, nextAt, name, url,
   error, deployedAt }`. The detail response also has `deployConfigured`.
@@ -950,6 +951,12 @@ checkedAt }`. See `apps/worker/API.md` §41d.
 #### 26b. Public copy links
 Copy summaries carry `publicUrl`: the Worker URL once deployed, else the older shared link
 (`{SITE_PUBLIC_BASE_URL}/sites/{domain}/{copyId}/index.html`) when configured, else `null`. See `apps/worker/API.md` §41b.
+
+#### 26e. Copy progress
+Copy summaries carry `progress`: `{ step, state, error, since, nextAt, steps: [{ step, state }] }` with steps
+`queued`, `copying` (Copying website), `reading_source` (Viewing source code), `building` (Building website),
+`updating_git` (Updating Git), `deploying_url` (Deploying URL) and `live`, in that order. States: `not_started`,
+`waiting`, `active`, `retrying`, `failed`, `done`. See `apps/worker/API.md` §41e.
 
 ---
 

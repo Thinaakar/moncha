@@ -33,6 +33,7 @@ import {
   type SiteSnapshotQueued,
   type SiteSnapshotSource,
   type SiteSnapshotSummary,
+  type SiteCopyProgress,
 } from '@moncha/contracts';
 import {
   isTransientDbError,
@@ -94,6 +95,7 @@ import {
   requestSiteWorkerDeploy,
   SITE_GITHUB_MAX_ATTEMPTS,
   SITE_WORKER_MAX_ATTEMPTS,
+  siteCopyProgress,
   SiteGithubRequestError,
   SiteWorkerRequestError,
   updateSiteAutomationSettings,
@@ -534,7 +536,16 @@ function siteSummary(snapshot: SiteSnapshotRecord | SiteSnapshotListItem, previe
         }
       : null,
     publicUrl: publicUrlFor(snapshot),
+    progress: progressFor(snapshot),
   };
+}
+
+function progressFor(snapshot: SiteSnapshotRecord): SiteCopyProgress {
+  const progress = siteCopyProgress(snapshot, {
+    githubEnabled: Boolean(siteGithubPublisher()),
+    workerEnabled: Boolean(siteWorkerDeployer()),
+  });
+  return { ...progress, since: progress.since?.toISOString() ?? null, nextAt: progress.nextAt?.toISOString() ?? null };
 }
 
 async function getSnapshotOr404(tenantId: string, id: string) {

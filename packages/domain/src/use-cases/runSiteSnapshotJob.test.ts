@@ -249,6 +249,28 @@ describe('runSiteSnapshotJob', () => {
     expect(s.usage.calls).toBe(1);
   });
 
+  it('records each copy step as it runs and clears it when done', async () => {
+    const s = setup();
+    await runSiteSnapshotJob(s.deps, { job: s.job });
+    expect(s.snapPatches.filter((p) => 'stage' in p).map((p) => p.stage)).toEqual(['copying', 'reading_source', 'building', null]);
+    expect(s.snapshot.stageAt).toBeInstanceOf(Date);
+  });
+
+  it('keeps the step a copy failed in', async () => {
+    const s = setup(
+      {
+        store: {
+          put: async () => Promise.reject(new Error('R2 503')),
+          get: async () => null,
+          getBytes: async () => null,
+        },
+      },
+      { attempts: 3 },
+    );
+    expect(await runSiteSnapshotJob(s.deps, { job: s.job })).toMatchObject({ status: 'failed' });
+    expect(s.snapshot).toMatchObject({ status: 'failed', stage: 'building' });
+  });
+
   it('falls back to an evidence brand when the LLM budget is used up', async () => {
     const s = setup({
       brandExtractor: {

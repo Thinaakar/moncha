@@ -14,6 +14,8 @@ import { siteAgentConfig, siteGithubPublisher, siteWorkerDeployer } from './site
  *   pnpm --filter @moncha/worker sites:backfill -- --limit 3            queue for the running worker
  *   pnpm --filter @moncha/worker sites:backfill -- --limit 3 --run      publish now from this machine
  *   options: --dry-run, --only github|worker, --site ja-edu-sg (repeatable)
+ *
+ * With GitHub configured, a Worker is deployed only after the copy's push to its repo is done.
  */
 
 function args() {
@@ -114,18 +116,10 @@ async function main() {
 
   if (!store) throw new Error('R2 is not configured (R2_*), so copy files cannot be read');
   const snapshots = new PrismaSiteSnapshotRepository(prisma);
+  const gitFirst = Boolean(siteGithubPublisher());
   let githubPausedUntil: Date | null = null;
   for (const p of picked) {
     // Claimed rows (deploying/pushing) are skipped by every other worker until they go stale.
-    if (p.worker && deployer) {
-      await prisma.siteSnapshot.update({
-        where: { id: p.row.id },
-        data: { workerStatus: 'deploying', workerAttempts: 1, workerLockedAt: new Date(), workerError: null },
-      });
-      const claimed = (await snapshots.get(p.row.tenantId, p.row.id))!;
-      const outcome = await deploySiteSnapshotToWorker({ snapshots, store, deployer, logger }, claimed);
-      console.log(JSON.stringify({ site: p.name, step: 'worker', ...outcome }));
-    }
     if (p.github && publisher && !githubPausedUntil) {
       await prisma.siteSnapshot.update({
         where: { id: p.row.id },
@@ -141,6 +135,20 @@ async function main() {
         githubPausedUntil = outcome.retryAt;
         console.log(`GitHub is rate limited until ${outcome.retryAt.toISOString()}; skipping the remaining GitHub pushes.`);
       }
+    }
+    if (p.worker && deployer) {
+      const current = (await snapshots.get(p.row.tenantId, p.row.id))!;
+      if (gitFirst && current.githubStatus !== 'pushed') {
+        console.log(JSON.stringify({ site: p.name, step: 'worker', status: 'skipped', reason: 'waiting_for_github_push' }));
+        continue;
+      }
+      await prisma.siteSnapshot.update({
+        where: { id: p.row.id },
+        data: { workerStatus: 'deploying', workerAttempts: 1, workerLockedAt: new Date(), workerError: null },
+      });
+      const claimed = (await snapshots.get(p.row.tenantId, p.row.id))!;
+      const outcome = await deploySiteSnapshotToWorker({ snapshots, store, deployer, logger }, claimed);
+      console.log(JSON.stringify({ site: p.name, step: 'worker', ...outcome }));
     }
   }
 }

@@ -307,11 +307,16 @@ async function githubTick() {
   await activeGithubPush;
 }
 
-/** Deploys finished copies as their own Cloudflare Workers, one at a time; deploy problems never change a copy's status. */
+/**
+ * Deploys finished copies as their own Cloudflare Workers, one at a time; deploy problems never change a copy's status.
+ * With GitHub configured, a copy is deployed only after its push to its repo is done.
+ */
 async function workerDeployTick() {
   if (!workerDeployer || !siteAgent.store || activeWorkerDeploy || crawlAbort.signal.aborted) return;
   const now = new Date();
-  const snapshot = await withDbRetry(() => siteSnapshots.claimWorkerDeploy(now, new Date(now.getTime() - SITE_WORKER_STALE_MS)));
+  const snapshot = await withDbRetry(() =>
+    siteSnapshots.claimWorkerDeploy(now, new Date(now.getTime() - SITE_WORKER_STALE_MS), { afterGithub: Boolean(githubPublisher) }),
+  );
   if (!snapshot) return;
   activeWorkerDeploy = deploySiteSnapshotToWorker(
     { snapshots: siteSnapshots, store: siteAgent.store, deployer: workerDeployer, logger },

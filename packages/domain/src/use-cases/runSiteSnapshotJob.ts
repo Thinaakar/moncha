@@ -141,7 +141,7 @@ export async function runSiteSnapshotJob(
     return { status: 'skipped', snapshotId };
   }
 
-  await deps.snapshots.update(tenantId, snapshotId, { status: 'running', attempts: job.attempts });
+  await deps.snapshots.update(tenantId, snapshotId, { status: 'running', attempts: job.attempts, stage: 'copying', stageAt: now() });
   if (job.status === 'pending') {
     await deps.jobs.update(tenantId, job.id, { status: 'running', startedAt: now(), lockedAt: now() });
   }
@@ -167,6 +167,7 @@ export async function runSiteSnapshotJob(
       country: lead?.company.country ?? null,
     };
 
+    await deps.snapshots.update(tenantId, snapshotId, { stage: 'reading_source', stageAt: now() });
     let brand: SiteBrand;
     let llmModel: string | null = null;
     let usage = { promptTokens: 0, completionTokens: 0 };
@@ -202,6 +203,7 @@ export async function runSiteSnapshotJob(
     }
     if (signal.aborted) throw new SiteCaptureError('timeout');
 
+    await deps.snapshots.update(tenantId, snapshotId, { stage: 'building', stageAt: now() });
     const manifest: SiteManifest = { ...capture.manifest, snapshotId };
 
     const htmlType = `text/html; charset=${capture.source.charset}`;
@@ -240,6 +242,8 @@ export async function runSiteSnapshotJob(
       warnings: uniqueWarnings,
       failureReason: null,
       failureDetail: null,
+      stage: null,
+      stageAt: now(),
       finishedAt: now(),
       ...(deps.githubEnabled
         ? { githubStatus: 'pending' as const, githubAttempts: 0, githubNextAt: now(), githubError: null }
