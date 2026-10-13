@@ -19,9 +19,17 @@ import {
   scheduleRunsQuerySchema,
   siteAutomationCrawlsQuerySchema,
   siteAutomationUpdateSchema,
+  siteCostSummaryQuerySchema,
+  siteCostWebsitesQuerySchema,
   siteSnapshotListQuerySchema,
   sourceImportSchema,
   updateProfileSchema,
+  type SiteCostModelPrice,
+  type SiteCostPricing,
+  type SiteCostSummary,
+  type SiteCostWebsite,
+  type SiteCostWebsiteDetail,
+  type SiteCostWebsitePage,
   type SiteAutomationCrawl,
   type SiteAutomationState,
   type SiteDeployCheckResult,
@@ -48,6 +56,7 @@ import {
   PrismaReviewTaskRepository,
   PrismaSessionRepository,
   PrismaSiteAutomationRepository,
+  PrismaSiteCostRepository,
   PrismaSiteSnapshotRepository,
   PrismaWebsiteRepository,
   withDbRetry,
@@ -106,11 +115,19 @@ import {
   siteStoragePrefix,
   SiteSnapshotRequestError,
   verifyPreviewToken,
+  getSiteCostSummary,
+  getSiteCostWebsite,
+  listSiteCostWebsites,
+  R2_STORAGE_USD_PER_GB_MONTH,
+  storageUsdPerMonth,
   type CountryDiscoveryJobPayload,
+  type ModelPriceRow,
+  type SiteCostPricing as DomainSiteCostPricing,
+  type SiteCostWebsiteRow,
   type SiteSnapshotListItem,
   type SiteSnapshotRecord,
 } from '@moncha/domain';
-import { createResendMailerFromEnv } from '@moncha/integrations';
+import { createPriceBookFromEnv, createResendMailerFromEnv } from '@moncha/integrations';
 import { CsvImportError, SOURCE_IMPORT_JOB_TYPES, sourceImportView, startCsvImport, type CsvSqlClient } from './csv-import';
 import { siteAgentConfig, siteAutoCopyEnabled, siteGithubPublisher, siteWorkerDeployer } from './site-agent';
 import { workerHealth } from './worker-health';
@@ -499,6 +516,7 @@ function siteSummary(snapshot: SiteSnapshotRecord | SiteSnapshotListItem, previe
     llmModel: snapshot.llmModel,
     llmPromptTokens: snapshot.llmPromptTokens,
     llmCompletionTokens: snapshot.llmCompletionTokens,
+    llmCostUsd: snapshot.llmCostUsd,
     warnings: snapshot.warnings,
     failureReason: snapshot.failureReason,
     failureDetail: snapshot.failureDetail,
@@ -633,6 +651,104 @@ route('POST', '/api/v1/site-snapshots/:id/cancel', async ({ req, tenantId, param
     }
     throw error;
   }
+});
+
+// Costs: AI tokens and storage behind each website copy. Older rows without OpenRouter's charge are
+// priced from OpenRouter's model list (cached), so the numbers are marked estimated.
+const siteCosts = { costs: new PrismaSiteCostRepository(prisma), prices: createPriceBookFromEnv() };
+
+const priceView = (row: ModelPriceRow): SiteCostModelPrice => ({
+  model: row.model,
+  inputPerMillionUsd: row.input * 1_000_000,
+  outputPerMillionUsd: row.output * 1_000_000,
+});
+
+function pricingView(pricing: DomainSiteCostPricing): SiteCostPricing {
+  return {
+    source: pricing.list.source,
+    fetchedAt: pricing.list.fetchedAt?.toISOString() ?? null,
+    models: pricing.rows.map(priceView).sort((a, b) => a.model.localeCompare(b.model)),
+    unpricedModels: [...pricing.unpriced].sort(),
+    r2StorageUsdPerGbMonth: R2_STORAGE_USD_PER_GB_MONTH,
+  };
+}
+
+function costWebsiteView(row: SiteCostWebsiteRow): SiteCostWebsite {
+  return {
+    ...row,
+    aiCostUsd: row.copyCostUsd + row.auditCostUsd,
+    storageUsdPerMonth: storageUsdPerMonth(row.storageBytes),
+    firstCopyAt: row.firstCopyAt.toISOString(),
+    lastCopyAt: row.lastCopyAt.toISOString(),
+  };
+}
+
+route('GET', '/api/v1/costs/summary', async ({ tenantId, url }) => {
+  const q = siteCostSummaryQuerySchema.parse(query(url, 'days'));
+  const result = await getSiteCostSummary(siteCosts, { tenantId, days: q.days });
+  const t = result.totals;
+  const aiCostUsd = t.copyCostUsd + t.auditCostUsd;
+  const tokens = t.copyTokens.input + t.copyTokens.output + t.auditTokens.input + t.auditTokens.output;
+  const prices = new Map(result.pricing.rows.map((row) => [row.model, row]));
+  const json: SiteCostSummary = {
+    days: result.days,
+    since: result.since?.toISOString() ?? null,
+    websites: t.websites,
+    copies: t.copies,
+    aiAudits: t.aiAudits,
+    copyTokens: t.copyTokens,
+    auditTokens: t.auditTokens,
+    copyCostUsd: t.copyCostUsd,
+    auditCostUsd: t.auditCostUsd,
+    aiCostUsd,
+    exactCostUsd: t.exactCostUsd,
+    estimatedCostUsd: t.estimatedCostUsd,
+    averagePerWebsiteUsd: t.websites ? aiCostUsd / t.websites : null,
+    averageTokensPerWebsite: t.websites ? Math.round(tokens / t.websites) : null,
+    storageBytes: t.storageBytes,
+    storageUsdPerMonth: storageUsdPerMonth(t.storageBytes),
+    byModel: result.byModel.map((row) => {
+      const price = row.model ? prices.get(row.model) : undefined;
+      return { ...row, price: price ? priceView(price) : null };
+    }),
+    byDay: result.byDay,
+    pricing: pricingView(result.pricing),
+  };
+  return { json };
+});
+
+route('GET', '/api/v1/costs/websites', async ({ tenantId, url }) => {
+  const q = siteCostWebsitesQuerySchema.parse(query(url, 'days', 'page', 'pageSize', 'search', 'sort'));
+  const result = await listSiteCostWebsites(siteCosts, { tenantId, ...q });
+  const json: SiteCostWebsitePage = {
+    items: result.items.map(costWebsiteView),
+    total: result.total,
+    page: result.page,
+    pageSize: result.pageSize,
+    totalPages: result.totalPages,
+    pricing: pricingView(result.pricing),
+  };
+  return { json };
+});
+
+route('GET', '/api/v1/costs/websites/:leadId', async ({ tenantId, params }) => {
+  const result = await getSiteCostWebsite(siteCosts, { tenantId, leadId: params.leadId! });
+  if (!result) throw new HttpError(404, 'not_found', 'This lead has no website copies');
+  const json: SiteCostWebsiteDetail = {
+    ...costWebsiteView(result.row),
+    copyRuns: result.copies.map(({ id, createdAt, ...run }) => ({
+      ...run,
+      snapshotId: id,
+      createdAt: createdAt.toISOString(),
+    })),
+    auditRuns: result.audits.map(({ id, auditedAt, ...run }) => ({
+      ...run,
+      auditId: id,
+      auditedAt: auditedAt.toISOString(),
+    })),
+    pricing: pricingView(result.pricing),
+  };
+  return { json };
 });
 
 // Copy automation: after each country crawl, its new qualified leads are queued for website copies.

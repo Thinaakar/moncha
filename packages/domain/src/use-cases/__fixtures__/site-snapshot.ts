@@ -24,6 +24,7 @@ export function siteSnapshotFixture(over: Partial<SiteSnapshotListItem> = {}): S
     llmModel: null,
     llmPromptTokens: null,
     llmCompletionTokens: null,
+    llmCostUsd: null,
     warnings: [],
     failureReason: null,
     failureDetail: null,

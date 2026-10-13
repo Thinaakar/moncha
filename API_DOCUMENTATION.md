@@ -889,6 +889,19 @@ waiting copies, finish for running ones), `retrying`, `attempts`, `maxAttempts`,
 * **`200 OK`** `{ "cancelled": true }`: the copy and its job become `failed` with reason `cancelled`.
 * **`401`** · **`403`** · **`404`** unknown copy · **`409 not_pending`** already running or finished.
 
+#### 22b. Costs
+AI tokens and USD each website (a lead with copies) cost to create. AI cost is one-time: the brand extraction of every
+copy attempt plus the lead's AI website audits. Each call stores OpenRouter's reported charge (`llmCostUsd`); older
+calls are estimated as tokens × the model's listed OpenRouter price (`estimated: true`). `LLM_PRICE_OVERRIDES` adds or
+replaces prices (`model=input/output` USD per million tokens). Storage is R2 bytes × $0.015 per GB-month; GitHub and
+Cloudflare Workers are $0. `days` (1–365, optional) limits to websites copied in the last N UTC days.
+
+* **`GET /api/v1/costs/summary?days=30`** → totals (`websites`, `copies`, `aiAudits`, tokens, `aiCostUsd`,
+  `exactCostUsd`, `estimatedCostUsd`, `averagePerWebsiteUsd`, `storageUsdPerMonth`), `byModel[]`, `byDay[]`, `pricing`.
+* **`GET /api/v1/costs/websites?days&page&pageSize&search&sort`** → `{ items, total, page, pageSize, totalPages,
+  pricing }`; `sort` is `cost` (default), `tokens`, `newest` or `size`.
+* **`GET /api/v1/costs/websites/:leadId`** → one website plus `copyRuns[]` and `auditRuns[]`. `404` without copies.
+
 #### 23–25. Copy automation
 When a country crawl (scheduled or manual) finishes, the worker waits for the crawl's website audits (up to 3 hours),
 then queues copies for every qualified lead that never had one, oldest first, crawls oldest first. There is no daily

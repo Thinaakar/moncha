@@ -7,6 +7,7 @@ import {
   type JobRunRecord,
   type LeadRepo,
   type LlmBudget,
+  type LlmTokenUsage,
   type LlmUsageRepo,
   type Logger,
   type SiteBrand,
@@ -14,6 +15,8 @@ import {
   type SiteCapturer,
   type SiteManifest,
   type SiteSnapshotJobPayload,
+  type SiteSnapshotPatch,
+  type SiteSnapshotRecord,
   type SiteSnapshotRepo,
   type SiteStore,
 } from '../ports';
@@ -94,6 +97,26 @@ function isPermanent(code: string): boolean {
   return PERMANENT_FAILURES.has(code) || /^http_4\d\d$/.test(code);
 }
 
+/**
+ * This attempt's LLM spend added to what earlier attempts of the same copy already spent. The cost stays
+ * null (estimated later from tokens) as soon as one attempt with tokens has no reported cost.
+ */
+export function llmSpend(
+  previous: Pick<SiteSnapshotRecord, 'llmModel' | 'llmPromptTokens' | 'llmCompletionTokens' | 'llmCostUsd'>,
+  model: string | null,
+  usage: LlmTokenUsage,
+): SiteSnapshotPatch {
+  if (usage.promptTokens + usage.completionTokens === 0) return {};
+  const prevTokens = (previous.llmPromptTokens ?? 0) + (previous.llmCompletionTokens ?? 0);
+  const prevCostKnown = prevTokens === 0 || previous.llmCostUsd !== null;
+  return {
+    llmModel: model ?? previous.llmModel,
+    llmPromptTokens: (previous.llmPromptTokens ?? 0) + usage.promptTokens,
+    llmCompletionTokens: (previous.llmCompletionTokens ?? 0) + usage.completionTokens,
+    llmCostUsd: usage.costUsd !== undefined && prevCostKnown ? (previous.llmCostUsd ?? 0) + usage.costUsd : null,
+  };
+}
+
 function llmBudget(deps: SiteSnapshotJobDeps, tenantId: string, now: () => Date): LlmBudget | undefined {
   if (!deps.llmUsage) return undefined;
   const usage = deps.llmUsage;
@@ -170,7 +193,7 @@ export async function runSiteSnapshotJob(
     await deps.snapshots.update(tenantId, snapshotId, { stage: 'reading_source', stageAt: now() });
     let brand: SiteBrand;
     let llmModel: string | null = null;
-    let usage = { promptTokens: 0, completionTokens: 0 };
+    let usage: LlmTokenUsage = { promptTokens: 0, completionTokens: 0 };
     if (deps.brandExtractor) {
       try {
         const extracted = await deps.brandExtractor.extract({
@@ -188,7 +211,10 @@ export async function runSiteSnapshotJob(
         warnings.push(...extracted.warnings);
       } catch (error) {
         const reason = error instanceof BrandExtractionError ? error.reason : 'llm_failed';
-        if (error instanceof BrandExtractionError) usage = error.usage;
+        if (error instanceof BrandExtractionError) {
+          usage = error.usage;
+          llmModel = error.model ?? null;
+        }
         deps.logger.error('site_brand_llm_skipped', {
           snapshotId,
           reason,
@@ -201,9 +227,13 @@ export async function runSiteSnapshotJob(
       warnings.push('llm_skipped:not_configured');
       brand = brandFromEvidence(capture.evidence, company);
     }
+    // Saved before the upload so tokens billed by an attempt that later fails still count.
+    await deps.snapshots.update(tenantId, snapshotId, {
+      ...llmSpend(snapshot, llmModel, usage),
+      stage: 'building',
+      stageAt: now(),
+    });
     if (signal.aborted) throw new SiteCaptureError('timeout');
-
-    await deps.snapshots.update(tenantId, snapshotId, { stage: 'building', stageAt: now() });
     const manifest: SiteManifest = { ...capture.manifest, snapshotId };
 
     const htmlType = `text/html; charset=${capture.source.charset}`;
@@ -236,9 +266,6 @@ export async function runSiteSnapshotJob(
       skippedAssetCount: capture.manifest.skipped.length,
       totalBytes,
       brand,
-      llmModel,
-      llmPromptTokens: llmModel ? usage.promptTokens : null,
-      llmCompletionTokens: llmModel ? usage.completionTokens : null,
       warnings: uniqueWarnings,
       failureReason: null,
       failureDetail: null,

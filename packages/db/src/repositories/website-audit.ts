@@ -29,6 +29,7 @@ function mapAudit(
     llmResult: unknown;
     llmPromptTokens: number | null;
     llmCompletionTokens: number | null;
+    llmCostUsd: number | null;
     auditedAt: Date;
   },
   websiteStatus: WebsiteAuditResult['websiteStatus'],
@@ -58,6 +59,7 @@ function mapAudit(
     llmResult: row.llmResult ?? undefined,
     llmPromptTokens: row.llmPromptTokens ?? undefined,
     llmCompletionTokens: row.llmCompletionTokens ?? undefined,
+    llmCostUsd: row.llmCostUsd ?? undefined,
     auditedAt: row.auditedAt,
     evidence,
     channels,
@@ -92,6 +94,7 @@ export class PrismaWebsiteAuditRepository implements WebsiteAuditRepo {
           llmResult: result.llmResult as Prisma.InputJsonValue | undefined,
           llmPromptTokens: result.llmPromptTokens,
           llmCompletionTokens: result.llmCompletionTokens,
+          llmCostUsd: result.llmCostUsd,
           auditedAt: result.auditedAt,
           evidenceItems: {
             create: result.evidence.map((item) => ({

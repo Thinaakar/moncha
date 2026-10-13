@@ -188,6 +188,7 @@ export class MonchaWebsiteAuditor implements WebsiteAuditor {
         llmResult: completion.data,
         llmPromptTokens: completion.usage.promptTokens,
         llmCompletionTokens: completion.usage.completionTokens,
+        llmCostUsd: completion.usage.costUsd,
         evidence: [
           ...base.evidence,
           {

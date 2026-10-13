@@ -22,6 +22,8 @@ export {
 } from './factory';
 export { OpenRouterLlmProvider, createOpenRouterFromEnv } from './openrouter';
 export type { MultimodalJsonClient, CompleteJsonWithImagesInput, CompleteJsonResult, JsonImageInput } from './openrouter';
+export { OpenRouterPriceBook, createPriceBookFromEnv, parsePriceOverrides } from './llm-pricing';
+export type { OpenRouterPriceBookConfig } from './llm-pricing';
 export { GeminiBrandExtractor, groundBrand, DEFAULT_SITE_AGENT_MODEL } from './site-brand';
 export type { GeminiBrandExtractorOptions } from './site-brand';
 export { ResendMailer, createResendMailerFromEnv, passwordResetEmailContent } from './resend';

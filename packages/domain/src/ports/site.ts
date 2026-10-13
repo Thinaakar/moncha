@@ -1,4 +1,4 @@
-import type { JobRunRecord, JobStatus } from './index';
+import type { JobRunRecord, JobStatus, LlmTokenUsage } from './index';
 
 export type SiteAssetKind = 'image' | 'css' | 'js' | 'font' | 'icon' | 'media' | 'manifest' | 'other';
 
@@ -179,7 +179,9 @@ export class BrandExtractionError extends Error {
   constructor(
     readonly reason: 'budget_exhausted' | 'llm_failed' | 'invalid_output',
     message?: string,
-    readonly usage: { promptTokens: number; completionTokens: number } = { promptTokens: 0, completionTokens: 0 },
+    /** Tokens already spent before the failure; they are still billed. */
+    readonly usage: LlmTokenUsage = { promptTokens: 0, completionTokens: 0 },
+    readonly model?: string,
   ) {
     super(message ?? reason);
     this.name = 'BrandExtractionError';
@@ -189,7 +191,7 @@ export class BrandExtractionError extends Error {
 export type BrandExtractionResult = {
   brand: SiteBrand;
   model: string;
-  usage: { promptTokens: number; completionTokens: number };
+  usage: LlmTokenUsage;
   warnings: string[];
 };
 
@@ -229,6 +231,11 @@ export type SiteSnapshotRecord = {
   llmModel: string | null;
   llmPromptTokens: number | null;
   llmCompletionTokens: number | null;
+  /**
+   * USD OpenRouter charged for the brand extraction across all attempts. Null when no tokens were spent or
+   * when any attempt's cost was not reported (the cost is then estimated from the tokens).
+   */
+  llmCostUsd: number | null;
   warnings: string[];
   failureReason: string | null;
   /** The error message behind failureReason, for people reading why a copy failed. */
@@ -313,6 +320,7 @@ export type SiteSnapshotPatch = Partial<
     | 'llmModel'
     | 'llmPromptTokens'
     | 'llmCompletionTokens'
+    | 'llmCostUsd'
     | 'warnings'
     | 'failureReason'
     | 'failureDetail'

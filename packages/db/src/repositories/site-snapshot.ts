@@ -43,6 +43,7 @@ function mapSnapshot(row: SiteSnapshot): SiteSnapshotRecord {
     llmModel: row.llmModel,
     llmPromptTokens: row.llmPromptTokens,
     llmCompletionTokens: row.llmCompletionTokens,
+    llmCostUsd: row.llmCostUsd,
     warnings: Array.isArray(row.warnings) ? (row.warnings as string[]) : [],
     failureReason: row.failureReason,
     failureDetail: row.failureDetail,

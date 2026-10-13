@@ -1,4 +1,14 @@
 import type {
+  CostTokens,
+  SiteCostModelPrice,
+  SiteCostPricing,
+  SiteCostSort,
+  SiteCostSummary,
+  SiteCostWebsite,
+  SiteCostWebsiteDetail,
+  SiteCostWebsitePage,
+} from '@moncha/contracts';
+import type {
   AssistantKind,
   AssistantVerdict,
   AuditMethod,
@@ -60,6 +70,16 @@ export type {
   SiteSnapshotSummary,
   SiteWorkerDeploy,
   SiteWorkerStatus,
+};
+export type {
+  CostTokens,
+  SiteCostModelPrice,
+  SiteCostPricing,
+  SiteCostSort,
+  SiteCostSummary,
+  SiteCostWebsite,
+  SiteCostWebsiteDetail,
+  SiteCostWebsitePage,
 };
 
 /** Result the worker stores on a finished `site_snapshot` job. */

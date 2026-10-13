@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { InlineAlert } from '@/components/app/states';
 import { JobStatusBadge } from '@/components/app/status';
 import { CopyButton, DetailRow, JsonView } from '@/components/app/widgets';
+import { CopyCostCard } from '@/components/costs/copy-cost-card';
 import { copyAttemptsSummary } from '@/components/sites/copy-error';
 import { failureText, warningText } from '@/components/sites/labels';
 import { OriginBadge } from '@/components/sites/automation';
@@ -156,6 +157,8 @@ export function SnapshotDetails({ snapshot }: { snapshot: SiteSnapshotDetail }) 
       </div>
 
       <div className="space-y-6">
+        {snapshot.status !== 'pending' && <CopyCostCard snapshot={snapshot} />}
+
         <Card>
           <CardHeader>
             <CardTitle>Counts</CardTitle>

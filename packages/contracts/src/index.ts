@@ -335,6 +335,20 @@ export const siteAutomationCrawlsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(50),
 });
 
+/** Costs window in days back from today (UTC); omitted = all time. */
+export const siteCostSummaryQuerySchema = z.object({
+  days: z.coerce.number().int().min(1).max(365).optional(),
+});
+
+export const siteCostSortSchema = z.enum(['cost', 'tokens', 'newest', 'size']);
+
+export const siteCostWebsitesQuerySchema = siteCostSummaryQuerySchema.extend({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(25),
+  search: z.string().trim().min(1).optional(),
+  sort: siteCostSortSchema.default('cost'),
+});
+
 /** Derived: a lead is qualified iff its queue is QUALIFIED. */
 export function isLeadQualified(queue: z.infer<typeof leadQueueSchema>): boolean {
   return queue === 'QUALIFIED';
@@ -371,6 +385,8 @@ export type SiteSnapshotListQuery = z.infer<typeof siteSnapshotListQuerySchema>;
 export type SiteCopyOrigin = z.infer<typeof siteCopyOriginSchema>;
 export type SiteAutomationUpdate = z.infer<typeof siteAutomationUpdateSchema>;
 export type SiteAutomationCrawlsQuery = z.infer<typeof siteAutomationCrawlsQuerySchema>;
+export type SiteCostSort = z.infer<typeof siteCostSortSchema>;
+export type SiteCostWebsitesQuery = z.infer<typeof siteCostWebsitesQuerySchema>;
 
 export type SiteAssetKind = 'image' | 'css' | 'js' | 'font' | 'icon' | 'media' | 'manifest' | 'other';
 
@@ -422,6 +438,8 @@ export type SiteSnapshotSummary = {
   llmModel: string | null;
   llmPromptTokens: number | null;
   llmCompletionTokens: number | null;
+  /** USD OpenRouter reported for this copy's AI calls; null = not reported (see the Costs API for an estimate). Older API versions omit it. */
+  llmCostUsd?: number | null;
   warnings: string[];
   failureReason: string | null;
   /** The error message behind `failureReason`, e.g. "fetch failed: getaddrinfo ENOTFOUND example.com". Older API versions omit it. */
@@ -670,4 +688,117 @@ export type SiteAutomationCrawl = {
   /** @deprecated Always 0 now that copies are not capped. */
   carriedOver: number;
   copies: { pending: number; running: number; done: number; failed: number };
+};
+
+export type CostTokens = { input: number; output: number };
+
+/** Listed price of one model in USD per million tokens. */
+export type SiteCostModelPrice = { model: string; inputPerMillionUsd: number; outputPerMillionUsd: number };
+
+/** Where the per-token prices came from; rows without an OpenRouter charge are priced with them. */
+export type SiteCostPricing = {
+  source: 'openrouter' | 'overrides' | 'unavailable';
+  fetchedAt: string | null;
+  models: SiteCostModelPrice[];
+  /** Models seen on copies or audits without a known price; their tokens are left out of the cost. */
+  unpricedModels: string[];
+  r2StorageUsdPerGbMonth: number;
+};
+
+/**
+ * AI and storage spend of one website. AI cost is one-time (copy brand extraction plus the lead's AI audits);
+ * storage is what its copies in R2 cost per month. GitHub repos and Cloudflare Workers are free on the current plans.
+ */
+export type SiteCostWebsite = {
+  leadId: string;
+  company: { id: string; name: string; domain: string | null };
+  copies: number;
+  aiAudits: number;
+  copyTokens: CostTokens;
+  auditTokens: CostTokens;
+  copyCostUsd: number;
+  auditCostUsd: number;
+  aiCostUsd: number;
+  /** Part of the AI cost was computed from tokens × price instead of OpenRouter's reported charge. */
+  estimated: boolean;
+  /** Some tokens have no known price, so the cost is a lower bound. */
+  unpriced: boolean;
+  storageBytes: number;
+  storageUsdPerMonth: number;
+  firstCopyAt: string;
+  lastCopyAt: string;
+  latest: {
+    snapshotId: string;
+    status: JobStatus;
+    workerStatus: string | null;
+    workerUrl: string | null;
+    githubRepo: string | null;
+  };
+};
+
+/** `GET /api/v1/costs/summary`: totals over websites whose copies were made in the window. */
+export type SiteCostSummary = {
+  days: number | null;
+  since: string | null;
+  websites: number;
+  copies: number;
+  aiAudits: number;
+  copyTokens: CostTokens;
+  auditTokens: CostTokens;
+  copyCostUsd: number;
+  auditCostUsd: number;
+  aiCostUsd: number;
+  exactCostUsd: number;
+  estimatedCostUsd: number;
+  averagePerWebsiteUsd: number | null;
+  averageTokensPerWebsite: number | null;
+  storageBytes: number;
+  storageUsdPerMonth: number;
+  byModel: Array<{
+    model: string | null;
+    kind: 'copy' | 'audit';
+    calls: number;
+    tokens: CostTokens;
+    costUsd: number;
+    price: SiteCostModelPrice | null;
+  }>;
+  /** UTC days on which websites were first copied in the window, oldest first. */
+  byDay: Array<{ day: string; websites: number; costUsd: number; tokens: number }>;
+  pricing: SiteCostPricing;
+};
+
+/** `GET /api/v1/costs/websites`. */
+export type SiteCostWebsitePage = {
+  items: SiteCostWebsite[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+  pricing: SiteCostPricing;
+};
+
+/** `GET /api/v1/costs/websites/:leadId`: one website with every AI call behind its cost. */
+export type SiteCostWebsiteDetail = SiteCostWebsite & {
+  copyRuns: Array<{
+    snapshotId: string;
+    createdAt: string;
+    status: JobStatus;
+    model: string | null;
+    tokens: CostTokens;
+    costUsd: number | null;
+    estimated: boolean;
+    totalBytes: number;
+    attempts: number;
+  }>;
+  auditRuns: Array<{
+    auditId: string;
+    auditedAt: string;
+    method: string;
+    verdict: string;
+    model: string | null;
+    tokens: CostTokens;
+    costUsd: number | null;
+    estimated: boolean;
+  }>;
+  pricing: SiteCostPricing;
 };

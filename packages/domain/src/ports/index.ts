@@ -225,6 +225,8 @@ export type WebsiteAuditResult = {
   llmResult?: unknown;
   llmPromptTokens?: number;
   llmCompletionTokens?: number;
+  /** USD charged by OpenRouter for the Pass 3 call; absent when it did not report a cost. */
+  llmCostUsd?: number;
   /** In-memory only; persisted via EvidenceStore after audit insert. */
   artifacts?: WebsiteAuditArtifacts;
 };
@@ -426,10 +428,13 @@ export type LlmCompleteJsonInput<T> = {
   parse: (raw: unknown) => T;
 };
 
+/** Tokens of one or more LLM calls; `costUsd` is what OpenRouter charged, when it reported it. */
+export type LlmTokenUsage = { promptTokens: number; completionTokens: number; costUsd?: number };
+
 export interface LlmProvider {
   completeJson<T>(input: LlmCompleteJsonInput<T>): Promise<{
     data: T;
-    usage: { promptTokens: number; completionTokens: number };
+    usage: LlmTokenUsage;
     model: string;
   }>;
 }
@@ -725,3 +730,4 @@ export function utcDay(date = new Date()): string {
 }
 
 export * from './site';
+export * from './costs';

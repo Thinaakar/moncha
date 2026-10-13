@@ -8,6 +8,7 @@ import {
   Activity,
   CalendarClock,
   ClipboardCheck,
+  Coins,
   FileUp,
   LayoutDashboard,
   ListChecks,
@@ -48,7 +49,13 @@ type NavItem = {
 };
 
 const NAV: Array<{ title: string; items: NavItem[] }> = [
-  { title: 'Overview', items: [{ href: '/', label: 'Dashboard', icon: LayoutDashboard }] },
+  {
+    title: 'Overview',
+    items: [
+      { href: '/', label: 'Dashboard', icon: LayoutDashboard },
+      { href: '/costs', label: 'Costs', icon: Coins },
+    ],
+  },
   {
     title: 'Pipeline',
     items: [

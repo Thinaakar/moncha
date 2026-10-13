@@ -16,7 +16,7 @@ import {
   type SiteSnapshotRepo,
   type SiteStore,
 } from '../ports';
-import { runSiteSnapshotJob, type SiteSnapshotJobDeps } from './runSiteSnapshotJob';
+import { llmSpend, runSiteSnapshotJob, type SiteSnapshotJobDeps } from './runSiteSnapshotJob';
 import { queueSiteSnapshot, SiteSnapshotRequestError } from './siteSnapshots';
 
 const enc = (s: string) => new TextEncoder().encode(s);
@@ -98,6 +98,7 @@ function setup(over: Partial<SiteSnapshotJobDeps> = {}, jobOver: Partial<JobRunR
     llmModel: null,
     llmPromptTokens: null,
     llmCompletionTokens: null,
+    llmCostUsd: null,
     warnings: [],
     failureReason: null,
     failureDetail: null,
@@ -284,6 +285,65 @@ describe('runSiteSnapshotJob', () => {
     expect(s.snapshot.warnings).toContain('llm_skipped:budget_exhausted');
     expect(s.snapshot.brand?.colors.primary).toBe('#123456');
     expect(s.snapshot.llmModel).toBeNull();
+  });
+
+  it('stores the cost OpenRouter reported for the brand extraction', async () => {
+    const s = setup();
+    const extract = s.deps.brandExtractor!.extract;
+    s.deps.brandExtractor = {
+      extract: async (input) => {
+        const result = await extract(input);
+        return { ...result, usage: { ...result.usage, costUsd: 0.0123 } };
+      },
+    };
+    await runSiteSnapshotJob(s.deps, { job: s.job });
+    expect(s.snapshot).toMatchObject({ llmPromptTokens: 1000, llmCompletionTokens: 200, llmCostUsd: 0.0123 });
+  });
+
+  it('keeps the tokens of a failed brand extraction', async () => {
+    const s = setup({
+      brandExtractor: {
+        extract: async () => {
+          throw new BrandExtractionError('invalid_output', 'brand_schema_invalid', { promptTokens: 900, completionTokens: 300, costUsd: 0.004 }, 'google/gemini-3.5-flash');
+        },
+      },
+    });
+    const outcome = await runSiteSnapshotJob(s.deps, { job: s.job });
+    expect(outcome).toMatchObject({ status: 'done', brandSource: 'evidence' });
+    expect(s.snapshot).toMatchObject({
+      llmModel: 'google/gemini-3.5-flash',
+      llmPromptTokens: 900,
+      llmCompletionTokens: 300,
+      llmCostUsd: 0.004,
+    });
+  });
+
+  it('keeps the tokens when the upload fails after the brand step', async () => {
+    const s = setup(
+      {
+        store: {
+          put: async () => Promise.reject(new Error('R2 503')),
+          get: async () => null,
+          getBytes: async () => null,
+        },
+      },
+      { attempts: 3 },
+    );
+    await runSiteSnapshotJob(s.deps, { job: s.job });
+    expect(s.snapshot).toMatchObject({ status: 'failed', llmPromptTokens: 1000, llmCompletionTokens: 200 });
+  });
+
+  it('adds a retry to the tokens and cost of earlier attempts', () => {
+    const previous = { llmModel: 'm', llmPromptTokens: 500, llmCompletionTokens: 100, llmCostUsd: 0.01 };
+    expect(llmSpend(previous, 'm', { promptTokens: 1000, completionTokens: 200, costUsd: 0.02 })).toEqual({
+      llmModel: 'm',
+      llmPromptTokens: 1500,
+      llmCompletionTokens: 300,
+      llmCostUsd: 0.03,
+    });
+    expect(llmSpend({ ...previous, llmCostUsd: null }, 'm', { promptTokens: 10, completionTokens: 5, costUsd: 0.02 }).llmCostUsd).toBeNull();
+    expect(llmSpend(previous, 'm', { promptTokens: 10, completionTokens: 5 }).llmCostUsd).toBeNull();
+    expect(llmSpend(previous, 'm', { promptTokens: 0, completionTokens: 0 })).toEqual({});
   });
 
   it('uses the evidence brand when no LLM is configured', async () => {

@@ -1,7 +1,22 @@
 const numberFmt = new Intl.NumberFormat('en-US');
+const compactFmt = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 });
 
 export function formatNumber(value: number | null | undefined) {
   return value === null || value === undefined ? '—' : numberFmt.format(value);
+}
+
+/** 7,912 → 7.9K; 3,199,058 → 3.2M. */
+export function formatCompact(value: number | null | undefined) {
+  return value === null || value === undefined ? '—' : compactFmt.format(value);
+}
+
+/** Dollars with enough decimals for sub-cent AI costs: $0.0258, $0.42, $11.85. */
+export function formatUsd(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—';
+  if (value === 0) return '$0';
+  const abs = Math.abs(value);
+  const digits = abs < 0.0001 ? 6 : abs < 1 ? 4 : 2;
+  return `$${value.toLocaleString('en-US', { minimumFractionDigits: digits > 2 ? 2 : digits, maximumFractionDigits: digits })}`;
 }
 
 export function formatBytes(value: number | null | undefined) {

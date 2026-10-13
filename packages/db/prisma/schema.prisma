@@ -295,6 +295,8 @@ model WebsiteAudit {
   llmResult           Json?
   llmPromptTokens     Int?
   llmCompletionTokens Int?
+  /// USD OpenRouter charged for the Pass 3 call; null when it did not report one (estimated from tokens).
+  llmCostUsd          Float?
   auditedAt           DateTime          @default(now())
   tenant              Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   website             Website           @relation("WebsiteAudits", fields: [websiteId], references: [id], onDelete: Cascade)
@@ -560,6 +562,8 @@ model SiteSnapshot {
   llmModel            String?
   llmPromptTokens     Int?
   llmCompletionTokens Int?
+  /// USD OpenRouter charged for brand extraction across all attempts; null = estimate from tokens.
+  llmCostUsd          Float?
   /// Non-fatal notes, e.g. llm_skipped:budget_exhausted, base_href_neutralized.
   warnings            Json?
   failureReason       String?

@@ -4,6 +4,7 @@ import {
   type BrandExtractionInput,
   type BrandExtractionResult,
   type BrandExtractor,
+  type LlmTokenUsage,
   type SiteBrand,
   type SiteEvidence,
 } from '@moncha/domain';
@@ -151,7 +152,8 @@ export class GeminiBrandExtractor implements BrandExtractor {
   }
 
   async extract(input: BrandExtractionInput): Promise<BrandExtractionResult> {
-    const usage = { promptTokens: 0, completionTokens: 0 };
+    const usage: LlmTokenUsage = { promptTokens: 0, completionTokens: 0 };
+    let costReported = true;
     let model = this.model;
     const images: JsonImageInput[] = [];
     if (input.screenshots.desktopViewport) images.push({ mimeType: 'image/jpeg', bytes: input.screenshots.desktopViewport });
@@ -159,7 +161,7 @@ export class GeminiBrandExtractor implements BrandExtractor {
 
     const call = async (text: string, withImages: boolean): Promise<unknown> => {
       if (input.budget && !(await input.budget.allow())) {
-        throw new BrandExtractionError('budget_exhausted', 'llm_budget_exhausted', usage);
+        throw new BrandExtractionError('budget_exhausted', 'llm_budget_exhausted', usage, model);
       }
       let failed = true;
       try {
@@ -174,12 +176,19 @@ export class GeminiBrandExtractor implements BrandExtractor {
         });
         usage.promptTokens += res.usage.promptTokens;
         usage.completionTokens += res.usage.completionTokens;
+        if (res.usage.costUsd === undefined) costReported = false;
+        usage.costUsd = costReported ? (usage.costUsd ?? 0) + (res.usage.costUsd ?? 0) : undefined;
         model = res.model;
         failed = false;
         return res.data;
       } catch (error) {
         if (error instanceof Error && error.message === 'openrouter_invalid_json') return undefined;
-        throw new BrandExtractionError('llm_failed', error instanceof Error ? error.message.slice(0, 200) : String(error), usage);
+        throw new BrandExtractionError(
+          'llm_failed',
+          error instanceof Error ? error.message.slice(0, 200) : String(error),
+          usage,
+          model,
+        );
       } finally {
         await input.budget?.record(failed);
       }
@@ -193,7 +202,7 @@ export class GeminiBrandExtractor implements BrandExtractor {
       const repair = `${evidenceText}\n\nYour previous reply did not match the required JSON shape.\nProblems: ${issues}\nPrevious reply: ${JSON.stringify(raw ?? null).slice(0, 4_000)}\nReturn the corrected JSON object only.`;
       raw = await call(repair, false);
       parsed = siteBrandSchema.safeParse(raw);
-      if (!parsed.success) throw new BrandExtractionError('invalid_output', 'brand_schema_invalid', usage);
+      if (!parsed.success) throw new BrandExtractionError('invalid_output', 'brand_schema_invalid', usage, model);
     }
 
     const grounded = groundBrand({ ...parsed.data, source: 'llm' }, input.evidence, input.company);

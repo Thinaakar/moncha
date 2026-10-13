@@ -1,8 +1,12 @@
 'use client';
 
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
 import type {
+  SiteCostSort,
+  SiteCostSummary,
+  SiteCostWebsiteDetail,
+  SiteCostWebsitePage,
   DiscoveryOptions,
   Job,
   JobStatus,
@@ -49,6 +53,9 @@ export const qk = {
   siteQueue: ['site-snapshots', 'queue'] as const,
   automation: ['site-automation'] as const,
   automationCrawls: (limit: number) => ['site-automation', 'crawls', limit] as const,
+  costSummary: (days: number | null) => ['costs', 'summary', days] as const,
+  costWebsites: (q: object) => ['costs', 'websites', q] as const,
+  costWebsite: (leadId: string) => ['costs', 'website', leadId] as const,
 };
 
 const isTerminal = (status: JobStatus | undefined) => status === 'done' || status === 'failed';
@@ -292,6 +299,38 @@ export function useSiteAutomationCrawls(limit = 50) {
     queryKey: qk.automationCrawls(limit),
     queryFn: async () => (await api<{ items: SiteAutomationCrawl[] }>('site-automation/crawls', { query: { limit } })).items,
     refetchInterval: (q) => (q.state.data?.some((c) => c.status !== 'complete') ? 15_000 : 60_000),
+  });
+}
+
+/** Days back from today (UTC) or null for all time. */
+export function useCostSummary(days: number | null) {
+  return useQuery({
+    queryKey: qk.costSummary(days),
+    queryFn: () => api<SiteCostSummary>('costs/summary', { query: { days: days ?? undefined } }),
+    placeholderData: keepPreviousData,
+    refetchInterval: 5 * 60_000,
+  });
+}
+
+export type CostWebsiteParams = { days: number | null; page: number; pageSize: number; search?: string; sort: SiteCostSort };
+
+export function useCostWebsites(params: CostWebsiteParams) {
+  return useQuery({
+    queryKey: qk.costWebsites(params),
+    queryFn: () =>
+      api<SiteCostWebsitePage>('costs/websites', { query: { ...params, days: params.days ?? undefined } }),
+    placeholderData: keepPreviousData,
+    refetchInterval: 5 * 60_000,
+  });
+}
+
+/** One website's AI and storage spend; 404 when the lead has no copies yet. */
+export function useCostWebsite(leadId: string | null | undefined) {
+  return useQuery({
+    queryKey: qk.costWebsite(leadId ?? ''),
+    queryFn: () => api<SiteCostWebsiteDetail>(`costs/websites/${leadId}`),
+    enabled: Boolean(leadId),
+    retry: (count, error) => !(error instanceof ApiError && error.status === 404) && count < 2,
   });
 }
 

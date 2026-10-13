@@ -1,4 +1,4 @@
-import type { LlmCompleteJsonInput, LlmProvider } from '@moncha/domain';
+import type { LlmCompleteJsonInput, LlmProvider, LlmTokenUsage } from '@moncha/domain';
 
 export type OpenRouterConfig = {
   apiKey: string;
@@ -21,9 +21,25 @@ export type CompleteJsonWithImagesInput<T> = {
 
 export type CompleteJsonResult<T> = {
   data: T;
-  usage: { promptTokens: number; completionTokens: number };
+  usage: LlmTokenUsage;
   model: string;
 };
+
+type ChatCompletionResponse = {
+  choices?: Array<{ message?: { content?: string } }>;
+  usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number };
+  model?: string;
+};
+
+/** OpenRouter reports `usage.cost` (USD) when the request asks for usage accounting. */
+function usageOf(json: ChatCompletionResponse): LlmTokenUsage {
+  const cost = json.usage?.cost;
+  return {
+    promptTokens: json.usage?.prompt_tokens ?? 0,
+    completionTokens: json.usage?.completion_tokens ?? 0,
+    ...(typeof cost === 'number' && Number.isFinite(cost) && cost >= 0 ? { costUsd: cost } : {}),
+  };
+}
 
 export interface MultimodalJsonClient {
   completeJsonWithImages<T>(input: CompleteJsonWithImagesInput<T>): Promise<CompleteJsonResult<T>>;
@@ -76,6 +92,7 @@ export class OpenRouterLlmProvider implements LlmProvider, MultimodalJsonClient 
           model: this.model,
           temperature: 0,
           response_format: { type: 'json_object' },
+          usage: { include: true },
           messages: [
             { role: 'system', content: input.system },
             { role: 'user', content: input.user },
@@ -86,20 +103,13 @@ export class OpenRouterLlmProvider implements LlmProvider, MultimodalJsonClient 
         const body = await res.text();
         throw new Error(`openrouter_http_${res.status}: ${body.slice(0, 200)}`);
       }
-      const json = (await res.json()) as {
-        choices?: Array<{ message?: { content?: string } }>;
-        usage?: { prompt_tokens?: number; completion_tokens?: number };
-        model?: string;
-      };
+      const json = (await res.json()) as ChatCompletionResponse;
       const content = json.choices?.[0]?.message?.content;
       if (!content) throw new Error('openrouter_empty_content');
       const parsed = JSON.parse(content) as unknown;
       return {
         data: input.parse(parsed),
-        usage: {
-          promptTokens: json.usage?.prompt_tokens ?? 0,
-          completionTokens: json.usage?.completion_tokens ?? 0,
-        },
+        usage: usageOf(json),
         model: json.model || this.model,
       };
     } finally {
@@ -134,6 +144,7 @@ export class OpenRouterLlmProvider implements LlmProvider, MultimodalJsonClient 
           temperature: 0.2,
           ...(input.maxTokens ? { max_tokens: input.maxTokens } : {}),
           response_format: { type: 'json_object' },
+          usage: { include: true },
           messages: [
             { role: 'system', content: input.system },
             { role: 'user', content },
@@ -144,19 +155,12 @@ export class OpenRouterLlmProvider implements LlmProvider, MultimodalJsonClient 
         const body = await res.text();
         throw new Error(`openrouter_http_${res.status}: ${body.slice(0, 200)}`);
       }
-      const json = (await res.json()) as {
-        choices?: Array<{ message?: { content?: string } }>;
-        usage?: { prompt_tokens?: number; completion_tokens?: number };
-        model?: string;
-      };
+      const json = (await res.json()) as ChatCompletionResponse;
       const text = json.choices?.[0]?.message?.content;
       if (!text) throw new Error('openrouter_empty_content');
       return {
         data: input.parse(parseJsonContent(text)),
-        usage: {
-          promptTokens: json.usage?.prompt_tokens ?? 0,
-          completionTokens: json.usage?.completion_tokens ?? 0,
-        },
+        usage: usageOf(json),
         model: json.model || model,
       };
     } catch (error) {

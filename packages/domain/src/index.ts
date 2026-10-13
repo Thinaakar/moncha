@@ -24,6 +24,7 @@ export * from './use-cases/siteAutomation';
 export * from './use-cases/siteGithub';
 export * from './use-cases/siteWorker';
 export * from './use-cases/siteProgress';
+export * from './use-cases/siteCosts';
 export * from './use-cases/runSiteSnapshotJob';
 export * from './discovery/countries';
 export * from './discovery/schedule-time';

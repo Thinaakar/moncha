@@ -1966,6 +1966,47 @@ Deploy (from `apps/worker`, Wrangler logged in): `pnpm sites:deploy`. First time
 
 ---
 
+## Costs
+
+What each website costs to create, in AI tokens and USD. A website is a lead with at least one copy.
+
+- **AI cost (one-time)** = every brand extraction of its copies (all attempts) + every AI website audit of the lead
+  (`llmRan`). OpenRouter reports the charge of each call (`usage.include`), stored as `llmCostUsd` on the copy and
+  the audit. Older rows without it are priced as tokens × the model's listed price and flagged `estimated`.
+- **Prices** come from OpenRouter's public model list (`GET {OPENROUTER_BASE_URL}/models`), cached 12 hours.
+  `LLM_PRICE_OVERRIDES` (`model=input/output` in USD per million tokens, comma-separated) adds or replaces models.
+  Models with no known price are listed in `pricing.unpricedModels`, their tokens count as $0 and the website is
+  flagged `unpriced` (the cost is a lower bound).
+- **Storage** = bytes of the copies in R2 × $0.015 per GB-month. GitHub repos and Cloudflare Workers are $0.
+- **`days`** (1–365, optional) keeps websites whose copies were made since the start of the UTC day `days - 1` days
+  ago; omitted = all time.
+
+### 41c. GET `/api/v1/costs/summary?days=30`
+
+`SiteCostSummary`: `websites`, `copies`, `aiAudits`, `copyTokens`/`auditTokens` (`{ input, output }`),
+`copyCostUsd`, `auditCostUsd`, `aiCostUsd`, `exactCostUsd`, `estimatedCostUsd`, `averagePerWebsiteUsd`,
+`averageTokensPerWebsite`, `storageBytes`, `storageUsdPerMonth`, `byModel[]` (`model`, `kind` `copy`|`audit`,
+`calls`, `tokens`, `costUsd`, `price`), `byDay[]` (`day`, `websites`, `costUsd`, `tokens`) and `pricing`
+(`source` `openrouter`|`overrides`|`unavailable`, `fetchedAt`, `models[]` with `inputPerMillionUsd` and
+`outputPerMillionUsd`, `unpricedModels`, `r2StorageUsdPerGbMonth`).
+
+### 41d. GET `/api/v1/costs/websites?days=30&page=1&pageSize=25&search=&sort=cost`
+
+`{ items: SiteCostWebsite[], total, page, pageSize, totalPages, pricing }`. `sort` is `cost` (default), `tokens`,
+`newest` or `size`; `search` matches the company name and domain. Each item: `leadId`, `company`, `copies`,
+`aiAudits`, `copyTokens`, `auditTokens`, `copyCostUsd`, `auditCostUsd`, `aiCostUsd`, `estimated`, `unpriced`,
+`storageBytes`, `storageUsdPerMonth`, `firstCopyAt`, `lastCopyAt` and `latest { snapshotId, status, workerStatus,
+workerUrl, githubRepo }`.
+
+### 41e. GET `/api/v1/costs/websites/:leadId`
+
+One `SiteCostWebsite` plus every call behind its cost: `copyRuns[]` (`snapshotId`, `createdAt`, `status`, `model`,
+`tokens`, `costUsd`, `estimated`, `totalBytes`, `attempts`) and `auditRuns[]` (`auditId`, `auditedAt`, `method`,
+`verdict`, `model`, `tokens`, `costUsd`, `estimated`), and `pricing`. `costUsd` is `null` when the model has no
+known price. **`404`** when the lead has no website copies.
+
+---
+
 ## Copy automation
 
 When a country crawl (scheduled or manual) finishes, the worker queues website copies for the crawl's new
