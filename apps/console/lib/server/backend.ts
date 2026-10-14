@@ -5,7 +5,7 @@ import { backendConfig, backendHeaders } from './config';
 
 type Fetcher = { fetch: typeof fetch };
 
-/** On Cloudflare the backend Worker is the BACKEND service binding; elsewhere (Railway, local dev) a plain fetch. */
+/** On Cloudflare the backend Worker is the BACKEND service binding; elsewhere (local dev) a plain fetch. */
 export function backendFetch(url: string, init: RequestInit): Promise<Response> {
   let binding: Fetcher | undefined;
   try {

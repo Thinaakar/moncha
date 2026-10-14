@@ -1268,8 +1268,7 @@ lead goes to the `NEEDS_REVIEW` queue and an open review task is created for it.
 resolves the task with one of three actions. Each lead has at most one open review task. The audit itself is never
 changed; the decision is stored on the lead, the task and the audit log.
 
-Served by the Node API (Railway and local). Not served by the Cloudflare edge backend, so examples use the Railway
-URL.
+Served by the Node API (the Cloudflare backend container, and local).
 
 **Review task object**
 
@@ -1312,7 +1311,7 @@ URL.
 Open tasks are sorted oldest first (work through them as a queue); `resolved` and `all` are sorted newest first.
 
 ```bash
-curl "https://monchaworker-production.up.railway.app/api/v1/reviews?pageSize=10"
+curl "https://moncha-backend.vinothjv4-tech.workers.dev/api/v1/reviews?pageSize=10"
 ```
 
 **200 OK**
@@ -1425,7 +1424,7 @@ entry (`entityType: "ReviewTask"`, `action: "review_resolved"`, lead state befor
 raise the lead's `version`. If the re-audit is still not sure, it opens a new review task.
 
 ```bash
-curl -X POST https://monchaworker-production.up.railway.app/api/v1/reviews/cmuvr7k2p0001a8tq3x9d2f1b/resolve \
+curl -X POST https://moncha-backend.vinothjv4-tech.workers.dev/api/v1/reviews/cmuvr7k2p0001a8tq3x9d2f1b/resolve \
   -H "content-type: application/json" \
   -H "authorization: Bearer <token>" \
   -d '{ "action": "mark_has_assistant", "note": "Tidio bubble bottom right", "vendor": "tidio" }'

@@ -396,7 +396,7 @@ function PricingNote({ summary: s }: { summary: SiteCostSummary }) {
             <span className="text-foreground">Storage</span> is the copy&apos;s files in R2 at{' '}
             {formatUsd(s.pricing.r2StorageUsdPerGbMonth)} per GB-month (the first 10 GB are free on the account).
           </li>
-          <li>GitHub repos and Cloudflare Workers are free on the current plans. Railway compute is shared and not split per website.</li>
+          <li>GitHub repos and Cloudflare Workers are free on the current plans. Backend compute is shared and not split per website.</li>
         </ul>
         <div>
           <p className="mb-2 text-xs font-semibold text-muted-foreground uppercase">Model prices per 1M tokens</p>

@@ -15,7 +15,7 @@ const ENV_FINGERPRINT_KEY = 'envFingerprint';
 
 /**
  * Background jobs run only when the WORKER_JOBS_ENABLED secret is "true". Otherwise the container serves the API in
- * standby, so it never processes jobs while another host (Railway) still runs the poller on the same database.
+ * standby, so it never processes jobs while another host still runs the poller on the same database.
  */
 function jobsMode(env: Env): 'true' | 'false' {
   return env.WORKER_JOBS_ENABLED?.trim().toLowerCase() === 'true' ? 'true' : 'false';
