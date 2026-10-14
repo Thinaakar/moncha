@@ -5,6 +5,8 @@ import type {
   SiteCopyOrigin,
   SiteGithubRequestResult,
   SiteGithubStatus,
+  SitePipelineRepo,
+  SitePipelineSteps,
   SiteQueueEntry,
   SiteSnapshotListItem,
   SiteSnapshotListQuery,
@@ -80,7 +82,7 @@ function mapListItem(row: RowWithCompany): SiteSnapshotListItem {
 
 const jsonOrNull = (value: unknown) => (value === null ? Prisma.JsonNull : (value as Prisma.InputJsonValue));
 
-export class PrismaSiteSnapshotRepository implements SiteSnapshotRepo {
+export class PrismaSiteSnapshotRepository implements SiteSnapshotRepo, SitePipelineRepo {
   constructor(private db: PrismaClient) {}
 
   async createWithJob(input: {
@@ -279,13 +281,15 @@ export class PrismaSiteSnapshotRepository implements SiteSnapshotRepo {
     return typeof avg === 'number' && Number.isFinite(avg) && avg > 0 ? Math.round(avg) : null;
   }
 
-  async claimGithubPush(now: Date, staleBefore: Date): Promise<SiteSnapshotListItem | null> {
+  async claimGithubPush(now: Date, staleBefore: Date, options: { id?: string } = {}): Promise<SiteSnapshotListItem | null> {
+    const onlyId = options.id ? Prisma.sql`AND id = ${options.id}` : Prisma.empty;
     const rows = await this.db.$queryRaw<Array<{ id: string; tenantId: string }>>`
       UPDATE "SiteSnapshot" AS s
       SET "githubStatus" = 'pushing', "githubLockedAt" = ${now}, "githubAttempts" = s."githubAttempts" + 1
       WHERE s.id = (
         SELECT id FROM "SiteSnapshot"
         WHERE status = 'done'
+          ${onlyId}
           AND (
             ("githubStatus" = 'pending' AND ("githubNextAt" IS NULL OR "githubNextAt" <= ${now}))
             OR ("githubStatus" = 'pushing' AND "githubLockedAt" < ${staleBefore})
@@ -310,14 +314,20 @@ export class PrismaSiteSnapshotRepository implements SiteSnapshotRepo {
     return count ? 'queued' : 'busy';
   }
 
-  async claimWorkerDeploy(now: Date, staleBefore: Date, options: { afterGithub?: boolean } = {}): Promise<SiteSnapshotListItem | null> {
+  async claimWorkerDeploy(
+    now: Date,
+    staleBefore: Date,
+    options: { afterGithub?: boolean; id?: string } = {},
+  ): Promise<SiteSnapshotListItem | null> {
     const afterGithub = Boolean(options.afterGithub);
+    const onlyId = options.id ? Prisma.sql`AND id = ${options.id}` : Prisma.empty;
     const rows = await this.db.$queryRaw<Array<{ id: string; tenantId: string }>>`
       UPDATE "SiteSnapshot" AS s
       SET "workerStatus" = 'deploying', "workerLockedAt" = ${now}, "workerAttempts" = s."workerAttempts" + 1
       WHERE s.id = (
         SELECT id FROM "SiteSnapshot"
         WHERE status = 'done'
+          ${onlyId}
           AND (
             ("workerStatus" = 'pending' AND ("workerNextAt" IS NULL OR "workerNextAt" <= ${now})
               AND (${afterGithub} = false OR "githubStatus" = 'pushed'))
@@ -342,4 +352,67 @@ export class PrismaSiteSnapshotRepository implements SiteSnapshotRepo {
     });
     return count ? 'queued' : 'busy';
   }
+
+  async currentPublish(): Promise<SiteSnapshotListItem | null> {
+    const rows = await this.db.$queryRaw<Array<{ id: string; tenantId: string }>>`
+      SELECT s.id, s."tenantId" FROM "SiteSnapshot" s
+      JOIN "JobRun" j ON j.id = s."jobId"
+      WHERE s.status = 'done' AND j.status = 'running' AND j."lockedAt" IS NULL
+      ORDER BY j."startedAt" ASC NULLS LAST, s.id
+      LIMIT 1`;
+    return this.getFirst(rows);
+  }
+
+  async inFlightCopy(): Promise<SiteSnapshotListItem | null> {
+    const rows = await this.db.$queryRaw<Array<{ id: string; tenantId: string }>>`
+      SELECT s.id, s."tenantId" FROM "SiteSnapshot" s
+      JOIN "JobRun" j ON j.id = s."jobId"
+      WHERE (s.status = 'running' OR (s.status = 'pending' AND s.attempts > 0))
+        AND j.status IN ('pending', 'running')
+      ORDER BY s."createdAt" ASC, s.id
+      LIMIT 1`;
+    return this.getFirst(rows);
+  }
+
+  async nextToPublish(steps: SitePipelineSteps): Promise<SiteSnapshotListItem | null> {
+    const rows = await this.db.$queryRaw<Array<{ id: string; tenantId: string }>>`
+      SELECT s.id, s."tenantId" FROM "SiteSnapshot" s
+      WHERE ${needsPublish(steps)}
+      ORDER BY (s."workerStatus" IS NOT DISTINCT FROM 'deployed') DESC, s."finishedAt" DESC NULLS LAST, s.id
+      LIMIT 1`;
+    return this.getFirst(rows);
+  }
+
+  async countToPublish(tenantId: string, steps: SitePipelineSteps): Promise<number> {
+    const rows = await this.db.$queryRaw<Array<{ n: number }>>`
+      SELECT COUNT(*)::int AS n FROM "SiteSnapshot" s WHERE s."tenantId" = ${tenantId} AND ${needsPublish(steps)}`;
+    return rows[0]?.n ?? 0;
+  }
+
+  countWaitingCopies(tenantId: string): Promise<number> {
+    return this.db.siteSnapshot.count({ where: { tenantId, status: 'pending', attempts: 0 } });
+  }
+
+  private async getFirst(rows: Array<{ id: string; tenantId: string }>) {
+    const first = rows[0];
+    return first ? this.get(first.tenantId, first.id) : null;
+  }
+}
+
+/**
+ * A done copy that still needs a publish step and whose steps have not given up. Copies with no job are left to the
+ * console buttons, and so is an older copy once a newer copy of the same lead is done (it would overwrite the Worker).
+ */
+function needsPublish(steps: SitePipelineSteps): Prisma.Sql {
+  const github = steps.github ? Prisma.sql`s."githubStatus" IS DISTINCT FROM 'pushed'` : Prisma.sql`FALSE`;
+  const worker = steps.worker ? Prisma.sql`s."workerStatus" IS DISTINCT FROM 'deployed'` : Prisma.sql`FALSE`;
+  return Prisma.sql`s.status = 'done'
+    AND s."jobId" IS NOT NULL
+    AND s."githubStatus" IS DISTINCT FROM 'failed'
+    AND s."workerStatus" IS DISTINCT FROM 'failed'
+    AND (${github} OR ${worker})
+    AND NOT EXISTS (
+      SELECT 1 FROM "SiteSnapshot" n
+      WHERE n."leadId" = s."leadId" AND n.status = 'done' AND n."createdAt" > s."createdAt"
+    )`;
 }

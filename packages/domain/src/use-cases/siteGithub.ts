@@ -11,8 +11,8 @@ import {
 } from '../ports';
 
 /** Total tries before the push is marked failed; the waits between them are SITE_GITHUB_BACKOFF_MS. */
-export const SITE_GITHUB_MAX_ATTEMPTS = 6;
-export const SITE_GITHUB_BACKOFF_MS = [60_000, 5 * 60_000, 15 * 60_000, 60 * 60_000, 3 * 60 * 60_000];
+export const SITE_GITHUB_MAX_ATTEMPTS = 3;
+export const SITE_GITHUB_BACKOFF_MS = [60_000, 5 * 60_000];
 /** A push still `pushing` after this long belongs to a worker that died; it is taken over. */
 export const SITE_GITHUB_STALE_MS = 10 * 60_000;
 /** compatibility_date of site Workers, both in the repo's wrangler.jsonc and in API deploys. */

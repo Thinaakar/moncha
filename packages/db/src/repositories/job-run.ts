@@ -178,16 +178,18 @@ export class PrismaJobRunRepository implements JobRepo {
   }
 
   /**
-   * Claim up to `limit` pending jobs of one type using SKIP LOCKED.
+   * Claim up to `limit` pending jobs of one type using SKIP LOCKED; with `id`, only that job.
    * places_discovery stays with the console in-process runner.
    */
   async claimJobs(
     workerId: string,
     limit: number,
     type: WorkerJobType = 'website_audit',
+    options: { id?: string } = {},
   ): Promise<JobRunRecord[]> {
     // The console runs its own csv_import jobs in-process; only API-queued ones belong to the worker.
     const onlyQueuedCsv = type === 'csv_import' ? Prisma.sql`AND payload->>'mode' = 'queued'` : Prisma.empty;
+    const onlyId = options.id ? Prisma.sql`AND id = ${options.id}` : Prisma.empty;
     const rows = await this.db.$queryRaw<
       Array<{
         id: string;
@@ -224,6 +226,7 @@ export class PrismaJobRunRepository implements JobRepo {
           AND "runAfter" <= NOW()
           AND type = ${type}::"JobType"
           ${onlyQueuedCsv}
+          ${onlyId}
         ORDER BY "runAfter" ASC, "createdAt" ASC
         FOR UPDATE SKIP LOCKED
         LIMIT ${limit}

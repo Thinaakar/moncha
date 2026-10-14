@@ -23,6 +23,7 @@ import type {
   SiteAutomationUpdate,
   SiteCopyOrigin,
   SiteDeployFilter,
+  SitePipelineStatus,
   SiteQueue,
   SiteSnapshotDetail,
   SiteSnapshotQueued,
@@ -52,6 +53,7 @@ export const qk = {
   site: (id: string) => ['site-snapshots', 'detail', id] as const,
   siteSource: (id: string) => ['site-snapshots', 'source', id] as const,
   siteQueue: ['site-snapshots', 'queue'] as const,
+  sitePipeline: ['site-pipeline'] as const,
   automation: ['site-automation'] as const,
   automationCrawls: (limit: number) => ['site-automation', 'crawls', limit] as const,
   costSummary: (days: number | null) => ['costs', 'summary', days] as const,
@@ -286,6 +288,21 @@ export function useSiteQueue(enabled = true) {
     queryFn: () => api<SiteQueue>('site-snapshots/queue'),
     enabled,
     refetchInterval: (q) => (q.state.data && q.state.data.running.length + q.state.data.waiting.length > 0 ? 5_000 : 30_000),
+  });
+}
+
+/** The website the worker is copying, pushing or deploying right now; polls fast while it works or is about to retry. */
+export function useSitePipeline() {
+  return useQuery({
+    queryKey: qk.sitePipeline,
+    queryFn: () => api<SitePipelineStatus>('site-pipeline'),
+    retry: (count, error) => !(error instanceof ApiError && error.status === 404) && count < 2,
+    refetchInterval: (q) => {
+      const current = q.state.data?.current;
+      if (!current) return 30_000;
+      const wait = current.nextAt ? new Date(current.nextAt).getTime() - Date.now() : 0;
+      return wait < 2 * 60_000 ? 5_000 : 60_000;
+    },
   });
 }
 

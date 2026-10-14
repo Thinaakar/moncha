@@ -10,8 +10,8 @@ import {
 } from '../ports';
 import { readSiteFiles, readSiteManifest, retryAfterError, siteName } from './siteGithub';
 
-export const SITE_WORKER_MAX_ATTEMPTS = 6;
-export const SITE_WORKER_BACKOFF_MS = [60_000, 5 * 60_000, 15 * 60_000, 60 * 60_000, 3 * 60 * 60_000];
+export const SITE_WORKER_MAX_ATTEMPTS = 3;
+export const SITE_WORKER_BACKOFF_MS = [60_000, 5 * 60_000];
 /** A deploy still `deploying` after this long belongs to a worker that died; it is taken over. */
 export const SITE_WORKER_STALE_MS = 10 * 60_000;
 /** Cloudflare's per-file limit for Worker static assets. */
@@ -35,8 +35,8 @@ export type SiteWorkerDeployDeps = {
   now?: () => Date;
 };
 
-/** How long a deploy waits when the Cloudflare account has no room for another Worker. */
-export const SITE_WORKER_LIMIT_WAIT_MS = 6 * 60 * 60_000;
+/** How long a deploy waits before checking again whether the Cloudflare account has room for another Worker. */
+export const SITE_WORKER_LIMIT_WAIT_MS = 15 * 60_000;
 
 export type SiteWorkerDeployOutcome =
   | { status: 'deployed'; snapshotId: string; name: string; url: string; files: number }

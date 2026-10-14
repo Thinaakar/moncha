@@ -389,7 +389,7 @@ export interface SiteSnapshotRepo {
    * Atomically takes the next copy whose GitHub push is due (any tenant): `pending` with `githubNextAt`
    * at or before `now`, or `pushing` locked before `staleBefore`. It becomes `pushing` with one more attempt.
    */
-  claimGithubPush(now: Date, staleBefore: Date): Promise<SiteSnapshotListItem | null>;
+  claimGithubPush(now: Date, staleBefore: Date, options?: { id?: string }): Promise<SiteSnapshotListItem | null>;
   /** Queues a push of a done copy now (first push, or again after `failed` or `pushed`). */
   requestGithubPush(tenantId: string, id: string, now: Date): Promise<SiteGithubRequestResult>;
   /**
@@ -397,9 +397,33 @@ export interface SiteSnapshotRepo {
    * With `afterGithub`, a pending deploy is claimed only once the copy's GitHub push is done, so the Worker serves what
    * the repo holds; a stale `deploying` row is still resumed.
    */
-  claimWorkerDeploy(now: Date, staleBefore: Date, options?: { afterGithub?: boolean }): Promise<SiteSnapshotListItem | null>;
+  claimWorkerDeploy(
+    now: Date,
+    staleBefore: Date,
+    options?: { afterGithub?: boolean; id?: string },
+  ): Promise<SiteSnapshotListItem | null>;
   /** Queues a Worker deploy of a done copy now (first deploy, or again after `failed` or `deployed`). */
   requestWorkerDeploy(tenantId: string, id: string, now: Date): Promise<SiteWorkerRequestResult>;
+}
+
+/** The publish steps that follow a copy on this worker: GitHub push and/or Cloudflare Worker deploy. */
+export type SitePipelineSteps = { github: boolean; worker: boolean };
+
+/** Lookups of the website pipeline, which takes one website at a time through copy, GitHub push and Worker deploy. */
+export interface SitePipelineRepo {
+  /** A done copy whose site_snapshot job is still running: the website being published (any tenant). */
+  currentPublish(): Promise<SiteSnapshotListItem | null>;
+  /** A copy that started and has not finished: running, or pending after a failed try (any tenant, oldest first). */
+  inFlightCopy(): Promise<SiteSnapshotListItem | null>;
+  /**
+   * The next done copy that never got through every step (older copies), any tenant. Copies already live but not
+   * pushed come first, then the newest. A copy is skipped when a newer finished copy of the same lead exists.
+   */
+  nextToPublish(steps: SitePipelineSteps): Promise<SiteSnapshotListItem | null>;
+  /** Done copies of the tenant that still need a step, as nextToPublish counts them. */
+  countToPublish(tenantId: string, steps: SitePipelineSteps): Promise<number>;
+  /** Copies of the tenant waiting for their first try. */
+  countWaitingCopies(tenantId: string): Promise<number>;
 }
 
 export type SiteGithubFile = { path: string; bytes: Uint8Array };

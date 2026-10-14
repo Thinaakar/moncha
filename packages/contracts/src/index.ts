@@ -655,6 +655,38 @@ export type SiteQueue = {
   measured: boolean;
 };
 
+export type SitePipelineStep = 'copy' | 'github' | 'deploy';
+
+/** `working` runs now or is about to; `retrying` waits before its next try; `paused` waits for a GitHub or Cloudflare limit. */
+export type SitePipelineState = 'working' | 'retrying' | 'paused';
+
+/**
+ * `GET /api/v1/site-pipeline`: the worker takes one website at a time through copy, GitHub push and Worker deploy,
+ * and starts the next only when it is live or a step gave up.
+ */
+export type SitePipelineStatus = {
+  /** False when the worker cannot copy websites (R2 or the preview secret is missing). */
+  enabled: boolean;
+  steps: { github: boolean; deploy: boolean };
+  /** Null when idle, or busy with another tenant's website. */
+  current: {
+    site: SiteSnapshotSummary;
+    step: SitePipelineStep;
+    state: SitePipelineState;
+    /** Tries of this step so far, the running one included. */
+    attempts: number;
+    maxAttempts: number;
+    /** When the next try starts (retrying or paused), ISO. */
+    nextAt: string | null;
+    /** Last error of this step, `code: message`. */
+    error: string | null;
+  } | null;
+  /** Finished copies still waiting for their GitHub push or Worker deploy (the current website not counted). */
+  toPublish: number;
+  /** Copies waiting for their first try. */
+  waitingCopies: number;
+};
+
 export type SiteAutomationCrawlStatus = 'waiting_audits' | 'queuing' | 'complete';
 
 /** `GET /api/v1/site-automation`. */

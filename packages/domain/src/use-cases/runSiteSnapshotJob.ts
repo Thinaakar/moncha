@@ -24,7 +24,8 @@ import { brandFromEvidence } from '../site/evidence-brand';
 
 export const SITE_JOB_TIMEOUT_MS = 240_000;
 const UPLOAD_CONCURRENCY = 6;
-const RETRY_DELAY_MS = 60_000;
+/** Wait before the 2nd and the 3rd try of a copy. */
+export const SITE_COPY_BACKOFF_MS = [60_000, 5 * 60_000];
 
 /** Capture failures that will not change on a retry. */
 const PERMANENT_FAILURES = new Set([
@@ -48,7 +49,10 @@ export type SiteSnapshotJobDeps = {
   store: SiteStore;
   llmUsage?: LlmUsageRepo;
   maxLlmCallsPerDay?: number;
-  /** When GitHub is configured, a finished copy is queued for a push to its own repo. */
+  /**
+   * When GitHub is configured, a finished copy is queued for a push to its own repo. With GitHub or Cloudflare
+   * configured, the job stays `running` after the copy; the site pipeline finishes it (see sitePipeline.ts).
+   */
   githubEnabled?: boolean;
   /** When Cloudflare is configured, a finished copy is queued for a deploy to its own Worker. */
   workerEnabled?: boolean;
@@ -279,18 +283,21 @@ export async function runSiteSnapshotJob(
         ? { workerStatus: 'pending' as const, workerAttempts: 0, workerNextAt: now(), workerError: null }
         : {}),
     });
-    await finishJob('done', {
-      lastError: null,
-      result: {
-        snapshotId,
-        finalUrl: capture.finalUrl,
-        assetCount: capture.manifest.assets.length,
-        skippedAssetCount: capture.manifest.skipped.length,
-        totalBytes,
-        brandSource: brand.source,
-        warnings: uniqueWarnings.length,
-      },
-    });
+    const result = {
+      snapshotId,
+      finalUrl: capture.finalUrl,
+      assetCount: capture.manifest.assets.length,
+      skippedAssetCount: capture.manifest.skipped.length,
+      totalBytes,
+      brandSource: brand.source,
+      warnings: uniqueWarnings.length,
+    };
+    if (deps.githubEnabled || deps.workerEnabled) {
+      // The job is done when the website is live (or a publish step gave up); no lock, so it is never re-claimed.
+      await deps.jobs.update(tenantId, job.id, { status: 'running', lockedAt: null, lockedBy: null, lastError: null, result });
+    } else {
+      await finishJob('done', { lastError: null, result });
+    }
     deps.logger.info('site_snapshot_done', {
       snapshotId,
       tenantId,
@@ -330,7 +337,9 @@ export async function runSiteSnapshotJob(
         lastError,
         lockedAt: null,
         lockedBy: null,
-        runAfter: new Date(now().getTime() + RETRY_DELAY_MS * job.attempts),
+        runAfter: new Date(
+          now().getTime() + SITE_COPY_BACKOFF_MS[Math.min(Math.max(job.attempts, 1), SITE_COPY_BACKOFF_MS.length) - 1]!,
+        ),
       });
       deps.logger.error('site_snapshot_retry', { snapshotId, reason, detail, attempts: job.attempts });
       return { status: 'retry', snapshotId, reason };

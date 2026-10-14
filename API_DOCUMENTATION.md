@@ -103,6 +103,7 @@ Common error codes:
 | **19** | `/api/v1/site-snapshots/:id/source` | `GET` | **READ** | `source.html` decoded with its charset (View source) |
 | **20** | `/api/v1/site-files/:token/*path` | `GET` | **READ** | Token-gated raw file from the copy (preview iframe) |
 | **21** | `/api/v1/site-snapshots/queue` | `GET` | **READ** | Website copy queue in run order with start estimates |
+| **21a** | `/api/v1/site-pipeline` | `GET` | **READ** | The website being copied, pushed or deployed now; paused or retrying state |
 | **22** | `/api/v1/site-snapshots/:id/cancel` | `POST` | **UPDATE** | Cancels a copy that has not started (signed-in editor) |
 | **23** | `/api/v1/site-automation` | `GET` | **READ** | Copy automation settings and today's count |
 | **24** | `/api/v1/site-automation` | `PUT` | **UPDATE** | Turns copy automation on or off (signed-in editor) |
@@ -887,6 +888,17 @@ curl -O http://127.0.0.1:4000/api/v1/site-files/<token>/source.html?download=1
 `{ running: SiteQueueItem[], waiting: SiteQueueItem[], averageRunMs, measured }`. One copy runs at a time, first in,
 first out. Each item is a summary plus `company`, `position` (1-based, `null` while running), `estimatedAt` (start for
 waiting copies, finish for running ones), `retrying`, `attempts`, `maxAttempts`, `runAfter`, `startedAt`, `lastError`.
+The next copy starts only when the previous website is live or failed (see 21a).
+
+#### 21a. `GET /api/v1/site-pipeline`
+The worker takes one website at a time through copy → GitHub push → Cloudflare Worker deploy, and starts the next
+only when it is live (job `done`, `result.liveUrl`) or a step gave up (job `failed`, `lastError` `GitHub push failed: …`
+or `Deploy failed: …`). Each step gets 3 tries, 1 min then 5 min apart; errors a retry cannot fix fail at once. A GitHub
+rate limit or a full Cloudflare account (`worker_limit_reached`) pauses the whole pipeline on the current website
+without using up a try, and it resumes by itself. Finished copies never pushed or deployed go through the same steps.
+* **`200 OK`** `{ enabled, steps { github, deploy }, current: { site, step: copy|github|deploy,
+  state: working|retrying|paused, attempts, maxAttempts, nextAt, error } | null, toPublish, waitingCopies }`.
+  See `apps/worker/API.md` §36a.
 
 #### 22. `POST /api/v1/site-snapshots/:id/cancel`
 * **Headers**: `Authorization: Bearer <token>` (role `admin` or `operator`).
@@ -939,7 +951,7 @@ With `GITHUB_TOKEN` and `GITHUB_SITES_OWNER` (or the owner of `GITHUB_SITES_REPO
 finished copy by itself to the private repo `{owner}/{siteName}`, creating it when missing (topics `moncha-site` plus
 `auto-copy` or `manual-copy`). Layout: `README.md`, `wrangler.jsonc`, `public/` (the website with all assets) and
 `moncha/` (brand.json, manifest.json, source.html). A GitHub failure never fails the copy; the worker retries after
-1 min, 5 min, 15 min, 1 h and 3 h, then marks the push `failed`. This route queues a push now.
+1 min and 5 min (3 tries), then marks the push `failed` and the website's job `failed`. This route queues a push now.
 * **Headers**: `Authorization: Bearer <token>` (role `admin` or `operator`).
 * **`202 Accepted`** `{ "queued": true }`.
 * **`github` on the summary**: `{ status: pending|pushing|pushed|failed, attempts, maxAttempts, nextAt, commitSha,

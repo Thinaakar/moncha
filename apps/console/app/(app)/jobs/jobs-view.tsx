@@ -19,6 +19,7 @@ import { useUrlState } from '@/lib/use-url-state';
 import { formatBytes, formatDateTime, formatDuration, formatNumber, formatRelative } from '@/lib/format';
 import { OriginBadge } from '@/components/sites/automation';
 import { LiveUrlCell, SitePipelineCell, SitePipelinePanel } from '@/components/jobs/site-pipeline';
+import { SitePipelineBanner } from '@/components/jobs/pipeline-banner';
 import type { Job, JobStatus, JobType, SiteCopyOrigin, SiteDeployFilter, SiteSnapshotJobResult, SiteSnapshotSummary } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
@@ -289,6 +290,8 @@ export function JobsView() {
       />
 
       <WorkerStrip />
+
+      <SitePipelineBanner />
 
       <Card className="overflow-hidden">
         <div className="flex flex-col gap-3 border-b p-4 sm:flex-row sm:items-center">

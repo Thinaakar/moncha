@@ -18,6 +18,7 @@ import { GithubStatusBadge } from '@/components/sites/github-push';
 import { CopyProgressBadge } from '@/components/sites/copy-progress';
 import { LiveWebsiteCell } from '@/components/sites/live-site';
 import { TabBar } from '@/components/sites/tabs';
+import { SitePipelineBanner } from '@/components/jobs/pipeline-banner';
 import { siteFileUrl, useSiteAutomation, useSiteQueue, useSiteSnapshots } from '@/lib/queries';
 import { useUrlState } from '@/lib/use-url-state';
 import { formatBytes, formatDateTime, formatNumber, formatRelative } from '@/lib/format';
@@ -68,6 +69,8 @@ export function SitesView() {
           )
         }
       />
+
+      <SitePipelineBanner />
 
       <TabBar<Tab>
         label="Website copies"

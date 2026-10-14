@@ -78,6 +78,7 @@ copies) were added on 2026-10-08.
 | 34 | GET | `/api/v1/site-snapshots/:id/source` | Read | `source.html` decoded for View source | 200 | SiteSnapshot (+ R2) |
 | 35 | GET | `/api/v1/site-files/:token/*path` | Read | One stored file, token-gated (preview iframe) | 200 | none (R2) |
 | 36 | GET | `/api/v1/site-snapshots/queue` | Read | Website copy queue in run order, with start estimates | 200 | SiteSnapshot, JobRun |
+| 36a | GET | `/api/v1/site-pipeline` | Read | The website being copied, pushed or deployed now, and whether the pipeline is paused | 200 | SiteSnapshot, JobRun |
 | 37 | POST | `/api/v1/site-snapshots/:id/cancel` | Update | Cancel a copy that has not started (editor session) | 200 | SiteSnapshot, JobRun |
 | 38 | GET | `/api/v1/site-automation` | Read | Copy automation settings and today's count | 200 | SiteAutomationSettings, SiteAutomationCrawl, SiteSnapshot |
 | 39 | PUT | `/api/v1/site-automation` | Update | Turn copy automation on or off (editor session) | 200 | SiteAutomationSettings |
@@ -540,6 +541,10 @@ finishedAt, createdAt`. A queued CSV import's `payload.records` (the raw rows) i
 A `site_snapshot` job also has `site`: the copy it produced as a `SiteSnapshotSummary` (same shape as
 `GET /api/v1/site-snapshots` items, including `github` and `deploy` with `status`, `error`, `nextAt` and the
 live `deploy.url`), or `null` when the copy row is gone. Errors are `"code: message"`. Other job types have no `site`.
+
+When GitHub or Cloudflare is configured, a `site_snapshot` job stays `running` after the copy until the website is
+live (`done`, with `result.liveUrl` and `result.githubRepo`) or a publish step gave up (`failed`, with `lastError`
+`GitHub push failed: …` or `Deploy failed: …`). See #36a.
 
 **400** when `type`, `status`, `origin`, `deploy`, `page` or `pageSize` is invalid.
 
@@ -1711,7 +1716,8 @@ as `text/plain`; `?download=1` adds `content-disposition: attachment`.
 ### 36. GET `/api/v1/site-snapshots/queue`
 
 The worker makes one copy at a time and takes the queue first in, first out (`runAfter`, then `createdAt`). A retry
-waits until its `runAfter`.
+waits 1 min, then 5 min (3 tries). The next copy starts only when the previous website is live or failed (#36a), so
+`averageRunMs` includes the GitHub push and Worker deploy.
 
 ```json
 {
@@ -1725,6 +1731,53 @@ waits until its `runAfter`.
 Each item is a summary (#31) plus `company`. `estimatedAt` is the expected finish for running copies and the
 expected start for waiting ones, chained with `averageRunMs` (mean of the last 20 finished copies; 120 s with
 `measured: false` when there are none).
+
+### 36a. GET `/api/v1/site-pipeline`
+
+The worker takes **one website at a time** through three steps: copy, GitHub push (#41), Cloudflare Worker deploy
+(#41c). The next website starts only when the current one is live or one of its steps gave up:
+
+- Each step gets 3 tries, 1 min then 5 min apart. Errors a retry cannot fix fail at once.
+- After the last try the step is `failed`, the website's job is `failed` with the step's error, and the next website starts.
+- When the Worker is deployed, the job is `done` with `result.liveUrl`, and the next website starts.
+- A GitHub rate limit (`github_rate_limited`) or a full Cloudflare account (`worker_limit_reached`) **pauses** the
+  whole pipeline on the current website without using up a try. It resumes by itself (the Worker limit is checked
+  every 15 min).
+- Finished copies never pushed or deployed (backlog) go through the same steps when no new copy is in progress,
+  already-live copies first, then newest first. An older copy of a website that has a newer finished copy is skipped.
+- After a restart the worker resumes at the step the website was on.
+
+**CRUD:** Read. **200 OK**:
+
+```json
+{
+  "enabled": true,
+  "steps": { "github": true, "deploy": true },
+  "current": {
+    "site": { "...summary": "..." },
+    "step": "deploy",
+    "state": "paused",
+    "attempts": 0,
+    "maxAttempts": 3,
+    "nextAt": "2026-10-14T10:15:00.000Z",
+    "error": "worker_limit_reached: The account has 100 of 100 Workers"
+  },
+  "toPublish": 412,
+  "waitingCopies": 3
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `enabled` | The worker can copy websites (R2 and `SITE_PREVIEW_SECRET` set) |
+| `steps` | Which publish steps are configured; a missing one is skipped |
+| `current` | The website in the pipeline, `null` when idle (or busy with another tenant's website). `site` is a summary (#31) plus `company` |
+| `current.step` | `copy`, `github` or `deploy` |
+| `current.state` | `working` (running or about to), `retrying` (waits for `nextAt` after an error), `paused` (waits for a GitHub or Cloudflare limit) |
+| `current.attempts` / `maxAttempts` | Tries of this step so far |
+| `current.error` | Last error of this step, `"code: message"` |
+| `toPublish` | Finished copies still waiting for their push or deploy (the current website not counted) |
+| `waitingCopies` | Copies waiting for their first try |
 
 ### 37. POST `/api/v1/site-snapshots/:id/cancel`
 
@@ -1761,7 +1814,8 @@ R2. The token needs Repository access "All repositories" with Administration: Re
 Contents: Read and write.
 
 A GitHub problem never fails the copy: it stays `done`, `github.error` explains the problem and the worker retries
-after 1 min, 5 min, 15 min, 1 h and 3 h (6 tries), then sets `github.status` to `failed`. This route queues a push
+after 1 min and 5 min (3 tries), then sets `github.status` to `failed` and the website's job to `failed` (see #36a).
+Errors a retry cannot fix (for example `github_repo_taken` or `copy_files_missing`) fail at once. This route queues a push
 right away: the first push of a copy made before GitHub was set up, a retry after `failed`, or a push again.
 
 **Headers:** `authorization: Bearer <token>` (role `admin` or `operator`). **202 Accepted** `{ "queued": true }`.
@@ -1772,7 +1826,7 @@ The summary's `github` object:
 {
   "status": "pushed",
   "attempts": 1,
-  "maxAttempts": 6,
+  "maxAttempts": 3,
   "nextAt": null,
   "commitSha": "4f1c2e9...",
   "commitUrl": "https://github.com/Thinaakar/ja-edu-sg/commit/4f1c2e9...",
@@ -1797,8 +1851,8 @@ The summary's `github` object:
 | 503 | `github_not_configured` | `GITHUB_TOKEN` or the owner missing |
 
 A GitHub rate limit (`github_rate_limited`) does not use up a try: the copy waits until the time GitHub gives
-(`retry-after` or `x-ratelimit-reset`, else 15 min) and the worker starts no GitHub push before then, so creating
-hundreds of repos goes at the pace GitHub allows.
+(`retry-after` or `x-ratelimit-reset`, else 15 min). The whole website pipeline pauses on that website until then
+(#36a), so creating hundreds of repos goes at the pace GitHub allows.
 
 Common `github.error` codes: `github_cannot_create_repo` (token lacks Administration write or All repositories),
 `github_forbidden` (token cannot push), `github_repo_taken` (a repo with that name exists that is not a MonCha
@@ -1846,7 +1900,8 @@ wrangler), tags the Worker `moncha-site` and turns on its workers.dev route. A n
 redeploys the same Worker, so the URL never changes. A Worker with that name that has no `moncha-site` tag is never
 replaced (`worker_name_taken`). Files over 25 MB are skipped (Cloudflare's per-file limit).
 
-Retries work like GitHub pushes (1 min, 5 min, 15 min, 1 h, 3 h; 6 tries); a deploy problem never fails the copy.
+Retries work like GitHub pushes (1 min, 5 min; 3 tries); a deploy problem never fails the copy, but after the last
+try the website's job is `failed` and the pipeline moves on to the next website (#36a).
 This route queues a deploy right away: first deploy of an older copy, a retry, or a redeploy.
 
 When GitHub is configured too, the Worker is deployed only after the copy's GitHub push is done (`github.status`
@@ -1861,7 +1916,7 @@ The summary's `deploy` object (and `siteName`, e.g. `"ja-edu-sg"`):
 {
   "status": "deployed",
   "attempts": 1,
-  "maxAttempts": 6,
+  "maxAttempts": 3,
   "nextAt": null,
   "name": "ja-edu-sg",
   "url": "https://ja-edu-sg.vinothjv4-tech.workers.dev",
@@ -1887,8 +1942,9 @@ Common `deploy.error` codes: `cloudflare_bad_token` (needs Workers Scripts: Edit
 Worker limit: before reading a copy's files, the worker checks whether the deploy creates a new Worker and, if so,
 whether the account already has `CLOUDFLARE_WORKERS_LIMIT` Workers (default 100, Workers Free; set 500 on Workers
 Paid). At the limit, or when Cloudflare itself refuses a new Worker, the deploy stays `pending` with
-`error` `worker_limit_reached: …`, does not use up a try, and is checked again 6 hours later (or right away with this
-route). Redeploys of a website's existing Worker are never blocked.
+`error` `worker_limit_reached: …`, does not use up a try, and is checked again 15 minutes later (or right away with
+this route). Meanwhile the whole website pipeline is paused on that website (#36a): no new copy starts until Workers
+are freed or the limit is raised. Redeploys of a website's existing Worker are never blocked.
 
 Backfill (newest copy per website, from `apps/worker`): `pnpm sites:backfill -- --limit 10` queues them for the
 worker; add `--dry-run` to list them, `--run` to publish from this machine, `--only github|worker`, `--site ja-edu-sg`.

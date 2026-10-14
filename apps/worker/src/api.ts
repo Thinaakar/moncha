@@ -35,6 +35,7 @@ import {
   type SiteDeployCheckResult,
   type SiteGithubCheckResult,
   type SiteManifest,
+  type SitePipelineStatus,
   type SiteQueue,
   type SiteQueueItem,
   type SiteSnapshotDetail,
@@ -96,6 +97,7 @@ import {
   normalizeSiteFilePath,
   cancelSiteSnapshot,
   getSiteAutomationStatus,
+  describeSitePipeline,
   getSiteQueue,
   queueSiteSnapshot,
   SiteAutomationError,
@@ -632,7 +634,7 @@ route('GET', '/api/v1/site-snapshots', async ({ tenantId, url }) => {
 
 // Registered before /site-snapshots/:id so "queue" is not read as an id.
 route('GET', '/api/v1/site-snapshots/queue', async ({ tenantId }) => {
-  const view = await getSiteQueue({ snapshots: siteSnapshots }, { tenantId, slots: siteAgentConfig().concurrency });
+  const view = await getSiteQueue({ snapshots: siteSnapshots }, { tenantId, slots: 1 });
   const toItem = (item: (typeof view.running)[number]): SiteQueueItem => ({
     ...siteSummary(item, null),
     position: item.position,
@@ -649,6 +651,32 @@ route('GET', '/api/v1/site-snapshots/queue', async ({ tenantId }) => {
     waiting: view.waiting.map(toItem),
     averageRunMs: view.averageRunMs,
     measured: view.measured,
+  };
+  return { json };
+});
+
+route('GET', '/api/v1/site-pipeline', async ({ tenantId }) => {
+  const view = await describeSitePipeline(
+    { pipeline: siteSnapshots, jobs, steps: { github: Boolean(siteGithubPublisher()), worker: Boolean(siteWorkerDeployer()) } },
+    { tenantId },
+  );
+  const current = view.current;
+  const json: SitePipelineStatus = {
+    enabled: siteAgentConfig().ready,
+    steps: { github: view.steps.github, deploy: view.steps.worker },
+    current: current
+      ? {
+          site: siteSummary(current.snapshot, null),
+          step: current.step,
+          state: current.state,
+          attempts: current.attempts,
+          maxAttempts: current.maxAttempts,
+          nextAt: current.nextAt?.toISOString() ?? null,
+          error: current.error,
+        }
+      : null,
+    toPublish: view.toPublish,
+    waitingCopies: view.waitingCopies,
   };
   return { json };
 });

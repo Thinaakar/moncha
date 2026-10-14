@@ -28,9 +28,8 @@ import {
   enqueueDueSchedules,
   pushSiteSnapshotToGithub,
   resolveCountry,
-  SITE_GITHUB_STALE_MS,
-  SITE_WORKER_STALE_MS,
   runCountryDiscoveryJob,
+  runSitePipelineTick,
   runSiteSnapshotJob,
   runWebsiteAuditJob,
   sweepAllSiteAutomation,
@@ -84,13 +83,11 @@ const siteCapturer = new MonchaSiteCapturer({ limits: siteAgent.limits });
 const siteBrandExtractor = llm
   ? new GeminiBrandExtractor({ client: llm, model: siteAgent.model, timeoutMs: siteAgent.llmTimeoutMs })
   : null;
-const activeSiteSnapshots = new Set<Promise<void>>();
 const githubPublisher = siteGithubPublisher();
-let activeGithubPush: Promise<void> | null = null;
-/** Set by a GitHub rate limit: no pushes start before then, so the limit is not extended. */
-let githubPausedUntil: Date | null = null;
 const workerDeployer = siteWorkerDeployer();
-let activeWorkerDeploy: Promise<void> | null = null;
+let activePipeline: Promise<void> | null = null;
+/** Last wait logged, so a website waiting for its retry or a limit is logged once rather than every poll. */
+let lastPipelineWait = '';
 const siteSnapshots = new PrismaSiteSnapshotRepository(prisma);
 const siteAutomation = new PrismaSiteAutomationRepository(prisma);
 
@@ -234,19 +231,55 @@ async function runCrawl(job: JobRunRecord) {
 }
 
 /**
- * Up to SITE_CONCURRENCY website copies at a time per worker (default 1, Chromium memory); audits keep running in
- * their own loop. Each poll tops up the free slots, so a finished copy is replaced without waiting for the others.
+ * One website at a time: copy, GitHub push, Cloudflare Worker deploy. The next website starts only when the current one
+ * is live or a step gave up after its tries (see sitePipeline.ts). Audits and crawls keep running in their own loops.
  */
-async function siteTick() {
-  if (!siteAgent.ready || !siteAgent.store || crawlAbort.signal.aborted) return;
-  const free = siteAgent.concurrency - activeSiteSnapshots.size;
-  if (free <= 0) return;
-  const claimed = await withDbRetry(() => jobs.claimJobs(WORKER_ID, free, 'site_snapshot'));
-  for (const job of claimed) startSiteSnapshot(job, siteAgent.store);
+async function pipelineTick() {
+  if (!siteAgent.ready || !siteAgent.store || activePipeline || crawlAbort.signal.aborted) return;
+  const store = siteAgent.store;
+  activePipeline = runSitePipelineTick({
+    pipeline: siteSnapshots,
+    snapshots: siteSnapshots,
+    jobs,
+    claimCopy: async (jobId) => (await withDbRetry(() => jobs.claimJobs(WORKER_ID, 1, 'site_snapshot', { id: jobId })))[0] ?? null,
+    runCopy: (job) => copySite(job, store),
+    push: githubPublisher
+      ? (snapshot) =>
+          pushSiteSnapshotToGithub(
+            {
+              snapshots: siteSnapshots,
+              store,
+              publisher: githubPublisher,
+              logger,
+              liveUrlFor: workerDeployer ? (name) => workerDeployer.urlFor(name) : undefined,
+            },
+            snapshot,
+            crawlAbort.signal,
+          )
+      : undefined,
+    deploy: workerDeployer
+      ? (snapshot) =>
+          deploySiteSnapshotToWorker({ snapshots: siteSnapshots, store, deployer: workerDeployer, logger }, snapshot, crawlAbort.signal)
+      : undefined,
+    logger,
+  })
+    .then((outcome) => {
+      if (outcome.action === 'idle') return;
+      if (outcome.action === 'waiting') {
+        const key = `${outcome.snapshotId}:${outcome.step}:${outcome.until?.toISOString() ?? ''}`;
+        if (key === lastPipelineWait) return;
+        lastPipelineWait = key;
+      }
+      logger.info('site_pipeline_tick', { ...outcome });
+    })
+    .finally(() => {
+      activePipeline = null;
+    });
+  await activePipeline;
 }
 
-function startSiteSnapshot(job: JobRunRecord, store: SiteStore) {
-  const run: Promise<void> = runSiteSnapshotJob(
+function copySite(job: JobRunRecord, store: SiteStore) {
+  return runSiteSnapshotJob(
     {
       jobs,
       snapshots: siteSnapshots,
@@ -265,72 +298,7 @@ function startSiteSnapshot(job: JobRunRecord, store: SiteStore) {
     .then((outcome) => logger.info('site_snapshot_outcome', { jobId: job.id, ...outcome }))
     .catch((error) =>
       logger.error('site_snapshot_error', { jobId: job.id, message: error instanceof Error ? error.message : String(error) }),
-    )
-    .finally(() => {
-      activeSiteSnapshots.delete(run);
-    });
-  activeSiteSnapshots.add(run);
-}
-
-/** Pushes finished copies to their own repos, one at a time; GitHub problems never change a copy's status. */
-async function githubTick() {
-  if (!githubPublisher || !siteAgent.store || activeGithubPush || crawlAbort.signal.aborted) return;
-  const now = new Date();
-  if (githubPausedUntil && now < githubPausedUntil) return;
-  const snapshot = await withDbRetry(() => siteSnapshots.claimGithubPush(now, new Date(now.getTime() - SITE_GITHUB_STALE_MS)));
-  if (!snapshot) return;
-  const store = siteAgent.store;
-  activeGithubPush = pushSiteSnapshotToGithub(
-    {
-      snapshots: siteSnapshots,
-      store,
-      publisher: githubPublisher,
-      logger,
-      liveUrlFor: workerDeployer ? (name) => workerDeployer.urlFor(name) : undefined,
-    },
-    snapshot,
-    crawlAbort.signal,
-  )
-    .then((outcome) => {
-      logger.info('site_github_outcome', { ...outcome });
-      if (outcome.status === 'rate_limited') {
-        githubPausedUntil = outcome.retryAt;
-        logger.info('site_github_paused', { until: outcome.retryAt.toISOString() });
-      }
-    })
-    .catch((error) =>
-      logger.error('site_github_error', { snapshotId: snapshot.id, message: error instanceof Error ? error.message : String(error) }),
-    )
-    .finally(() => {
-      activeGithubPush = null;
-    });
-  await activeGithubPush;
-}
-
-/**
- * Deploys finished copies as their own Cloudflare Workers, one at a time; deploy problems never change a copy's status.
- * With GitHub configured, a copy is deployed only after its push to its repo is done.
- */
-async function workerDeployTick() {
-  if (!workerDeployer || !siteAgent.store || activeWorkerDeploy || crawlAbort.signal.aborted) return;
-  const now = new Date();
-  const snapshot = await withDbRetry(() =>
-    siteSnapshots.claimWorkerDeploy(now, new Date(now.getTime() - SITE_WORKER_STALE_MS), { afterGithub: Boolean(githubPublisher) }),
-  );
-  if (!snapshot) return;
-  activeWorkerDeploy = deploySiteSnapshotToWorker(
-    { snapshots: siteSnapshots, store: siteAgent.store, deployer: workerDeployer, logger },
-    snapshot,
-    crawlAbort.signal,
-  )
-    .then((outcome) => logger.info('site_worker_outcome', { ...outcome }))
-    .catch((error) =>
-      logger.error('site_worker_error', { snapshotId: snapshot.id, message: error instanceof Error ? error.message : String(error) }),
-    )
-    .finally(() => {
-      activeWorkerDeploy = null;
-    });
-  await activeWorkerDeploy;
+    );
 }
 
 async function every(errorEvent: string, ms: number, fn: () => Promise<void>) {
@@ -354,7 +322,7 @@ async function main() {
     render: true,
     siteAgent: siteAgent.ready,
     siteAutoCopy: siteAgent.ready && siteAutoCopyEnabled(),
-    siteConcurrency: siteAgent.concurrency,
+    sitePipeline: 'one website at a time: copy, GitHub push, Worker deploy',
     githubSites: githubPublisher ? `${githubPublisher.owner}/{site}@${githubPublisher.branch}` : false,
     workerSites: Boolean(workerDeployer),
     schedulerTickMs: SCHEDULER_TICK_MS,
@@ -381,7 +349,7 @@ async function main() {
       apiServer.close();
     }
     crawlAbort.abort();
-    const running = [activeCrawl, ...activeSiteSnapshots, activeGithubPush, activeWorkerDeploy].filter(Boolean);
+    const running = [activeCrawl, activePipeline].filter(Boolean);
     if (running.length) {
       await Promise.race([Promise.all(running), new Promise((r) => setTimeout(r, SHUTDOWN_WAIT_MS))]);
     }
@@ -419,9 +387,7 @@ async function main() {
     every('scheduler_tick_error', SCHEDULER_TICK_MS, schedulerTick),
     every('country_tick_error', POLL_MS, countryTick),
     every('csv_tick_error', POLL_MS, csvTick),
-    every('site_tick_error', POLL_MS, siteTick),
-    every('github_tick_error', POLL_MS, githubTick),
-    every('worker_deploy_tick_error', POLL_MS, workerDeployTick),
+    every('site_pipeline_tick_error', POLL_MS, pipelineTick),
   ]);
 }
 
