@@ -483,6 +483,10 @@ Polls the execution state, attempt counter, error messages, and result payload o
 ```
 * **`404 Not Found`**: Job does not exist for this tenant.
 
+A `site_snapshot` job also returns `site`: the website copy it produced (same shape as a `GET /api/v1/site-snapshots` item, with `github` and `deploy` status, errors and the live `deploy.url`), or `null`.
+
+**List**: `GET /api/v1/jobs?page=&pageSize=&type=&status=&origin=&deploy=`. `deploy` (website copy jobs only) is one of `live`, `in_progress`, `problem`, `not_deployed` and filters by where the copy → GitHub push → Worker deploy pipeline stands. List items carry the same `site` field.
+
 #### cURL Example
 ```bash
 curl -X GET http://127.0.0.1:4000/api/v1/jobs/cm1s9job0000xyz123def456 \

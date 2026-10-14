@@ -168,6 +168,12 @@ export const jobStatusSchema = z.enum(['pending', 'running', 'done', 'failed']);
 /** Who started a website copy: by hand from the console, or the copy automation after a crawl. */
 export const siteCopyOriginSchema = z.enum(['manual', 'auto']);
 
+/**
+ * Where a website copy is on the way to its live URL: `live` (deployed), `problem` (a step failed or is retrying
+ * after an error), `in_progress` (copying, pushing or deploying), `not_deployed` (copy done, never deployed).
+ */
+export const siteDeployFilterSchema = z.enum(['live', 'in_progress', 'problem', 'not_deployed']);
+
 export const jobListQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(25),
@@ -175,6 +181,8 @@ export const jobListQuerySchema = z.object({
   status: jobStatusSchema.optional(),
   /** Website copy jobs only. */
   origin: siteCopyOriginSchema.optional(),
+  /** Website copy jobs only. */
+  deploy: siteDeployFilterSchema.optional(),
 });
 
 export const enqueueAuditSchema = z.object({
@@ -371,6 +379,7 @@ export type LeadListQueryInput = z.infer<typeof leadListQuerySchema>;
 export type JobType = z.infer<typeof jobTypeSchema>;
 export type JobStatus = z.infer<typeof jobStatusSchema>;
 export type JobListQuery = z.infer<typeof jobListQuerySchema>;
+export type SiteDeployFilter = z.infer<typeof siteDeployFilterSchema>;
 export type ResolveReviewInput = z.infer<typeof resolveReviewSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
 export type RegisterInput = z.infer<typeof registerSchema>;

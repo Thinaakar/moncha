@@ -49,6 +49,24 @@ export function mapJob(row: {
   };
 }
 
+const SITE_LIVE = Prisma.sql`(s."workerStatus" = 'deployed')`;
+/** A step stopped, or waits to retry after an error. */
+const SITE_PROBLEM = Prisma.sql`(
+  s.status = 'failed'
+  OR (s.status IN ('pending', 'running') AND s."failureReason" IS NOT NULL)
+  OR s."githubStatus" = 'failed' OR (s."githubStatus" = 'pending' AND s."githubError" IS NOT NULL)
+  OR s."workerStatus" = 'failed' OR (s."workerStatus" = 'pending' AND s."workerError" IS NOT NULL)
+)`;
+const SITE_ACTIVE = Prisma.sql`(
+  s.status IN ('pending', 'running') OR s."githubStatus" IN ('pending', 'pushing') OR s."workerStatus" IN ('pending', 'deploying')
+)`;
+const DEPLOY_FILTERS = {
+  live: SITE_LIVE,
+  problem: Prisma.sql`${SITE_LIVE} IS NOT TRUE AND ${SITE_PROBLEM} IS TRUE`,
+  in_progress: Prisma.sql`${SITE_LIVE} IS NOT TRUE AND ${SITE_PROBLEM} IS NOT TRUE AND ${SITE_ACTIVE} IS TRUE`,
+  not_deployed: Prisma.sql`s.status = 'done' AND s."workerStatus" IS NULL AND ${SITE_PROBLEM} IS NOT TRUE AND ${SITE_ACTIVE} IS NOT TRUE`,
+} as const;
+
 export class PrismaJobRunRepository implements JobRepo {
   constructor(private db: PrismaClient) {}
 
@@ -111,6 +129,8 @@ export class PrismaJobRunRepository implements JobRepo {
       status?: JobRunRecord['status'];
       /** Website copies only: who started them. Copies made before automation existed count as manual. */
       origin?: 'auto' | 'manual';
+      /** Website copies only: where the copy is on the way to its live URL (see `siteDeployFilterSchema`). */
+      deploy?: 'live' | 'in_progress' | 'problem' | 'not_deployed';
     },
   ) {
     const page = Math.max(1, Math.floor(query.page));
@@ -119,6 +139,9 @@ export class PrismaJobRunRepository implements JobRepo {
     const statusFilter = query.status ? Prisma.sql`AND status = ${query.status}::"JobStatus"` : Prisma.empty;
     const originFilter = query.origin
       ? Prisma.sql`AND type = 'site_snapshot' AND COALESCE(payload->>'origin', 'manual') = ${query.origin}`
+      : Prisma.empty;
+    const deployFilter = query.deploy
+      ? Prisma.sql`AND EXISTS (SELECT 1 FROM "SiteSnapshot" s WHERE s."jobId" = "JobRun".id AND ${DEPLOY_FILTERS[query.deploy]})`
       : Prisma.empty;
     const [rows, counted] = await Promise.all([
       this.db.$queryRaw<
@@ -140,14 +163,14 @@ export class PrismaJobRunRepository implements JobRepo {
         SELECT id, type, status, payload - 'records' AS payload, result, attempts, "maxAttempts",
                "runAfter", "lastError", "startedAt", "finishedAt", "createdAt"
         FROM "JobRun"
-        WHERE "tenantId" = ${tenantId} ${typeFilter} ${statusFilter} ${originFilter}
+        WHERE "tenantId" = ${tenantId} ${typeFilter} ${statusFilter} ${originFilter} ${deployFilter}
         ORDER BY "createdAt" DESC, id DESC
         OFFSET ${(page - 1) * pageSize}
         LIMIT ${pageSize}
       `,
       this.db.$queryRaw<Array<{ n: number }>>`
         SELECT count(*)::int AS n FROM "JobRun"
-        WHERE "tenantId" = ${tenantId} ${typeFilter} ${statusFilter} ${originFilter}
+        WHERE "tenantId" = ${tenantId} ${typeFilter} ${statusFilter} ${originFilter} ${deployFilter}
       `,
     ]);
     const total = Number(counted[0]?.n ?? 0);

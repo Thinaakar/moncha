@@ -275,15 +275,29 @@ route('GET', '/api/v1/discovery/options', async () => ({
   },
 }));
 
+/** Adds `site` (the copy's summary: GitHub push, Worker deploy, live URL, progress) to website copy jobs. */
+async function withSiteCopies<T extends { id: string; type: string }>(tenantId: string, items: T[]) {
+  const ids = items.filter((j) => j.type === 'site_snapshot').map((j) => j.id);
+  if (!ids.length) return items;
+  const byJob = new Map((await siteSnapshots.listByJobIds(tenantId, ids)).map((s) => [s.jobId, s]));
+  return items.map((j) => {
+    if (j.type !== 'site_snapshot') return j;
+    const snapshot = byJob.get(j.id);
+    return { ...j, site: snapshot ? siteSummary(snapshot, null) : null };
+  });
+}
+
 route('GET', '/api/v1/jobs', async ({ tenantId, url }) => {
-  const q = jobListQuerySchema.parse(query(url, 'page', 'pageSize', 'type', 'status', 'origin'));
-  return { json: await jobs.listPage(tenantId, q) };
+  const q = jobListQuerySchema.parse(query(url, 'page', 'pageSize', 'type', 'status', 'origin', 'deploy'));
+  const page = await jobs.listPage(tenantId, q);
+  return { json: { ...page, items: await withSiteCopies(tenantId, page.items) } };
 });
 
 route('GET', '/api/v1/jobs/:id', async ({ tenantId, params }) => {
   const job = await jobs.get(tenantId, params.id!);
   if (!job) throw new HttpError(404, 'not_found', 'Job not found');
-  return { json: job };
+  const [json] = await withSiteCopies(tenantId, [job]);
+  return { json };
 });
 
 // Leads

@@ -22,6 +22,7 @@ import type {
   SiteAutomationState,
   SiteAutomationUpdate,
   SiteCopyOrigin,
+  SiteDeployFilter,
   SiteQueue,
   SiteSnapshotDetail,
   SiteSnapshotQueued,
@@ -128,14 +129,35 @@ export function useReviews(params: ReviewListParams) {
   });
 }
 
-export type JobListParams = { page: number; pageSize: number; type?: JobType; status?: JobStatus; origin?: SiteCopyOrigin };
+export type JobListParams = {
+  page: number;
+  pageSize: number;
+  type?: JobType;
+  status?: JobStatus;
+  origin?: SiteCopyOrigin;
+  deploy?: SiteDeployFilter;
+};
 
 export function useJobs(params: JobListParams) {
   return useQuery({
     queryKey: qk.jobs(params),
     queryFn: () => api<Paginated<Job>>('jobs', { query: params }),
     placeholderData: keepPreviousData,
-    refetchInterval: (q) => (q.state.data?.items.some((j) => !isTerminal(j.status)) ? 5_000 : 30_000),
+    refetchInterval: (q) => {
+      const items = q.state.data?.items;
+      const sites = items?.flatMap((j) => (j.site ? [j.site] : []));
+      return items?.some((j) => !isTerminal(j.status)) || anyPublishing(sites) ? 5_000 : 30_000;
+    },
+  });
+}
+
+/** How many website copy jobs are in one deploy state (for the filter chips). */
+export function useJobDeployCount(deploy: SiteDeployFilter, enabled: boolean) {
+  return useQuery({
+    queryKey: qk.jobs({ countOf: deploy }),
+    queryFn: async () => (await api<Paginated<Job>>('jobs', { query: { page: 1, pageSize: 1, type: 'site_snapshot', deploy } })).total,
+    enabled,
+    refetchInterval: 30_000,
   });
 }
 
@@ -229,7 +251,7 @@ export function useSiteSnapshot(id: string) {
 export function useGithubPushSiteSnapshot() {
   return useApiMutation(
     (id: string) => api<{ queued: true }>(`site-snapshots/${id}/github-push`, { method: 'POST' }),
-    [qk.sites],
+    [qk.sites, ['jobs']],
   );
 }
 
@@ -237,7 +259,7 @@ export function useGithubPushSiteSnapshot() {
 export function useDeploySiteSnapshot() {
   return useApiMutation(
     (id: string) => api<{ queued: true }>(`site-snapshots/${id}/deploy`, { method: 'POST' }),
-    [qk.sites],
+    [qk.sites, ['jobs']],
   );
 }
 

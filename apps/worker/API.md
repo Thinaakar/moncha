@@ -521,13 +521,27 @@ curl -X POST https://moncha-backend.vinothjv4-tech.workers.dev/api/v1/discovery/
 | `type` | string | all | `country_discovery`, `website_audit`, `csv_import`, `places_discovery`, `site_snapshot` |
 | `status` | string | all | `pending`, `running`, `done`, `failed` |
 | `origin` | string | all | `auto` or `manual`; returns website copy jobs only. Copies without `payload.origin` count as `manual` |
+| `deploy` | string | all | Website copy jobs only, by where the whole pipeline (copy, GitHub push, Worker deploy) stands. See below |
+
+`deploy` buckets (each website copy job lands in exactly one):
+
+| Value | Meaning |
+|---|---|
+| `live` | The Worker is deployed (`workerStatus = deployed`) |
+| `problem` | Not live, and the copy failed, or the GitHub push or Worker deploy failed or is retrying after an error |
+| `in_progress` | Not live, no problem, and the copy, push or deploy is still queued or running |
+| `not_deployed` | The copy is done but a Worker deploy was never queued |
 
 **200 OK** `{ "items": Job[], "total": 2, "page": 1, "pageSize": 25, "totalPages": 1 }`
 
 Each item has `id, type, status, payload, result, attempts, maxAttempts, runAfter, lastError, startedAt,
 finishedAt, createdAt`. A queued CSV import's `payload.records` (the raw rows) is left out to keep the list small.
 
-**400** when `type`, `status`, `page` or `pageSize` is invalid.
+A `site_snapshot` job also has `site`: the copy it produced as a `SiteSnapshotSummary` (same shape as
+`GET /api/v1/site-snapshots` items, including `github` and `deploy` with `status`, `error`, `nextAt` and the
+live `deploy.url`), or `null` when the copy row is gone. Errors are `"code: message"`. Other job types have no `site`.
+
+**400** when `type`, `status`, `origin`, `deploy`, `page` or `pageSize` is invalid.
 
 ### 10. GET `/api/v1/jobs/:id`
 

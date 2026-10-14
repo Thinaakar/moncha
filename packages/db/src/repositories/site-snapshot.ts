@@ -158,6 +158,13 @@ export class PrismaSiteSnapshotRepository implements SiteSnapshotRepo {
     return row ? mapSnapshot(row) : null;
   }
 
+  /** Copies made by these site_snapshot jobs (one copy per job). */
+  async listByJobIds(tenantId: string, jobIds: string[]) {
+    if (!jobIds.length) return [];
+    const rows = await this.db.siteSnapshot.findMany({ where: { tenantId, jobId: { in: jobIds } }, include: companySelect });
+    return rows.map(mapListItem);
+  }
+
   async listForLead(tenantId: string, leadId: string, limit: number) {
     const rows = await this.db.siteSnapshot.findMany({
       where: { tenantId, leadId },

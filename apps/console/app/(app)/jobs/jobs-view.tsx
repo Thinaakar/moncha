@@ -14,12 +14,20 @@ import { Pagination } from '@/components/app/pagination';
 import { EmptyState, ErrorState, InlineAlert, TableSkeleton } from '@/components/app/states';
 import { JOB_TYPES, JobStatusBadge, jobTypeLabel } from '@/components/app/status';
 import { CopyButton, DetailRow, JsonView } from '@/components/app/widgets';
-import { useJob, useJobs, useWorkerHealth } from '@/lib/queries';
+import { useJob, useJobDeployCount, useJobs, useSiteSnapshot, useWorkerHealth } from '@/lib/queries';
 import { useUrlState } from '@/lib/use-url-state';
 import { formatBytes, formatDateTime, formatDuration, formatNumber, formatRelative } from '@/lib/format';
 import { OriginBadge } from '@/components/sites/automation';
-import type { Job, JobStatus, JobType, SiteCopyOrigin, SiteSnapshotJobResult } from '@/lib/types';
+import { LiveUrlCell, SitePipelineCell, SitePipelinePanel } from '@/components/jobs/site-pipeline';
+import type { Job, JobStatus, JobType, SiteCopyOrigin, SiteDeployFilter, SiteSnapshotJobResult, SiteSnapshotSummary } from '@/lib/types';
 import { cn } from '@/lib/utils';
+
+const DEPLOY_FILTERS: Array<{ value: SiteDeployFilter; label: string; dot: string; hint: string }> = [
+  { value: 'live', label: 'Live', dot: 'bg-success', hint: 'Deployed to their own Worker URL' },
+  { value: 'in_progress', label: 'In progress', dot: 'bg-info', hint: 'Copying, pushing to GitHub or deploying' },
+  { value: 'problem', label: 'Problems', dot: 'bg-destructive', hint: 'A step failed or is retrying after an error' },
+  { value: 'not_deployed', label: 'Not deployed', dot: 'bg-muted-foreground/50', hint: 'Copy finished but never deployed' },
+];
 
 const STATUSES: Array<{ value: JobStatus; label: string }> = [
   { value: 'pending', label: 'Pending' },
@@ -88,6 +96,68 @@ function SiteSnapshotSummary({ result }: { result: SiteSnapshotJobResult }) {
   );
 }
 
+function DeployChip({
+  filter,
+  active,
+  onSelect,
+}: {
+  filter: (typeof DEPLOY_FILTERS)[number];
+  active: boolean;
+  onSelect: () => void;
+}) {
+  const { data: count } = useJobDeployCount(filter.value, true);
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      title={filter.hint}
+      className={cn(
+        'inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium transition',
+        active ? 'border-primary bg-primary/10 text-primary' : 'bg-background text-muted-foreground hover:border-primary/40 hover:text-foreground',
+      )}
+    >
+      <span className={cn('size-2 rounded-full', filter.dot)} />
+      {filter.label}
+      <span className="tabular-nums text-foreground">{count === undefined ? '…' : formatNumber(count)}</span>
+    </button>
+  );
+}
+
+/** Website copy jobs by where they are on the way to a live URL. */
+function DeployChips({ value, onChange }: { value: SiteDeployFilter | undefined; onChange: (v: SiteDeployFilter | null) => void }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2 border-b bg-muted/20 px-4 py-3">
+      <span className="mr-1 text-xs text-muted-foreground">Deployment</span>
+      <button
+        type="button"
+        onClick={() => onChange(null)}
+        className={cn(
+          'rounded-full border px-3 py-1 text-xs font-medium transition',
+          !value ? 'border-primary bg-primary/10 text-primary' : 'bg-background text-muted-foreground hover:text-foreground',
+        )}
+      >
+        All
+      </button>
+      {DEPLOY_FILTERS.map((f) => (
+        <DeployChip key={f.value} filter={f} active={value === f.value} onSelect={() => onChange(value === f.value ? null : f.value)} />
+      ))}
+    </div>
+  );
+}
+
+/** The copy's own detail (fresher, plus whether GitHub and Cloudflare are set up), falling back to the job's copy. */
+function JobSiteSection({ snapshotId, fallback }: { snapshotId: string; fallback: SiteSnapshotSummary | null | undefined }) {
+  const { data } = useSiteSnapshot(snapshotId);
+  const site = data ?? fallback;
+  if (!site) return null;
+  return (
+    <div className="space-y-3">
+      <h3 className="text-sm font-semibold">Website</h3>
+      <SitePipelinePanel site={site} detail={data} />
+    </div>
+  );
+}
+
 function WorkerStrip() {
   const { data } = useWorkerHealth();
   if (!data) return null;
@@ -115,6 +185,7 @@ function WorkerStrip() {
 function JobDetail({ id, onClose }: { id: string; onClose: () => void }) {
   const { data: job, error, isLoading } = useJob(id);
   const target = job ? jobTarget(job) : null;
+  const snapshotId = job?.type === 'site_snapshot' ? (job.site?.id ?? str(job.payload?.snapshotId)) : null;
   return (
     <SheetContent side="right" className="flex w-full flex-col gap-0 p-0 sm:max-w-xl">
       <div className="flex items-start justify-between gap-3 border-b px-6 py-5">
@@ -155,6 +226,8 @@ function JobDetail({ id, onClose }: { id: string; onClose: () => void }) {
                 <span className="break-words">{job.lastError}</span>
               </InlineAlert>
             )}
+            {snapshotId && <JobSiteSection snapshotId={snapshotId} fallback={job.site} />}
+            {snapshotId && <Separator />}
             <dl className="divide-y">
               <DetailRow label="Target">
                 {target?.href ? (
@@ -202,10 +275,11 @@ export function JobsView() {
   const type = (url.get('type') || undefined) as JobType | undefined;
   const status = (url.get('status') || undefined) as JobStatus | undefined;
   const origin = type === 'site_snapshot' ? ((url.get('origin') || undefined) as SiteCopyOrigin | undefined) : undefined;
+  const deploy = type === 'site_snapshot' ? ((url.get('deploy') || undefined) as SiteDeployFilter | undefined) : undefined;
   const selected = url.get('job') || null;
-  const jobs = useJobs({ page, pageSize, type, status, origin });
-  const filtered = Boolean(type || status || origin);
-  const clear = () => url.set({ type: null, status: null, origin: null }, { resetPage: true });
+  const jobs = useJobs({ page, pageSize, type, status, origin, deploy });
+  const filtered = Boolean(type || status || origin || deploy);
+  const clear = () => url.set({ type: null, status: null, origin: null, deploy: null }, { resetPage: true });
 
   return (
     <div>
@@ -220,7 +294,7 @@ export function JobsView() {
         <div className="flex flex-col gap-3 border-b p-4 sm:flex-row sm:items-center">
           <Select
             value={type ?? 'any'}
-            onValueChange={(v) => url.set({ type: v === 'any' ? null : v, origin: null }, { resetPage: true })}
+            onValueChange={(v) => url.set({ type: v === 'any' ? null : v, origin: null, deploy: null }, { resetPage: true })}
           >
             <SelectTrigger className="sm:w-52">
               <SelectValue placeholder="Type" />
@@ -269,10 +343,12 @@ export function JobsView() {
           </span>
         </div>
 
+        {type === 'site_snapshot' && <DeployChips value={deploy} onChange={(v) => url.set({ deploy: v }, { resetPage: true })} />}
+
         {jobs.error ? (
           <ErrorState error={jobs.error} onRetry={() => jobs.refetch()} />
         ) : jobs.isLoading || !jobs.data ? (
-          <TableSkeleton rows={8} columns={6} />
+          <TableSkeleton rows={8} columns={7} />
         ) : jobs.data.items.length === 0 ? (
           <EmptyState
             icon={filtered ? ListChecks : Cpu}
@@ -302,6 +378,7 @@ export function JobsView() {
                   <TableHead>Type</TableHead>
                   <TableHead>Target</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead>Live website</TableHead>
                   <TableHead className="text-right">Attempts</TableHead>
                   <TableHead>Created</TableHead>
                   <TableHead>Duration</TableHead>
@@ -322,8 +399,22 @@ export function JobsView() {
                       </span>
                     </TableCell>
                     <TableCell className="max-w-[280px] truncate text-muted-foreground">{jobTarget(job).text}</TableCell>
-                    <TableCell>
-                      <JobStatusBadge status={job.status} />
+                    <TableCell className="align-top">
+                      {job.site ? (
+                        <SitePipelineCell site={job.site} />
+                      ) : (
+                        <div className="space-y-1">
+                          <JobStatusBadge status={job.status} />
+                          {job.lastError && job.status === 'failed' && (
+                            <p className="max-w-64 truncate text-xs text-destructive" title={job.lastError}>
+                              {job.lastError}
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </TableCell>
+                    <TableCell className="align-top">
+                      {job.type === 'site_snapshot' ? <LiveUrlCell site={job.site} /> : <span className="text-xs text-muted-foreground">—</span>}
                     </TableCell>
                     <TableCell className="text-right tabular-nums text-muted-foreground">
                       {job.attempts}/{job.maxAttempts}

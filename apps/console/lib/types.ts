@@ -25,6 +25,7 @@ import type {
   SiteCopyProgress,
   SiteCopyStep,
   SiteCopyStepState,
+  SiteDeployFilter,
   SiteGithubPush,
   SiteGithubStatus,
   SiteManifest,
@@ -55,6 +56,7 @@ export type {
   SiteCopyProgress,
   SiteCopyStep,
   SiteCopyStepState,
+  SiteDeployFilter,
   SiteGithubPush,
   SiteGithubStatus,
   SiteManifest,
@@ -218,6 +220,8 @@ export type Job = {
   startedAt: string | null;
   finishedAt: string | null;
   createdAt: string;
+  /** Website copy jobs: the copy with its GitHub push, Worker deploy and live URL. Older API versions omit it. */
+  site?: SiteSnapshotSummary | null;
 };
 
 export type CountryDiscoveryResult = {
