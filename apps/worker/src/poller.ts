@@ -58,6 +58,11 @@ const CRAWL_BUSY_RETRY_MS = 5 * 60_000;
 const SHUTDOWN_WAIT_MS = 120_000;
 /** Set in hosted containers (Cloudflare) so the platform can see the process is up. */
 const HEALTH_PORT = Number(process.env.HEALTH_PORT || 0);
+/**
+ * false = standby: serve the API only and run no background loops (jobs, schedules, crawls, website pipeline, heartbeat),
+ * so a second host can run against the same database while another worker still owns the jobs.
+ */
+const JOBS_ENABLED = process.env.WORKER_JOBS_ENABLED?.trim().toLowerCase() !== 'false';
 const STARTED_AT = new Date();
 
 const logger = createConsoleLogger();
@@ -317,6 +322,7 @@ async function every(errorEvent: string, ms: number, fn: () => Promise<void>) {
 async function main() {
   logger.info('worker_started', {
     workerId: WORKER_ID,
+    jobs: JOBS_ENABLED ? 'enabled' : 'standby (API only)',
     concurrency: CONCURRENCY,
     llm: Boolean(llm),
     render: true,
@@ -328,12 +334,12 @@ async function main() {
     schedulerTickMs: SCHEDULER_TICK_MS,
     ...discoveryBudget(),
   });
-  if (githubPublisher?.check) {
+  if (JOBS_ENABLED && githubPublisher?.check) {
     void githubPublisher.check().then((check) =>
       check.error ? logger.error('site_github_check', { ...check }) : logger.info('site_github_check', { ...check }),
     );
   }
-  if (workerDeployer?.check) {
+  if (JOBS_ENABLED && workerDeployer?.check) {
     void workerDeployer.check().then((check) =>
       check.error ? logger.error('site_worker_check', { ...check }) : logger.info('site_worker_check', { ...check }),
     );
@@ -375,6 +381,11 @@ async function main() {
     apiServer.listen(LISTEN_PORT, () => {
       logger.info('worker_api_listening', { port: LISTEN_PORT, workerId: WORKER_ID });
     });
+  }
+
+  if (!JOBS_ENABLED) {
+    if (!apiServer) logger.error('worker_standby_without_api', { workerId: WORKER_ID });
+    return;
   }
 
   await heartbeats

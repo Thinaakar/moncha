@@ -1,6 +1,7 @@
 import 'server-only';
 import { cookies } from 'next/headers';
 import type { User } from '@/lib/types';
+import { backendFetch } from './backend';
 import { backendConfig, backendHeaders, SESSION_COOKIE } from './config';
 
 export async function sessionToken() {
@@ -17,7 +18,7 @@ export async function getSession(): Promise<SessionState> {
   const token = await sessionToken();
   if (!token) return { status: 'unauthenticated' };
   try {
-    const res = await fetch(`${backendConfig().baseUrl}/api/v1/auth/me`, {
+    const res = await backendFetch(`${backendConfig().baseUrl}/api/v1/auth/me`, {
       headers: backendHeaders(token),
       cache: 'no-store',
       signal: AbortSignal.timeout(8_000),

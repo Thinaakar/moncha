@@ -1,0 +1,23 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  // The console on Cloudflare Workers (OpenNext). Build with `pnpm cf:build`, deploy with `pnpm cf:deploy`
+  // (Linux or WSL; the GitHub workflow .github/workflows/deploy-console.yml does both).
+  "name": "moncha-console",
+  "account_id": "e390359f1a93734c8f7faa10732501c6",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-09-29",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "workers_dev": true,
+  "observability": { "enabled": true },
+  "assets": { "directory": ".open-next/assets", "binding": "ASSETS" },
+  "services": [
+    { "binding": "WORKER_SELF_REFERENCE", "service": "moncha-console" },
+    // The backend Worker, called directly instead of over the public internet (see lib/server/backend.ts).
+    { "binding": "BACKEND", "service": "moncha-backend" }
+  ],
+  // WORKER_API_KEY (only if the backend sets one) goes in with `wrangler secret put`.
+  "vars": {
+    "BACKEND_URL": "https://moncha-backend.vinothjv4-tech.workers.dev",
+    "TENANT_ID": "tenant_moncha_internal"
+  }
+}

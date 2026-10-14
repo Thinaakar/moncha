@@ -6,10 +6,20 @@ interface Env {
   DATABASE_URL?: string;
   DEFAULT_TENANT_ID?: string;
   WORKER_API_KEY?: string;
+  WORKER_JOBS_ENABLED?: string;
   [key: string]: unknown;
 }
 
 const INSTANCE = 'backend';
+const JOBS_MODE_KEY = 'jobsMode';
+
+/**
+ * Background jobs run only when the WORKER_JOBS_ENABLED secret is "true". Otherwise the container serves the API in
+ * standby, so it never processes jobs while another host (Railway) still runs the poller on the same database.
+ */
+function jobsMode(env: Env): 'true' | 'false' {
+  return env.WORKER_JOBS_ENABLED?.trim().toLowerCase() === 'true' ? 'true' : 'false';
+}
 
 /** Every string var and secret on the Worker is handed to the container as an env var. */
 function containerEnv(env: Env): Record<string, string> {
@@ -17,6 +27,7 @@ function containerEnv(env: Env): Record<string, string> {
   for (const [key, value] of Object.entries(env)) {
     if (typeof value === 'string') out[key] = value;
   }
+  out.WORKER_JOBS_ENABLED = jobsMode(env);
   return out;
 }
 
@@ -24,10 +35,35 @@ function containerEnv(env: Env): Record<string, string> {
 export class BackendWorker extends Container<Env> {
   defaultPort = 8080;
   sleepAfter = '1h';
+  private readonly mode: 'true' | 'false';
 
   constructor(ctx: DurableObjectState<{}>, env: Env) {
     super(ctx, env);
+    this.mode = jobsMode(env);
     this.envVars = containerEnv(env);
+  }
+
+  /**
+   * Starts the container. A running container keeps the env it started with (changing a secret does not restart it),
+   * so one started in the other jobs mode is stopped gracefully first; the next cron run starts it in the new mode.
+   */
+  async ensureStarted(): Promise<'running' | 'restarting'> {
+    const state = await this.getState();
+    const up = state.status === 'running' || state.status === 'healthy';
+    const startedWith = await this.ctx.storage.get<string>(JOBS_MODE_KEY);
+    if (up && startedWith !== this.mode) {
+      console.log(JSON.stringify({ event: 'backend_container_mode_change', from: startedWith ?? null, to: this.mode }));
+      await this.stop();
+      return 'restarting';
+    }
+    if (state.status === 'stopping') return 'restarting';
+    await this.startAndWaitForPorts();
+    return 'running';
+  }
+
+  override async onStart(): Promise<void> {
+    await this.ctx.storage.put(JOBS_MODE_KEY, this.mode);
+    console.log(JSON.stringify({ event: 'backend_container_started', jobs: this.mode === 'true' ? 'enabled' : 'standby' }));
   }
 
   /** The worker polls the database and gets no inbound traffic, so it must not stop when idle. */
@@ -196,7 +232,11 @@ export default {
   /** Cron: (re)start the container if a deploy, crash or host restart stopped it. */
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     if (env.BACKEND) {
-      ctx.waitUntil(backend(env).startAndWaitForPorts().catch(() => undefined));
+      ctx.waitUntil(
+        backend(env)
+          .ensureStarted()
+          .catch((error) => console.log(JSON.stringify({ event: 'backend_container_start_failed', message: String(error) }))),
+      );
     }
   },
 } satisfies ExportedHandler<Env>;

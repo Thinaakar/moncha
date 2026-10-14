@@ -1,6 +1,20 @@
 import 'server-only';
+import { getCloudflareContext } from '@opennextjs/cloudflare';
 import { NextResponse } from 'next/server';
 import { backendConfig, backendHeaders } from './config';
+
+type Fetcher = { fetch: typeof fetch };
+
+/** On Cloudflare the backend Worker is the BACKEND service binding; elsewhere (Railway, local dev) a plain fetch. */
+export function backendFetch(url: string, init: RequestInit): Promise<Response> {
+  let binding: Fetcher | undefined;
+  try {
+    binding = (getCloudflareContext().env as { BACKEND?: Fetcher }).BACKEND;
+  } catch {
+    binding = undefined;
+  }
+  return binding ? binding.fetch(url, init) : fetch(url, init);
+}
 
 export function errorResponse(status: number, code: string, message: string) {
   return NextResponse.json({ error: { code, message } }, { status });
@@ -15,7 +29,7 @@ export async function streamBackend(path: string, init: { timeoutMs?: number; to
   headers.set('accept', '*/*');
   const started = Date.now();
   try {
-    return await fetch(`${backendConfig().baseUrl}${path}`, {
+    return await backendFetch(`${backendConfig().baseUrl}${path}`, {
       headers,
       cache: 'no-store',
       signal: AbortSignal.timeout(init.timeoutMs ?? 60_000),
@@ -42,7 +56,7 @@ export async function callBackend(
   const route = path.split('?')[0];
   const started = Date.now();
   try {
-    const res = await fetch(`${backendConfig().baseUrl}${path}`, {
+    const res = await backendFetch(`${backendConfig().baseUrl}${path}`, {
       method,
       headers,
       body: init.body ?? undefined,

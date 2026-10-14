@@ -1,0 +1,76 @@
+# Deploys apps/worker (moncha-backend Worker + BackendWorker container) to Cloudflare.
+# Needs the repo secret CLOUDFLARE_API_TOKEN (Workers Scripts, Containers and Durable Objects edit on the
+# account in apps/worker/wrangler.jsonc). App secrets live on the Worker (`wrangler secret put`), not here.
+name: Deploy backend (Cloudflare)
+
+on:
+  push:
+    branches: [Backend]
+    paths:
+      - apps/worker/**
+      - packages/**
+      - pnpm-lock.yaml
+      - .dockerignore
+      - .github/workflows/deploy-backend.yml
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-backend
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.token.outputs.ready }}
+    steps:
+      - id: token
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -n "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Repo secret CLOUDFLARE_API_TOKEN is not set, so the backend was not deployed."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  deploy:
+    needs: check
+    if: needs.check.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile --filter "@moncha/worker..."
+
+      - name: Typecheck
+        run: |
+          pnpm --filter @moncha/db exec prisma generate
+          pnpm --filter @moncha/worker typecheck
+          pnpm --filter @moncha/worker cf:typecheck
+
+      # Builds apps/worker/Dockerfile on the runner, pushes it to Cloudflare's registry and rolls the container out.
+      - name: Deploy
+        working-directory: apps/worker
+        run: pnpm exec wrangler deploy
+
+      - name: Health check
+        run: |
+          for i in $(seq 1 12); do
+            if curl -fsS https://moncha-backend.vinothjv4-tech.workers.dev/health; then exit 0; fi
+            sleep 10
+          done
+          echo "::error::/health did not return 200 after the deploy"
+          exit 1

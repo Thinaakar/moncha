@@ -16,3 +16,5 @@ apps/worker/.data/
 # Wrangler (Cloudflare) local state and secrets
 .wrangler
 .dev.vars*
+# OpenNext (console on Cloudflare Workers) build output
+.open-next

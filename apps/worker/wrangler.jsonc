@@ -30,11 +30,12 @@
   // Restarts the container after deploys, crashes or host restarts.
   "triggers": { "crons": ["*/5 * * * *"] },
 
-  // Non-secret settings. Secrets (DATABASE_URL, DIRECT_URL, DB_ENV, NEON_BRANCH, PROD_DB_HOST,
-  // GOOGLE_PLACES_API_KEY, OPENROUTER_API_KEY, OPENROUTER_MODEL, RESEND_API_KEY, EMAIL_FROM,
-  // RESET_PASSWORD_URL, R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET,
-  // SITE_PREVIEW_SECRET, GITHUB_TOKEN) go in with `wrangler secret put`
+  // Non-secret settings. Secrets (DATABASE_URL, DATABASE_URL_UNPOOLED, DIRECT_URL, DB_ENV, NEON_BRANCH,
+  // PROD_DB_HOST, GOOGLE_PLACES_API_KEY, OPENROUTER_API_KEY, OPENROUTER_MODEL, R2_ACCOUNT_ID, R2_ACCESS_KEY_ID,
+  // R2_SECRET_ACCESS_KEY, R2_BUCKET, SITE_PREVIEW_SECRET, SITE_PUBLIC_BASE_URL, SESSION_SECRET, GITHUB_TOKEN,
+  // CLOUDFLARE_API_TOKEN, MONCHA_LEAD_ADMIN_USERS, MONCHA_LEAD_ADMIN_PASSWORD) go in with `wrangler secret put`
   // or the dashboard; every var and secret is passed to the container.
+  // WORKER_JOBS_ENABLED is a secret too: background jobs run only when it is "true" (see cloudflare/index.ts).
   "vars": {
     "DEFAULT_TENANT_ID": "tenant_moncha_internal",
     "DISCOVERY_MAX_CALLS_PER_DAY": "500",
@@ -43,8 +44,8 @@
     "WORKER_CONCURRENCY": "3",
     "OMIT_CHATBOT_SITES": "false",
     "OPENROUTER_BASE_URL": "https://openrouter.ai/api/v1",
-    "LLM_TIMEOUT_MS": "20000",
-    "LLM_MAX_CALLS_PER_DAY": "500",
+    "LLM_TIMEOUT_MS": "15000",
+    "CLOUDFLARE_WORKERS_LIMIT": "500",
     "SITE_AGENT_MODEL": "google/gemini-3.5-flash",
     "SITE_AGENT_TIMEOUT_MS": "90000",
     "SITE_PREVIEW_TTL_SEC": "3600",
