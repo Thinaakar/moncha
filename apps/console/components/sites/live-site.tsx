@@ -403,6 +403,16 @@ export function LiveWebsiteCell({ snapshot }: { snapshot: SiteSnapshotSummary })
           {host(deploy.url)}
         </a>
         <CopyButton value={deploy.url} label="Copy link" />
+        <a
+          href={deploy.url}
+          target="_blank"
+          rel="noreferrer noopener"
+          aria-label="Open the live website in a new tab"
+          title="Open in new tab"
+          className="inline-flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+        >
+          <ExternalLink className="size-3.5" />
+        </a>
       </span>
     );
   }

@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Activity, Github, Globe, ImageOff, ListOrdered, Loader2, ScanEye, SearchX, Workflow } from 'lucide-react';
+import { Activity, ExternalLink, Github, Globe, ImageOff, ListOrdered, Loader2, ScanEye, SearchX, Workflow } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -262,6 +262,7 @@ function CopiesPanel() {
                           >
                             <Github className="size-3.5 shrink-0" />
                             <span className="truncate font-mono">{s.github.repo?.split('/')[1] ?? 'View'}</span>
+                            <ExternalLink className="size-3 shrink-0 opacity-70" />
                           </a>
                         ) : s.github ? (
                           <GithubStatusBadge github={s.github} />
