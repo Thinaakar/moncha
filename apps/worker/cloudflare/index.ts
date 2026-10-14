@@ -163,10 +163,11 @@ export default {
       );
     }
 
-    // 1. Direct Edge-native Neon API: handles /health and /api/v1/* with zero container overhead
-    const neonResponse = await handleNeonApi(request, env, corsHeaders(request));
-    if (neonResponse) {
-      return neonResponse;
+    // /health answers from the edge even while the container starts. Every API route goes to the container, which runs
+    // the full API (apps/worker/src/api.ts); the edge router only implements a subset and would 404 the rest.
+    if (pathname === '/health') {
+      const neonResponse = await handleNeonApi(request, env, corsHeaders(request));
+      if (neonResponse) return neonResponse;
     }
 
     if (!env.BACKEND) {
