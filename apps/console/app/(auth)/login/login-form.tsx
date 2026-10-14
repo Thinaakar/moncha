@@ -1,6 +1,5 @@
 'use client';
 
-import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -52,11 +51,6 @@ export function LoginForm() {
           Sign in again to continue where you left off.
         </InlineAlert>
       )}
-      {params.get('reset') && !error && (
-        <InlineAlert variant="success" title="Password updated">
-          Sign in with your new password.
-        </InlineAlert>
-      )}
       {error && (
         <InlineAlert variant="destructive" icon={AlertCircle} title="Could not sign in">
           {error}
@@ -75,16 +69,7 @@ export function LoginForm() {
             {...form.register('email')}
           />
         </Field>
-        <Field
-          label="Password"
-          htmlFor="password"
-          error={errors.password?.message}
-          action={
-            <Link href="/forgot-password" className="text-xs font-medium text-primary hover:underline">
-              Forgot password?
-            </Link>
-          }
-        >
+        <Field label="Password" htmlFor="password" error={errors.password?.message}>
           <PasswordInput
             id="password"
             autoComplete="current-password"
@@ -97,13 +82,6 @@ export function LoginForm() {
           Sign in
         </Button>
       </form>
-
-      <p className="text-center text-sm text-muted-foreground">
-        New to MonCha?{' '}
-        <Link href="/register" className="font-medium text-primary hover:underline">
-          Create an account
-        </Link>
-      </p>
     </div>
   );
 }

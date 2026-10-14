@@ -4,9 +4,9 @@ import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { CheckCircle2, Database, KeyRound, LogOut, Server, ShieldCheck, UserRound, XCircle } from 'lucide-react';
+import { CheckCircle2, Database, LogOut, Server, ShieldCheck, UserRound, XCircle } from 'lucide-react';
 import { toast } from 'sonner';
-import { changePasswordSchema, updateProfileSchema } from '@moncha/contracts';
+import { updateProfileSchema } from '@moncha/contracts';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
@@ -14,7 +14,6 @@ import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { PageHeader } from '@/components/app/page-header';
 import { Field } from '@/components/app/field';
-import { PasswordInput } from '@/components/app/password-input';
 import { useUser } from '@/components/app/user-context';
 import { DetailRow } from '@/components/app/widgets';
 import { api, errorMessage, request } from '@/lib/api';
@@ -84,73 +83,6 @@ function ProfileCard() {
           </Button>
           <Button type="submit" loading={isSubmitting} disabled={!isDirty}>
             Save changes
-          </Button>
-        </CardFooter>
-      </form>
-    </Card>
-  );
-}
-
-const passwordForm = changePasswordSchema
-  .extend({ confirm: z.string() })
-  .refine((v) => v.newPassword === v.confirm, { message: 'Passwords do not match', path: ['confirm'] })
-  .refine((v) => v.newPassword !== v.currentPassword, {
-    message: 'Choose a password different from the current one',
-    path: ['newPassword'],
-  });
-type PasswordValues = z.infer<typeof passwordForm>;
-
-function PasswordCard() {
-  const form = useForm<PasswordValues>({
-    resolver: zodResolver(passwordForm),
-    defaultValues: { currentPassword: '', newPassword: '', confirm: '' },
-  });
-  const { errors, isSubmitting } = form.formState;
-
-  async function onSubmit({ confirm: _confirm, ...values }: PasswordValues) {
-    try {
-      const res = await api<{ ok: boolean; otherSessionsRevoked: number }>('auth/change-password', {
-        method: 'POST',
-        body: values,
-      });
-      form.reset();
-      toast.success('Password changed', {
-        description: res.otherSessionsRevoked
-          ? `Signed out ${res.otherSessionsRevoked} other session${res.otherSessionsRevoked === 1 ? '' : 's'}.`
-          : undefined,
-      });
-    } catch (err) {
-      const message = errorMessage(err);
-      if (/current password/i.test(message)) form.setError('currentPassword', { message });
-      else toast.error('Could not change password', { description: message });
-    }
-  }
-
-  return (
-    <Card>
-      <form onSubmit={form.handleSubmit(onSubmit)} noValidate>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <KeyRound className="size-4 text-primary" /> Password
-          </CardTitle>
-          <CardDescription>Changing it signs you out everywhere else</CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-5 pt-5">
-          <Field label="Current password" htmlFor="currentPassword" error={errors.currentPassword?.message}>
-            <PasswordInput id="currentPassword" autoComplete="current-password" {...form.register('currentPassword')} />
-          </Field>
-          <div className="grid gap-5 sm:grid-cols-2">
-            <Field label="New password" htmlFor="newPassword" error={errors.newPassword?.message} hint="At least 8 characters.">
-              <PasswordInput id="newPassword" autoComplete="new-password" {...form.register('newPassword')} />
-            </Field>
-            <Field label="Confirm new password" htmlFor="confirm" error={errors.confirm?.message}>
-              <PasswordInput id="confirm" autoComplete="new-password" {...form.register('confirm')} />
-            </Field>
-          </div>
-        </CardContent>
-        <CardFooter className="mt-5 justify-end border-t bg-muted/30 pt-5">
-          <Button type="submit" loading={isSubmitting}>
-            Update password
           </Button>
         </CardFooter>
       </form>
@@ -278,11 +210,10 @@ function AccountCard() {
 export function SettingsView() {
   return (
     <div>
-      <PageHeader title="Settings" description="Manage your profile, password and see the health of the platform." />
+      <PageHeader title="Settings" description="Manage your profile and see the health of the platform." />
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">
           <ProfileCard />
-          <PasswordCard />
         </div>
         <div className="space-y-6">
           <AccountCard />

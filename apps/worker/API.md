@@ -21,7 +21,7 @@ copies) were added on 2026-10-08.
 - [Schedules](#schedules): list, create, delete one, delete by country, run history
 - [Discovery and jobs](#discovery-and-jobs): start a country crawl, get job status
 - [Leads](#leads): list, counts, get one, create, re-audit
-- [Auth](#auth): register, login, logout, current user, update profile, change password, forgot and reset password
+- [Auth](#auth): login (admin emails from env only), logout, current user, update profile
 - [Source imports](#source-imports): CSV import and import status
 - [Worker health](#worker-health): is the background worker running
 - [Reviews](#reviews): list review tasks, get one, resolve one (confirm, mark chatbot, re-audit)
@@ -57,14 +57,10 @@ copies) were added on 2026-10-08.
 | 13 | GET | `/api/v1/leads/:id` | Read | One lead with company and website | 200 | Lead, Company, Website |
 | 14 | POST | `/api/v1/leads` | Create (or Update if duplicate) | Add a lead manually | 201 / 200 | Company, SourceRecord, Lead, Website, JobRun |
 | 15 | POST | `/api/v1/leads/:id/audit` | Create + Update | Queue a website re-audit for a lead | 202 | Lead, Website, JobRun |
-| 16 | POST | `/api/v1/auth/register` | Create | Create an account and sign in | 201 | User, Session |
-| 17 | POST | `/api/v1/auth/login` | Create | Sign in with email and password, get a token | 200 | User (read), Session |
+| 17 | POST | `/api/v1/auth/login` | Create | Sign in as one of the `MONCHA_LEAD_ADMIN_USERS`, get a token | 200 | User, Session |
 | 18 | POST | `/api/v1/auth/logout` | Update | Sign out (revoke the token) | 200 | Session |
 | 19 | GET | `/api/v1/auth/me` | Read | The signed-in user | 200 | Session, User |
 | 20 | PATCH | `/api/v1/auth/me` | Update | Change the signed-in user's name | 200 | Session, User |
-| 21 | POST | `/api/v1/auth/change-password` | Update | Change password (signed in) | 200 | Session, User |
-| 22 | POST | `/api/v1/auth/forgot-password` | Create | Email a password reset link | 200 | User, PasswordResetToken |
-| 23 | POST | `/api/v1/auth/reset-password` | Update | Set a new password with the link's token | 200 | PasswordResetToken, User, Session |
 | 24 | POST | `/api/v1/source-imports` | Create | Import companies from a CSV | 202 | JobRun, Company, SourceRecord, Lead, Website |
 | 25 | GET | `/api/v1/source-imports/:id` | Read | Status and result of an import | 200 | JobRun |
 | 26 | GET | `/api/v1/worker/health` | Read | Is the background worker running | 200 | WorkerHeartbeat, JobRun |
@@ -99,7 +95,7 @@ The only PATCH is #20. To change a schedule time, delete the old one (#6) and cr
 | Header | Required | Description |
 |---|---|---|
 | `content-type: application/json` | For POST with a body | Body must be valid JSON. An empty body is treated as `{}`. |
-| `authorization: Bearer <token>` | Only for `/api/v1/auth/logout`, `/api/v1/auth/me` (GET and PATCH) and `/api/v1/auth/change-password`; optional on `/api/v1/reviews/:id/resolve` | Token from register or login. On resolve it records who decided. Other endpoints do not check it yet. |
+| `authorization: Bearer <token>` | For `/api/v1/auth/logout`, `/api/v1/auth/me` (GET and PATCH) and the editor-session website copy endpoints; optional on `/api/v1/reviews/:id/resolve` | Token from login. On resolve it records who decided. Other endpoints do not check it yet. |
 | `x-tenant-id` | No | Tenant to read and write. Default: `tenant_moncha_internal` (`DEFAULT_TENANT_ID`). |
 | `x-api-key` | Only if `WORKER_API_KEY` is set on the server | Currently **not** set on the deployed backend, so it is not needed. |
 
@@ -122,19 +118,17 @@ Every error has the same shape:
 | Status | `code` | When |
 |---|---|---|
 | 400 | `validation_error` | Missing or invalid field, invalid JSON body, unsupported country, unknown time zone, CSV without rows |
-| 400 | `invalid_token` | Password reset token is invalid, already used or expired |
-| 400 | `invalid_password` | Change password: the current password is wrong |
 | 400 | `unsupported_source` | Source import with a source other than `csv` |
-| 401 | `unauthorized` | Wrong email or password; missing, expired or logged-out token; or wrong `x-api-key` (only when `WORKER_API_KEY` is set) |
+| 401 | `unauthorized` | Wrong email or password; missing, expired or logged-out token; a token of a user no longer in `MONCHA_LEAD_ADMIN_USERS`; or wrong `x-api-key` (only when `WORKER_API_KEY` is set) |
 | 403 | `forbidden` | Resolve review: the bearer token belongs to a user of another tenant |
 | 404 | `not_found` | Unknown route, or the schedule, job, lead, import or review task does not exist |
 | 405 | `method_not_allowed` | Local API only: known path, wrong method (deployed returns 404) |
-| 409 | `conflict` | Schedule already exists for that country and time, an account with that email already exists, or the review task is already resolved |
+| 409 | `conflict` | Schedule already exists for that country and time, or the review task is already resolved |
 | 413 | `too_many_rows` | CSV with more than 20,000 rows |
 | 413 | `payload_too_large` | Local API only: body larger than 10 MB |
 | 500 | `internal_error` | Unexpected server error |
 | 503 | `configuration_error` | `DATABASE_URL` is not set on the server |
-| 503 | `service_unavailable` | Forgot password when the reset email is not configured (`RESEND_API_KEY` or `RESET_PASSWORD_URL` missing) |
+| 503 | `service_unavailable` | Login when `MONCHA_LEAD_ADMIN_USERS` or `MONCHA_LEAD_ADMIN_PASSWORD` is not set on the server |
 
 Unknown routes (and unsupported methods on known paths) return:
 
@@ -184,9 +178,6 @@ curl https://moncha-backend.vinothjv4-tech.workers.dev/
     "/health",
     "/api/v1/auth/login",
     "/api/v1/auth/me",
-    "/api/v1/auth/forgot-password",
-    "/api/v1/auth/reset-password",
-    "/api/v1/auth/change-password",
     "/api/v1/schedules",
     "/api/v1/schedules/runs",
     "/api/v1/leads",
@@ -880,11 +871,17 @@ not exist or has no domain.
 
 ## Auth
 
-Email and password accounts with bearer-token sessions.
+Admin-only sign-in with bearer-token sessions. The accounts are set on the server, not in the console:
+
+- `MONCHA_LEAD_ADMIN_USERS`: the emails that can sign in, separated by commas.
+- `MONCHA_LEAD_ADMIN_PASSWORD`: the one password they all use.
+
+There is no sign-up, change password, forgot password or reset password. To add or remove a person, or change the
+password, edit these variables and restart the backend.
 
 **How it works**
 
-1. Call **register** (new account) or **login** (existing account). Both return a `token`.
+1. Call **login**. It returns a `token`.
 2. Store the token on the client and send it as `Authorization: Bearer <token>` on later requests.
 3. Call **me** to restore the signed-in user (for example on page reload). A `401` means the token expired or was
    logged out: send the user to the login page.
@@ -896,11 +893,13 @@ Email and password accounts with bearer-token sessions.
   in on several devices; logout ends only the session of the token sent.
 - Accounts belong to a tenant (`x-tenant-id`, default `tenant_moncha_internal`). The same email can exist in
   different tenants. Emails are stored in lower case and matched without regard to case.
-- Register always creates the role `operator`. `admin` and `viewer` are set in the database.
-- Passwords are stored as salted PBKDF2-SHA256 hashes, never in plain text. Tokens are stored only as SHA-256
-  hashes, so a database leak does not expose working tokens.
-- Login gives the same `401 Invalid email or password` for an unknown email and a wrong password, so it does not
-  reveal which emails have accounts. Accounts created before password login (no password set) cannot log in.
+- The first login of a listed email creates its user with the role `admin`. An existing user with that email is
+  promoted to `admin`. No password is stored in the database.
+- A user whose email is removed from `MONCHA_LEAD_ADMIN_USERS` gets `401` on the next request, even with a token
+  that has not expired.
+- Tokens are stored only as SHA-256 hashes, so a database leak does not expose working tokens.
+- Login gives the same `401 Invalid email or password` for an unlisted email and a wrong password, so it does not
+  reveal which emails can sign in. If either variable is empty, login returns `503 service_unavailable`.
 - No cookies are used: the token is returned in the JSON body. CORS already allows the `Authorization` header from
   any origin.
 - The other endpoints (1 to 15) do **not** require a token yet.
@@ -916,7 +915,7 @@ Email and password accounts with bearer-token sessions.
 | `role` | string | `admin`, `operator` or `viewer` |
 | `createdAt` | string | UTC timestamp |
 
-**Session object** (returned by register and login)
+**Session object** (returned by login)
 
 | Field | Type | Description |
 |---|---|---|
@@ -925,54 +924,10 @@ Email and password accounts with bearer-token sessions.
 | `expiresAt` | string | UTC time the token stops working (7 days after sign-in) |
 | `user` | object | The user object |
 
-### 16. POST `/api/v1/auth/register`
-
-**CRUD:** Create. Creates the account (User) and signs it in (Session).
-
-**Body**
-
-| Field | Type | Required | Rules |
-|---|---|---|---|
-| `email` | string | Yes | Valid email, at most 254 characters. Stored in lower case |
-| `password` | string | Yes | 8 to 128 characters |
-| `name` | string | No | 1 to 100 characters |
-
-```bash
-curl -X POST https://moncha-backend.vinothjv4-tech.workers.dev/api/v1/auth/register \
-  -H "content-type: application/json" \
-  -d '{ "email": "ana@example.com", "password": "Test-pass-2026", "name": "Ana" }'
-```
-
-**201 Created** (session object)
-
-```json
-{
-  "token": "qf-DwwZ1sN8mX0c3YlA9pKe2RtV7uB4hJ6gW5oLiFdQ",
-  "tokenType": "Bearer",
-  "expiresAt": "2026-10-10T07:28:41.754Z",
-  "user": {
-    "id": "user_6aff46d70f004d29",
-    "tenantId": "tenant_moncha_internal",
-    "email": "ana@example.com",
-    "name": "Ana",
-    "role": "operator",
-    "createdAt": "2026-10-03T07:28:41.632Z"
-  }
-}
-```
-
-**Errors**
-
-| Status | Example |
-|---|---|
-| 400 | `fieldErrors.password: ["Use at least 8 characters"]` |
-| 400 | `fieldErrors.email: ["Invalid input: expected string, received undefined"]` (missing) |
-| 400 | `Invalid JSON body` |
-| 409 | `{ "error": { "code": "conflict", "message": "An account with this email already exists" } }` |
-
 ### 17. POST `/api/v1/auth/login`
 
-**CRUD:** Create. Checks the password and creates a new session.
+**CRUD:** Create. Checks the email against `MONCHA_LEAD_ADMIN_USERS` and the password against
+`MONCHA_LEAD_ADMIN_PASSWORD`, creates the admin user on first login, then creates a new session.
 
 **Body**
 
@@ -984,10 +939,10 @@ curl -X POST https://moncha-backend.vinothjv4-tech.workers.dev/api/v1/auth/regis
 ```bash
 curl -X POST https://moncha-backend.vinothjv4-tech.workers.dev/api/v1/auth/login \
   -H "content-type: application/json" \
-  -d '{ "email": "ana@example.com", "password": "Test-pass-2026" }'
+  -d '{ "email": "ana@example.com", "password": "<MONCHA_LEAD_ADMIN_PASSWORD>" }'
 ```
 
-**200 OK** (session object, same shape as register)
+**200 OK** (session object)
 
 ```json
 {
@@ -999,7 +954,7 @@ curl -X POST https://moncha-backend.vinothjv4-tech.workers.dev/api/v1/auth/login
     "tenantId": "tenant_moncha_internal",
     "email": "ana@example.com",
     "name": "Ana",
-    "role": "operator",
+    "role": "admin",
     "createdAt": "2026-10-03T07:28:41.632Z"
   }
 }
@@ -1010,7 +965,8 @@ curl -X POST https://moncha-backend.vinothjv4-tech.workers.dev/api/v1/auth/login
 | Status | Example |
 |---|---|
 | 400 | `fieldErrors.password: ["Invalid input: expected string, received undefined"]` |
-| 401 | `{ "error": { "code": "unauthorized", "message": "Invalid email or password" } }` |
+| 401 | `{ "error": { "code": "unauthorized", "message": "Invalid email or password" } }` (unlisted email or wrong password) |
+| 503 | `{ "error": { "code": "service_unavailable", "message": "Admin login is not configured on the server" } }` |
 
 ### 18. POST `/api/v1/auth/logout`
 
@@ -1061,7 +1017,7 @@ curl https://moncha-backend.vinothjv4-tech.workers.dev/api/v1/auth/me \
     "tenantId": "tenant_moncha_internal",
     "email": "ana@example.com",
     "name": "Ana",
-    "role": "operator",
+    "role": "admin",
     "createdAt": "2026-10-03T07:28:41.632Z"
   }
 }
@@ -1073,6 +1029,7 @@ curl https://moncha-backend.vinothjv4-tech.workers.dev/api/v1/auth/me \
 |---|---|
 | No `Authorization` header | `Missing Authorization: Bearer <token> header` |
 | Token unknown, expired or logged out | `Session expired or logged out` |
+| Email removed from `MONCHA_LEAD_ADMIN_USERS` | `This account no longer has access` |
 
 **Frontend example**
 
@@ -1133,7 +1090,7 @@ curl -X PATCH https://moncha-backend.vinothjv4-tech.workers.dev/api/v1/auth/me \
     "tenantId": "tenant_moncha_internal",
     "email": "ana@example.com",
     "name": "Ana Tan",
-    "role": "operator",
+    "role": "admin",
     "createdAt": "2026-10-03T07:28:41.632Z"
   }
 }
@@ -1141,116 +1098,8 @@ curl -X PATCH https://moncha-backend.vinothjv4-tech.workers.dev/api/v1/auth/me \
 
 **Errors:** 400 for an empty or missing `name` or a name over 100 characters; 401 as for `GET /api/v1/auth/me`.
 
-### 21. POST `/api/v1/auth/change-password`
-
-**CRUD:** Update. Changes the password of the signed-in user. The session that made the call stays signed in;
-every other session of the user is logged out.
-
-| Header | Required |
-|---|---|
-| `authorization: Bearer <token>` | Yes |
-
-**Body**
-
-| Field | Type | Required | Rules |
-|---|---|---|---|
-| `currentPassword` | string | Yes | The password in use now |
-| `newPassword` | string | Yes | 8 to 128 characters, different from the current password |
-
-```bash
-curl -X POST https://moncha-backend.vinothjv4-tech.workers.dev/api/v1/auth/change-password \
-  -H "authorization: Bearer 24b3TgV9cK1mQ7zR2xLp8sW4yN6aE0dJ3hU5oFiBtGk" \
-  -H "content-type: application/json" \
-  -d '{ "currentPassword": "Test-pass-2026", "newPassword": "New-pass-2026" }'
-```
-
-**200 OK**
-
-```json
-{ "ok": true, "otherSessionsRevoked": 1 }
-```
-
-`otherSessionsRevoked` is the number of other devices that were logged out.
-
-**Errors**
-
-| Status | Example |
-|---|---|
-| 400 | `{ "error": { "code": "invalid_password", "message": "Current password is incorrect" } }` |
-| 400 | `{ "error": { "code": "validation_error", "message": "New password must be different from the current password" } }` |
-| 400 | `fieldErrors.newPassword: ["Use at least 8 characters"]` |
-| 401 | Missing, expired or logged-out token |
-
-### 22. POST `/api/v1/auth/forgot-password`
-
-**CRUD:** Create. Emails a password reset link (sent with [Resend](https://resend.com)). The link is
-`RESET_PASSWORD_URL?token=<token>`; `RESET_PASSWORD_URL` is the console's reset page, set on the server.
-
-**Body**
-
-| Field | Type | Required | Rules |
-|---|---|---|---|
-| `email` | string | Yes | Valid email (any case) |
-
-```bash
-curl -X POST https://moncha-backend.vinothjv4-tech.workers.dev/api/v1/auth/forgot-password \
-  -H "content-type: application/json" \
-  -d '{ "email": "ana@example.com" }'
-```
-
-**200 OK** (always the same reply)
-
-```json
-{ "ok": true, "message": "If an account exists for this email, a password reset link has been sent." }
-```
-
-**Rules**
-
-- The reply is the same whether or not the email has an account, so it does not reveal which emails are
-  registered. Show the `message` to the user as it is.
-- The link works **once** and expires after **30 minutes**. Asking again makes every older link stop working.
-- If the email service fails, the reply is still `200`; the error is logged on the server.
-
-**Errors**
-
-| Status | Example |
-|---|---|
-| 400 | `fieldErrors.email: ["Invalid email address"]` |
-| 503 | `{ "error": { "code": "service_unavailable", "message": "Password reset email is not configured on the server" } }` when `RESEND_API_KEY` or `RESET_PASSWORD_URL` is not set |
-
-### 23. POST `/api/v1/auth/reset-password`
-
-**CRUD:** Update. Sets a new password using the token from the reset link. On success the token is used up and
-**every** session of the user is logged out, so the user signs in again with the new password.
-
-**Body**
-
-| Field | Type | Required | Rules |
-|---|---|---|---|
-| `token` | string | Yes | The `token` query parameter of the reset link (16 to 256 characters) |
-| `password` | string | Yes | 8 to 128 characters |
-
-```bash
-curl -X POST https://moncha-backend.vinothjv4-tech.workers.dev/api/v1/auth/reset-password \
-  -H "content-type: application/json" \
-  -d '{ "token": "<token from the link>", "password": "Brand-new-2026" }'
-```
-
-**200 OK**
-
-```json
-{ "ok": true }
-```
-
-**Errors**
-
-| Status | Example |
-|---|---|
-| 400 | `{ "error": { "code": "invalid_token", "message": "This reset link is invalid, already used or expired" } }` |
-| 400 | `fieldErrors.password: ["Use at least 8 characters"]` |
-
-**Reset page (console):** read `token` from the page URL, ask for the new password, then POST it here. On `200`
-send the user to the login page; on `invalid_token` offer to request a new link.
+`POST /api/v1/auth/register`, `/auth/change-password`, `/auth/forgot-password` and `/auth/reset-password` (formerly
+16, 21, 22 and 23) were removed and return `404`.
 
 ---
 

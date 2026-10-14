@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
 const SESSION_COOKIE = 'moncha_session';
-const AUTH_PAGES = ['/login', '/register', '/forgot-password', '/reset-password'];
+const AUTH_PAGES = ['/login'];
 
 export function middleware(req: NextRequest) {
   const { pathname, search } = req.nextUrl;
@@ -9,7 +9,7 @@ export function middleware(req: NextRequest) {
   const isAuthPage = AUTH_PAGES.some((p) => pathname === p || pathname.startsWith(`${p}/`));
 
   if (isAuthPage) {
-    if (signedIn && pathname !== '/reset-password') return NextResponse.redirect(new URL('/', req.url));
+    if (signedIn) return NextResponse.redirect(new URL('/', req.url));
     return NextResponse.next();
   }
   if (!signedIn) {

@@ -7,6 +7,7 @@ import type {
   PasswordResetRepo,
   SessionCreate,
   SessionRepo,
+  UserRole,
   CompanyPatch,
   CompanyRecord,
   CompanyRepo,
@@ -506,6 +507,15 @@ export class NeonAuthUserRepo implements AuthUserRepo {
 
   async setPasswordHash(userId: string, passwordHash: string): Promise<void> {
     await queryRows(this.sql, 'UPDATE "User" SET "passwordHash" = $2 WHERE id = $1', [userId, passwordHash]);
+  }
+
+  async setRole(userId: string, role: UserRole): Promise<AuthUserRecord | null> {
+    const rows = await queryRows(
+      this.sql,
+      `UPDATE "User" AS u SET role = $2::"UserRole" WHERE u.id = $1 RETURNING ${USER_COLUMNS}`,
+      [userId, role]
+    );
+    return rows.length ? mapUserRow(rows[0]) : null;
   }
 }
 

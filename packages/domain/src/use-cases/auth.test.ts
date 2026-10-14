@@ -5,8 +5,10 @@ import {
   bearerToken,
   changePassword,
   currentUser,
+  envAdminsFrom,
   FORGOT_PASSWORD_REPLY,
   hashPassword,
+  loginEnvAdmin,
   loginUser,
   logoutUser,
   PASSWORD_RESET_TTL_MS,
@@ -45,6 +47,12 @@ function memoryDeps(start = new Date('2026-10-03T00:00:00Z')) {
     async setPasswordHash(userId, passwordHash) {
       const user = users.find((u) => u.id === userId);
       if (user) user.passwordHash = passwordHash;
+    },
+    async setRole(userId, role) {
+      const user = users.find((u) => u.id === userId);
+      if (!user) return null;
+      user.role = role;
+      return user;
     },
   };
   const sessionRepo: SessionRepo = {
@@ -285,5 +293,67 @@ describe('auth use cases', () => {
     expect(bearerToken('bearer xyz')).toBe('xyz');
     expect(bearerToken('Basic abc')).toBeUndefined();
     expect(bearerToken(null)).toBeUndefined();
+  });
+});
+
+describe('env admin login', () => {
+  const admins = envAdminsFrom({
+    MONCHA_LEAD_ADMIN_USERS: ' Boss@Example.com, ops@example.com;boss@example.com ',
+    MONCHA_LEAD_ADMIN_PASSWORD: 'shared-secret-1',
+  });
+
+  it('parses the admin list into unique lower-case emails', () => {
+    expect(admins).toEqual({ emails: ['boss@example.com', 'ops@example.com'], password: 'shared-secret-1' });
+    expect(envAdminsFrom({})).toEqual({ emails: [], password: '' });
+  });
+
+  it('creates the listed user as admin on first sign-in and reuses it after', async () => {
+    const { deps, users } = memoryDeps();
+    const first = await loginEnvAdmin(deps, admins, { tenantId: TENANT, email: 'BOSS@example.com', password: 'shared-secret-1' });
+    expect(first.user).toMatchObject({ email: 'boss@example.com', role: 'admin', tenantId: TENANT });
+    expect(users).toHaveLength(1);
+    expect(users[0]!.passwordHash).toBeNull();
+
+    await loginEnvAdmin(deps, admins, { tenantId: TENANT, email: 'boss@example.com', password: 'shared-secret-1' });
+    expect(users).toHaveLength(1);
+  });
+
+  it('promotes an existing operator with a listed email to admin', async () => {
+    const { deps } = memoryDeps();
+    await registerUser(deps, { tenantId: TENANT, email: 'ops@example.com', password: 'own-pass-1' });
+    const session = await loginEnvAdmin(deps, admins, { tenantId: TENANT, email: 'ops@example.com', password: 'shared-secret-1' });
+    expect(session.user.role).toBe('admin');
+  });
+
+  it('gives the same 401 for an unlisted email or a wrong password', async () => {
+    const { deps, users } = memoryDeps();
+    for (const input of [
+      { email: 'stranger@example.com', password: 'shared-secret-1' },
+      { email: 'boss@example.com', password: 'wrong' },
+    ]) {
+      await expect(loginEnvAdmin(deps, admins, { tenantId: TENANT, ...input })).rejects.toMatchObject({
+        status: 401,
+        message: 'Invalid email or password',
+      });
+    }
+    expect(users).toHaveLength(0);
+  });
+
+  it('refuses every login when the env is not configured', async () => {
+    const { deps } = memoryDeps();
+    for (const config of [envAdminsFrom({}), { emails: ['boss@example.com'], password: '' }]) {
+      await expect(
+        loginEnvAdmin(deps, config, { tenantId: TENANT, email: 'boss@example.com', password: '' }),
+      ).rejects.toMatchObject({ status: 503 });
+    }
+  });
+
+  it('rejects sessions of users no longer in the list', async () => {
+    const { deps } = memoryDeps();
+    const old = await registerUser(deps, { tenantId: TENANT, email: 'old@example.com', password: 'pass-1234' });
+    const admin = await loginEnvAdmin(deps, admins, { tenantId: TENANT, email: 'boss@example.com', password: 'shared-secret-1' });
+    const guarded = { ...deps, allowedEmails: admins.emails };
+    await expect(currentUser(guarded, { token: old.token })).rejects.toMatchObject({ status: 401 });
+    expect(await currentUser(guarded, { token: admin.token })).toMatchObject({ email: 'boss@example.com' });
   });
 });

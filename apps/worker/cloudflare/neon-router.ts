@@ -1,13 +1,9 @@
 import { neon } from '@neondatabase/serverless';
 import {
-  changePasswordSchema,
   countryDiscoverySchema,
-  forgotPasswordSchema,
   leadListQuerySchema,
   manualLeadSchema,
   passwordLoginSchema,
-  registerSchema,
-  resetPasswordSchema,
   scheduleCreateSchema,
   scheduleDeleteCountrySchema,
   scheduleRunsQuerySchema,
@@ -17,16 +13,12 @@ import {
 import {
   AuthError,
   bearerToken,
-  changePassword,
-  createConsoleLogger,
   createManualLead,
   createSchedule,
   currentUser,
-  loginUser,
+  envAdminsFrom,
+  loginEnvAdmin,
   logoutUser,
-  registerUser,
-  requestPasswordReset,
-  resetPassword,
   updateProfile,
   DEFAULT_AUDIT_CONFIG,
   deleteCountrySchedules,
@@ -45,12 +37,9 @@ import {
   NeonDiscoveryScheduleRepo,
   NeonJobRepo,
   NeonLeadRepo,
-  NeonPasswordResetRepo,
   NeonSessionRepo,
   NeonWebsiteRepo,
 } from './neon-adapter';
-// Direct file import: the package index also exports Node-only publishers (git, child_process) that Workers cannot bundle.
-import { createResendMailerFromEnv } from '@moncha/integrations/src/resend';
 import { CsvImportError, SOURCE_IMPORT_JOB_TYPES, sourceImportView, startCsvImport } from '../src/csv-import';
 import { workerHealth } from '../src/worker-health';
 
@@ -193,15 +182,12 @@ export async function handleNeonApi(
 
     // Auth
     if (pathname.startsWith('/api/v1/auth/')) {
-      const auth = { users: new NeonAuthUserRepo(sql), sessions: new NeonSessionRepo(sql) };
+      const envAdmins = envAdminsFrom(env);
+      const auth = { users: new NeonAuthUserRepo(sql), sessions: new NeonSessionRepo(sql), allowedEmails: envAdmins.emails };
       const token = bearerToken(request.headers.get('authorization'));
-      if (pathname === '/api/v1/auth/register' && method === 'POST') {
-        const input = registerSchema.parse(await readJson(request));
-        return jsonResponse(await registerUser(auth, { ...input, tenantId }), 201, cors);
-      }
       if (pathname === '/api/v1/auth/login' && method === 'POST') {
         const input = passwordLoginSchema.parse(await readJson(request));
-        return jsonResponse(await loginUser(auth, { ...input, tenantId }), 200, cors);
+        return jsonResponse(await loginEnvAdmin(auth, envAdmins, { ...input, tenantId }), 200, cors);
       }
       if (pathname === '/api/v1/auth/logout' && method === 'POST') {
         return jsonResponse(await logoutUser(auth, { token }), 200, cors);
@@ -212,25 +198,6 @@ export async function handleNeonApi(
       if (pathname === '/api/v1/auth/me' && method === 'PATCH') {
         const input = updateProfileSchema.parse(await readJson(request));
         return jsonResponse({ user: await updateProfile(auth, { ...input, token }) }, 200, cors);
-      }
-      if (pathname === '/api/v1/auth/change-password' && method === 'POST') {
-        const input = changePasswordSchema.parse(await readJson(request));
-        return jsonResponse(await changePassword(auth, { ...input, token }), 200, cors);
-      }
-      const resetDeps = {
-        ...auth,
-        resets: new NeonPasswordResetRepo(sql),
-        mailer: createResendMailerFromEnv(env) ?? undefined,
-        logger: createConsoleLogger(),
-      };
-      if (pathname === '/api/v1/auth/forgot-password' && method === 'POST') {
-        const input = forgotPasswordSchema.parse(await readJson(request));
-        const resetUrl = typeof env.RESET_PASSWORD_URL === 'string' ? env.RESET_PASSWORD_URL.trim() : undefined;
-        return jsonResponse(await requestPasswordReset(resetDeps, { ...input, tenantId, resetUrl }), 200, cors);
-      }
-      if (pathname === '/api/v1/auth/reset-password' && method === 'POST') {
-        const input = resetPasswordSchema.parse(await readJson(request));
-        return jsonResponse(await resetPassword(resetDeps, input), 200, cors);
       }
     }
 

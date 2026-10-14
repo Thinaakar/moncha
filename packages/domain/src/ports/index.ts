@@ -55,7 +55,7 @@ export type AuthUserCreate = {
   email: string;
   name: string | null;
   role: UserRole;
-  passwordHash: string;
+  passwordHash: string | null;
 };
 
 export interface AuthUserRepo {
@@ -66,6 +66,8 @@ export interface AuthUserRepo {
   /** Null when the user no longer exists. */
   updateName(userId: string, name: string): Promise<AuthUserRecord | null>;
   setPasswordHash(userId: string, passwordHash: string): Promise<void>;
+  /** Null when the user no longer exists. */
+  setRole(userId: string, role: UserRole): Promise<AuthUserRecord | null>;
 }
 
 export type SessionCreate = {

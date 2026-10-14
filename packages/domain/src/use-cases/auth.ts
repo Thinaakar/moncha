@@ -48,7 +48,12 @@ export type AuthDeps = {
   users: AuthUserRepo;
   sessions: SessionRepo;
   now?: () => Date;
+  /** When set, sessions of users whose email is not listed are rejected. Lower-case emails. */
+  allowedEmails?: readonly string[];
 };
+
+/** The only accounts that can sign in: MONCHA_LEAD_ADMIN_USERS emails sharing MONCHA_LEAD_ADMIN_PASSWORD. */
+export type EnvAdmins = { emails: string[]; password: string };
 
 export type PasswordResetDeps = AuthDeps & {
   resets: PasswordResetRepo;
@@ -189,6 +194,41 @@ export async function loginUser(
   return startSession(deps, user);
 }
 
+/** MONCHA_LEAD_ADMIN_USERS is a comma, semicolon or space separated list of emails. */
+export function envAdminsFrom(env: Record<string, unknown>): EnvAdmins {
+  const users = typeof env.MONCHA_LEAD_ADMIN_USERS === 'string' ? env.MONCHA_LEAD_ADMIN_USERS : '';
+  const password = typeof env.MONCHA_LEAD_ADMIN_PASSWORD === 'string' ? env.MONCHA_LEAD_ADMIN_PASSWORD : '';
+  const emails = [...new Set(users.split(/[\s,;]+/).map((e) => e.trim().toLowerCase()).filter(Boolean))];
+  return { emails, password };
+}
+
+async function sameSecret(a: string, b: string): Promise<boolean> {
+  const digest = async (text: string) => new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(text)));
+  return timingSafeEqual(await digest(a), await digest(b));
+}
+
+/** Signs in a listed admin; the user row is created (or promoted to admin) on first sign-in. */
+export async function loginEnvAdmin(
+  deps: AuthDeps,
+  admins: EnvAdmins,
+  input: { tenantId: string; email: string; password: string },
+): Promise<AuthSession> {
+  if (!admins.emails.length || !admins.password) {
+    throw new AuthError('service_unavailable', 'Admin login is not configured on the server');
+  }
+  const email = input.email.trim().toLowerCase();
+  const passwordOk = await sameSecret(input.password, admins.password);
+  if (!passwordOk || !admins.emails.includes(email)) throw new AuthError('unauthorized', INVALID_LOGIN);
+
+  let user =
+    (await deps.users.findByEmail(input.tenantId, email)) ??
+    (await deps.users.create({ tenantId: input.tenantId, email, name: null, role: 'admin', passwordHash: null })) ??
+    (await deps.users.findByEmail(input.tenantId, email));
+  if (!user) throw new AuthError('unauthorized', INVALID_LOGIN);
+  if (user.role !== 'admin') user = (await deps.users.setRole(user.id, 'admin')) ?? user;
+  return startSession(deps, user);
+}
+
 /** Idempotent: an unknown, expired or already revoked token still returns ok. */
 export async function logoutUser(deps: AuthDeps, input: { token?: string }): Promise<{ ok: true }> {
   if (!input.token) throw new AuthError('unauthorized', 'Missing Authorization: Bearer <token> header');
@@ -204,6 +244,9 @@ async function sessionUser(
   const tokenHash = await hashSessionToken(token);
   const user = await deps.sessions.findActiveUser(tokenHash, deps.now?.() ?? new Date());
   if (!user) throw new AuthError('unauthorized', 'Session expired or logged out');
+  if (deps.allowedEmails && !deps.allowedEmails.includes(user.email.toLowerCase())) {
+    throw new AuthError('unauthorized', 'This account no longer has access');
+  }
   return { user, tokenHash };
 }
 

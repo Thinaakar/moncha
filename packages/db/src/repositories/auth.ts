@@ -6,6 +6,7 @@ import type {
   PasswordResetRepo,
   SessionCreate,
   SessionRepo,
+  UserRole,
 } from '@moncha/domain';
 
 const isNotFound = (error: unknown) =>
@@ -40,6 +41,15 @@ export class PrismaAuthUserRepository implements AuthUserRepo {
 
   async setPasswordHash(userId: string, passwordHash: string) {
     await this.db.user.updateMany({ where: { id: userId }, data: { passwordHash } });
+  }
+
+  async setRole(userId: string, role: UserRole) {
+    try {
+      return await this.db.user.update({ where: { id: userId }, data: { role } });
+    } catch (error) {
+      if (isNotFound(error)) return null;
+      throw error;
+    }
   }
 }
 

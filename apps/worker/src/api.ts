@@ -2,16 +2,12 @@ import './env';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { neon } from '@neondatabase/serverless';
 import {
-  changePasswordSchema,
   countryDiscoverySchema,
-  forgotPasswordSchema,
   jobListQuerySchema,
   leadExportQuerySchema,
   leadListQuerySchema,
   manualLeadSchema,
   passwordLoginSchema,
-  registerSchema,
-  resetPasswordSchema,
   resolveReviewSchema,
   reviewListQuerySchema,
   scheduleCreateSchema,
@@ -53,7 +49,6 @@ import {
   PrismaDiscoveryScheduleRepository,
   PrismaJobRunRepository,
   PrismaLeadRepository,
-  PrismaPasswordResetRepository,
   PrismaReviewTaskRepository,
   PrismaSessionRepository,
   PrismaSiteAutomationRepository,
@@ -65,18 +60,15 @@ import {
 import {
   AuthError,
   bearerToken,
-  changePassword,
   createConsoleLogger,
   createManualLead,
   createSchedule,
   currentUser,
+  envAdminsFrom,
   leadCsvChunks,
   leadExportFilename,
-  loginUser,
+  loginEnvAdmin,
   logoutUser,
-  registerUser,
-  requestPasswordReset,
-  resetPassword,
   updateProfile,
   COUNTRY_PROFILES,
   DEFAULT_AUDIT_CONFIG,
@@ -129,7 +121,7 @@ import {
   type SiteSnapshotListItem,
   type SiteSnapshotRecord,
 } from '@moncha/domain';
-import { createPriceBookFromEnv, createResendMailerFromEnv } from '@moncha/integrations';
+import { createPriceBookFromEnv } from '@moncha/integrations';
 import { CsvImportError, SOURCE_IMPORT_JOB_TYPES, sourceImportView, startCsvImport, type CsvSqlClient } from './csv-import';
 import { siteAgentConfig, siteAutoCopyEnabled, siteGithubPublisher, siteWorkerDeployer } from './site-agent';
 import { workerHealth } from './worker-health';
@@ -379,8 +371,13 @@ route('POST', '/api/v1/leads/:id/audit', async ({ tenantId, params }) => ({
   json: await queueLeadAudit(tenantId, params.id!),
 }));
 
-// Auth: bearer-token sessions.
-const auth = { users: new PrismaAuthUserRepository(prisma), sessions: new PrismaSessionRepository(prisma) };
+// Auth: bearer-token sessions. Only the MONCHA_LEAD_ADMIN_USERS emails can sign in or keep a session.
+const envAdmins = envAdminsFrom(process.env);
+const auth = {
+  users: new PrismaAuthUserRepository(prisma),
+  sessions: new PrismaSessionRepository(prisma),
+  allowedEmails: envAdmins.emails,
+};
 const tokenOf = (req: IncomingMessage) => bearerToken(req.headers.authorization);
 
 // Review queue: NEEDS_REVIEW leads wait here for a human decision.
@@ -413,14 +410,9 @@ route('POST', '/api/v1/reviews/:id/resolve', async ({ req, tenantId, params, bod
   return { json: await resolveReviewTask(reviewDeps, { ...input, tenantId, id: params.id!, resolvedBy }) };
 });
 
-route('POST', '/api/v1/auth/register', async ({ tenantId, body }) => {
-  const input = registerSchema.parse(await body());
-  return { status: 201, json: await registerUser(auth, { ...input, tenantId }) };
-});
-
 route('POST', '/api/v1/auth/login', async ({ tenantId, body }) => {
   const input = passwordLoginSchema.parse(await body());
-  return { json: await loginUser(auth, { ...input, tenantId }) };
+  return { json: await loginEnvAdmin(auth, envAdmins, { ...input, tenantId }) };
 });
 
 route('POST', '/api/v1/auth/logout', async ({ req }) => ({ json: await logoutUser(auth, { token: tokenOf(req) }) }));
@@ -430,29 +422,6 @@ route('GET', '/api/v1/auth/me', async ({ req }) => ({ json: { user: await curren
 route('PATCH', '/api/v1/auth/me', async ({ req, body }) => {
   const input = updateProfileSchema.parse(await body());
   return { json: { user: await updateProfile(auth, { ...input, token: tokenOf(req) }) } };
-});
-
-route('POST', '/api/v1/auth/change-password', async ({ req, body }) => {
-  const input = changePasswordSchema.parse(await body());
-  return { json: await changePassword(auth, { ...input, token: tokenOf(req) }) };
-});
-
-const resetDeps = () => ({
-  ...auth,
-  resets: new PrismaPasswordResetRepository(prisma),
-  mailer: createResendMailerFromEnv(process.env) ?? undefined,
-  logger,
-});
-
-route('POST', '/api/v1/auth/forgot-password', async ({ tenantId, body }) => {
-  const input = forgotPasswordSchema.parse(await body());
-  const resetUrl = process.env.RESET_PASSWORD_URL?.trim() || undefined;
-  return { json: await requestPasswordReset(resetDeps(), { ...input, tenantId, resetUrl }) };
-});
-
-route('POST', '/api/v1/auth/reset-password', async ({ body }) => {
-  const input = resetPasswordSchema.parse(await body());
-  return { json: await resetPassword(resetDeps(), input) };
 });
 
 // Background worker liveness (heartbeat written by poller.ts).
