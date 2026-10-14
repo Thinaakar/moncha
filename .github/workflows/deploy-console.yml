@@ -50,7 +50,14 @@ jobs:
 
       - name: Build
         working-directory: apps/console
-        run: pnpm cf:build
+        run: |
+          set +e
+          pnpm cf:build 2>&1 | tee build.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            echo "::error title=OpenNext build failed::$(tail -n 60 build.log | sed -e 's/%/%25/g' | sed -e ':a;N;$!ba;s/\n/%0A/g')"
+          fi
+          exit "$status"
 
       - name: Deploy
         working-directory: apps/console
