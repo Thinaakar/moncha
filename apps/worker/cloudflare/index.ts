@@ -42,27 +42,32 @@ async function envFingerprint(vars: Record<string, string>): Promise<string> {
 export class BackendWorker extends Container<Env> {
   defaultPort = 8080;
   sleepAfter = '1h';
-  private readonly mode: 'true' | 'false';
-  private readonly vars: Record<string, string>;
+  private vars: Record<string, string>;
 
   constructor(ctx: DurableObjectState<{}>, env: Env) {
     super(ctx, env);
-    this.mode = jobsMode(env);
     this.vars = containerEnv(env);
     this.envVars = this.vars;
   }
 
+  private jobs(): 'enabled' | 'standby' {
+    return this.vars.WORKER_JOBS_ENABLED === 'true' ? 'enabled' : 'standby';
+  }
+
   /**
-   * Starts the container. A running container keeps the env it started with (changing a var or secret does not
-   * restart it), so one started with a different env (a new secret, or the other jobs mode) is stopped gracefully
-   * first; the next cron run starts it with the current env.
+   * Starts the container with `vars`, the calling Worker's current env. This object can outlive a `wrangler secret
+   * put` with the env it was created with, and a running container keeps the env it started with, so one started
+   * with a different env (a new secret, or the other jobs mode) is stopped gracefully first; the next cron run
+   * starts it with the current env.
    */
-  async ensureStarted(): Promise<'running' | 'restarting'> {
+  async ensureStarted(vars: Record<string, string>): Promise<'running' | 'restarting'> {
+    this.vars = vars;
+    this.envVars = vars;
     const state = await this.getState();
     const up = state.status === 'running' || state.status === 'healthy';
     const startedWith = await this.ctx.storage.get<string>(ENV_FINGERPRINT_KEY);
-    if (up && startedWith !== (await envFingerprint(this.vars))) {
-      console.log(JSON.stringify({ event: 'backend_container_env_change', jobs: this.mode === 'true' ? 'enabled' : 'standby' }));
+    if (up && startedWith !== (await envFingerprint(vars))) {
+      console.log(JSON.stringify({ event: 'backend_container_env_change', jobs: this.jobs() }));
       await this.stop();
       return 'restarting';
     }
@@ -73,7 +78,7 @@ export class BackendWorker extends Container<Env> {
 
   override async onStart(): Promise<void> {
     await this.ctx.storage.put(ENV_FINGERPRINT_KEY, await envFingerprint(this.vars));
-    console.log(JSON.stringify({ event: 'backend_container_started', jobs: this.mode === 'true' ? 'enabled' : 'standby' }));
+    console.log(JSON.stringify({ event: 'backend_container_started', jobs: this.jobs() }));
   }
 
   /** The worker polls the database and gets no inbound traffic, so it must not stop when idle. */
@@ -245,7 +250,7 @@ export default {
     if (env.BACKEND) {
       ctx.waitUntil(
         backend(env)
-          .ensureStarted()
+          .ensureStarted(containerEnv(env))
           .catch((error) => console.log(JSON.stringify({ event: 'backend_container_start_failed', message: String(error) }))),
       );
     }
