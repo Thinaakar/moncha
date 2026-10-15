@@ -38,8 +38,6 @@ export const LEAD_BOT_TITLE_MAX = 300;
 export const LEAD_BOT_POLL_MIN_MS = 5_000;
 /** A failed poll (network, 5xx) is tried again after this long, without using up a try. */
 export const LEAD_BOT_POLL_RETRY_MS = 60_000;
-/** Training still not finished this long after it was submitted counts as a failed try. */
-export const LEAD_BOT_TRAINING_TIMEOUT_MS = 24 * 60 * 60_000;
 /** Written to `error` when the bot is trained. */
 export const LEAD_BOT_TRAINED = 'success';
 
@@ -363,10 +361,7 @@ export async function trainLeadBot(deps: LeadBotDeps, bot: LeadBotItem, signal?:
         await deps.bots.update(tenantId, botId, { trainingResult: t.response });
         return failTry(`training_failed: ${t.failed ?? t.total ?? 'all'} pages failed to train`, { newRequest: true });
       }
-      if (bot.trainingSubmittedAt && now().getTime() - bot.trainingSubmittedAt.getTime() > LEAD_BOT_TRAINING_TIMEOUT_MS) {
-        await deps.bots.update(tenantId, botId, { trainingResult: t.response });
-        return failTry(`training_timeout: still ${t.status} after ${LEAD_BOT_TRAINING_TIMEOUT_MS / 3_600_000} hours`, { newRequest: true });
-      }
+      // Still running: keep polling. A slow training is never resubmitted (that would train the pages twice).
       const nextAt = at(Math.max(LEAD_BOT_POLL_MIN_MS, (t.pollAfterSeconds ?? 0) * 1000));
       await deps.bots.update(tenantId, botId, { trainingResult: t.response, knowledgeNextAt: nextAt, knowledgeLockedAt: null });
       return { status: 'training', leadId, botId, trainingStatus: t.status, nextAt };

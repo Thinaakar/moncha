@@ -2090,7 +2090,8 @@ and copies websites as before.
    `completed`. The latest answer is kept in `knowledge.trainingResult`. Then status `trained`, `error` is `success`
    (`success: 2 of 40 pages failed to train` for a `partial_failure` with pages ready), and the lead's copy starts.
 4. **Up to 3 tries**, 1 minute then 5 minutes apart. A training that ends `failed` (or `partial_failure` with no page
-   ready, or still unfinished after 24 hours) is a failed try and starts over with a new discovery and key; a submit
+   ready) is a failed try and starts over with a new discovery and key; one that is still running is polled until it
+   ends, never resubmitted; a submit
    that fails sends the same saved request again. After the 3rd failed try the training is `failed`, `error` keeps the
    MonCha error, and the lead's waiting copy ends `failed` (`bot_failed`, `lastError: "Bot training failed after 3
    attempts: ..."`); the worker moves on to the next lead. `kb_pages_limit` and `training_limit_reached` (page quota used
