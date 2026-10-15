@@ -123,6 +123,7 @@ import {
   LEAD_BOT_MAX_ATTEMPTS,
   LeadBotRequestError,
   retryLeadBot,
+  trainLeadBotNow,
   type LeadBotItem,
   type CountryDiscoveryJobPayload,
   type ModelPriceRow,
@@ -918,6 +919,23 @@ function leadBotView(bot: LeadBotItem): LeadBotView {
     connectionId: bot.connectionId,
     config: bot.config,
     createdBotAt: bot.createdBotAt?.toISOString() ?? null,
+    knowledge: {
+      status: bot.knowledgeStatus,
+      attempts: bot.knowledgeAttempts,
+      maxAttempts: LEAD_BOT_MAX_ATTEMPTS,
+      nextAt: bot.knowledgeNextAt?.toISOString() ?? null,
+      websiteUrl: bot.websiteUrl ?? bot.company.websiteUrl,
+      discoveredUrls: bot.discoveredUrls,
+      pagesFetched: bot.pagesFetched,
+      truncated: bot.discoveryTruncated,
+      discoveredAt: bot.discoveredAt?.toISOString() ?? null,
+      documents: bot.trainingPayload?.documents ?? null,
+      trainingKey: bot.trainingKey,
+      trainingId: bot.trainingId,
+      trainingResult: bot.trainingResult,
+      submittedAt: bot.trainingSubmittedAt?.toISOString() ?? null,
+      trainedAt: bot.trainedAt?.toISOString() ?? null,
+    },
     createdAt: bot.createdAt.toISOString(),
     updatedAt: bot.updatedAt.toISOString(),
   };
@@ -930,7 +948,7 @@ function requireMonchaInternal() {
 }
 
 route('GET', '/api/v1/lead-bots', async ({ tenantId, url }) => {
-  const q = leadBotListQuerySchema.parse(query(url, 'page', 'pageSize', 'status'));
+  const q = leadBotListQuerySchema.parse(query(url, 'page', 'pageSize', 'status', 'knowledgeStatus'));
   const page = await leadBots.list(tenantId, q);
   const json: LeadBotPage = { ...page, items: page.items.map(leadBotView) };
   return { json };
@@ -963,6 +981,27 @@ route('POST', '/api/v1/leads/:id/bot', async ({ req, tenantId, params }) => {
   }
 });
 
+// Runs the lead's training step now (7.1 discover + 7.3 ingest-bulk, or one 7.4 status poll while it trains). Normally
+// the worker does this before it copies the lead's website.
+route('POST', '/api/v1/leads/:id/bot/train', async ({ req, tenantId, params }) => {
+  const client = requireMonchaInternal();
+  await requireEditor(req, tenantId, 'train lead bots');
+  try {
+    const { bot, outcome } = await trainLeadBotNow({ bots: leadBots, api: client, logger }, { tenantId, leadId: params.id! });
+    return { status: outcome?.status === 'submitted' ? 202 : 200, json: { bot: leadBotView(bot), outcome } };
+  } catch (error) {
+    if (error instanceof LeadBotRequestError) {
+      if (error.code === 'not_found') throw new HttpError(404, 'bot_not_found', 'This lead has no bot yet');
+      if (error.code === 'not_created') throw new HttpError(409, 'bot_not_created', 'The bot is not created yet');
+      if (error.code === 'training_failed') {
+        throw new HttpError(409, 'training_failed', 'Training gave up after 3 tries; POST /api/v1/leads/:id/bot/retry first');
+      }
+      if (error.code === 'busy') throw new HttpError(409, 'bot_busy', 'The worker is training this bot right now');
+    }
+    throw error;
+  }
+});
+
 route('POST', '/api/v1/leads/:id/bot/retry', async ({ req, tenantId, params }) => {
   await requireEditor(req, tenantId, 'retry lead bots');
   try {
@@ -971,7 +1010,7 @@ route('POST', '/api/v1/leads/:id/bot/retry', async ({ req, tenantId, params }) =
   } catch (error) {
     if (error instanceof LeadBotRequestError) {
       if (error.code === 'not_found') throw new HttpError(404, 'bot_not_found', 'This lead has no bot yet');
-      if (error.code === 'not_failed') throw new HttpError(409, 'bot_not_failed', 'Only a failed bot can be retried');
+      if (error.code === 'not_failed') throw new HttpError(409, 'bot_not_failed', 'Only a bot whose creation or training failed can be retried');
     }
     throw error;
   }

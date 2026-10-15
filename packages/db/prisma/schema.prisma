@@ -657,6 +657,27 @@ model LeadBot {
   /// The entire POST /bots response.
   config         Json?
   createdBotAt   DateTime?
+  /// Website training once the bot is created: pending, discovering (discover + ingest-bulk running), training
+  /// (submitted, polled until done), trained or failed (gave up after its tries). The website copy waits for trained.
+  knowledgeStatus     String    @default("pending")
+  knowledgeAttempts   Int       @default(0)
+  knowledgeNextAt     DateTime?
+  knowledgeLockedAt   DateTime?
+  /// The lead's website URL that was discovered.
+  websiteUrl          String?
+  /// `urls` of POST knowledge/discover.
+  discoveredUrls      Json?
+  pagesFetched        Int?
+  discoveryTruncated  Boolean?
+  discoveredAt        DateTime?
+  /// Key and body of POST knowledge/ingest-bulk. Saved before sending; retries send exactly the same request.
+  trainingKey         String?
+  trainingPayload     Json?
+  trainingId          String?
+  /// The latest GET training/:trainingId response.
+  trainingResult      Json?
+  trainingSubmittedAt DateTime?
+  trainedAt           DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
   tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -664,6 +685,7 @@ model LeadBot {
 
   @@index([tenantId, status])
   @@index([status, nextAt])
+  @@index([status, knowledgeStatus, knowledgeNextAt])
 }
 
 /// Per-tenant switch and daily cap for automatic website copies.

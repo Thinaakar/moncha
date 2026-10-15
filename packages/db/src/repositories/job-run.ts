@@ -190,9 +190,9 @@ export class PrismaJobRunRepository implements JobRepo {
     // The console runs its own csv_import jobs in-process; only API-queued ones belong to the worker.
     const onlyQueuedCsv = type === 'csv_import' ? Prisma.sql`AND payload->>'mode' = 'queued'` : Prisma.empty;
     const onlyId = options.id ? Prisma.sql`AND id = ${options.id}` : Prisma.empty;
-    // Website copies wait until the lead's MonCha bot is created.
+    // Website copies wait until the lead's MonCha bot is created and trained on its website.
     const leadBotReady = options.requireLeadBot
-      ? Prisma.sql`AND EXISTS (SELECT 1 FROM "LeadBot" b WHERE b."leadId" = "JobRun"."leadId" AND b.status = 'created')`
+      ? Prisma.sql`AND EXISTS (SELECT 1 FROM "LeadBot" b WHERE b."leadId" = "JobRun"."leadId" AND b.status = 'created' AND b."knowledgeStatus" = 'trained')`
       : Prisma.empty;
     const rows = await this.db.$queryRaw<
       Array<{

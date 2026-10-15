@@ -31,6 +31,7 @@ import {
   resolveCountry,
   runCountryDiscoveryJob,
   runLeadBotTick,
+  runLeadBotTrainTick,
   runSitePipelineTick,
   runSiteSnapshotJob,
   runWebsiteAuditJob,
@@ -101,6 +102,8 @@ const monchaBots = monchaInternalClient();
 const leadBots = new PrismaLeadBotRepository(prisma);
 /** Account problems, rate limits and full tiers pause every bot until this time. */
 let botsPausedUntil = 0;
+/** Same for bot training (also while MonCha's discovery is down). */
+let trainingPausedUntil = 0;
 
 function auditDeps() {
   return {
@@ -252,7 +255,7 @@ async function pipelineTick() {
     pipeline: siteSnapshots,
     snapshots: siteSnapshots,
     jobs,
-    // A new copy starts only once its lead's MonCha bot is created; a copy that already started keeps going.
+    // A new copy starts only once its lead's MonCha bot is created and trained; a copy that already started keeps going.
     claimCopy: async (jobId) =>
       (await withDbRetry(() => jobs.claimJobs(WORKER_ID, 1, 'site_snapshot', { id: jobId, requireLeadBot: !jobId && Boolean(monchaBots) })))[0] ??
       null,
@@ -305,6 +308,19 @@ async function leadBotTick() {
   }
 }
 
+/**
+ * One training step at a time for created bots: discover the lead's website and submit its pages (ingest-bulk), or poll
+ * a submitted training. The lead's copy starts once its bot is trained; a training that fails 3 tries fails the copy.
+ */
+async function leadBotTrainTick() {
+  if (!monchaBots || crawlAbort.signal.aborted || Date.now() < trainingPausedUntil) return;
+  const tick = await withDbRetry(() => runLeadBotTrainTick({ bots: leadBots, api: monchaBots, logger }, { signal: crawlAbort.signal }));
+  if (tick.action === 'ran') {
+    if (tick.outcome.status === 'paused') trainingPausedUntil = tick.outcome.until.getTime();
+    if (tick.outcome.status !== 'training') logger.info('lead_bot_train_tick', { ...tick.outcome });
+  }
+}
+
 function copySite(job: JobRunRecord, store: SiteStore) {
   return runSiteSnapshotJob(
     {
@@ -353,7 +369,7 @@ async function main() {
     sitePipeline: 'one website at a time: copy, GitHub push, Worker deploy',
     githubSites: githubPublisher ? `${githubPublisher.owner}/{site}@${githubPublisher.branch}` : false,
     workerSites: Boolean(workerDeployer),
-    leadBots: monchaBots ? `${monchaBots.environment}: bot before each website copy` : false,
+    leadBots: monchaBots ? `${monchaBots.environment}: bot created and trained on the website before each copy` : false,
     schedulerTickMs: SCHEDULER_TICK_MS,
     ...discoveryBudget(),
   });
@@ -423,6 +439,7 @@ async function main() {
     every('csv_tick_error', POLL_MS, csvTick),
     every('site_pipeline_tick_error', POLL_MS, pipelineTick),
     every('lead_bot_tick_error', POLL_MS, leadBotTick),
+    every('lead_bot_train_tick_error', POLL_MS, leadBotTrainTick),
   ]);
 }
 

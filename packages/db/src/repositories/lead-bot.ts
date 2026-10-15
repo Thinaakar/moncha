@@ -1,7 +1,9 @@
 import { Prisma, type LeadBot, type PrismaClient } from '@prisma/client';
 import type {
   BotPlanTier,
+  KnowledgeDocument,
   LeadBotItem,
+  LeadBotKnowledgeStatus,
   LeadBotListQuery,
   LeadBotPatch,
   LeadBotRepo,
@@ -9,14 +11,35 @@ import type {
 } from '@moncha/domain';
 import { clampPage, clampPageSize } from '@moncha/domain';
 
-const companySelect = { lead: { select: { company: { select: { id: true, name: true, domain: true } } } } } as const;
+const companySelect = {
+  lead: {
+    select: {
+      company: { select: { id: true, name: true, domain: true, website: { select: { url: true, finalUrl: true } } } },
+    },
+  },
+} as const;
 
-type RowWithCompany = LeadBot & { lead: { company: { id: string; name: string; domain: string | null } } };
+type RowWithCompany = LeadBot & {
+  lead: {
+    company: { id: string; name: string; domain: string | null; website: { url: string; finalUrl: string | null } | null };
+  };
+};
 
 const STATUSES: LeadBotStatus[] = ['pending', 'creating', 'created', 'failed'];
+const KNOWLEDGE_STATUSES: LeadBotKnowledgeStatus[] = ['pending', 'discovering', 'training', 'trained', 'failed'];
+
+function websiteUrl(company: RowWithCompany['lead']['company']): string | null {
+  const url = company.website?.finalUrl || company.website?.url || (company.domain ? `https://${company.domain}/` : null);
+  return url && /^https?:\/\//i.test(url) ? url : url ? `https://${url}` : null;
+}
+
+function json(value: unknown) {
+  return value === null ? Prisma.JsonNull : (value as Prisma.InputJsonValue);
+}
 
 function mapBot(row: RowWithCompany): LeadBotItem {
   const { lead, ...bot } = row;
+  const { website: _website, ...company } = lead.company;
   return {
     id: bot.id,
     tenantId: bot.tenantId,
@@ -36,9 +59,24 @@ function mapBot(row: RowWithCompany): LeadBotItem {
     connectionId: bot.connectionId,
     config: bot.config ?? null,
     createdBotAt: bot.createdBotAt,
+    knowledgeStatus: bot.knowledgeStatus as LeadBotKnowledgeStatus,
+    knowledgeAttempts: bot.knowledgeAttempts,
+    knowledgeNextAt: bot.knowledgeNextAt,
+    knowledgeLockedAt: bot.knowledgeLockedAt,
+    websiteUrl: bot.websiteUrl,
+    discoveredUrls: Array.isArray(bot.discoveredUrls) ? (bot.discoveredUrls as string[]) : null,
+    pagesFetched: bot.pagesFetched,
+    discoveryTruncated: bot.discoveryTruncated,
+    discoveredAt: bot.discoveredAt,
+    trainingKey: bot.trainingKey,
+    trainingPayload: (bot.trainingPayload as { documents: KnowledgeDocument[] } | null) ?? null,
+    trainingId: bot.trainingId,
+    trainingResult: bot.trainingResult ?? null,
+    trainingSubmittedAt: bot.trainingSubmittedAt,
+    trainedAt: bot.trainedAt,
     createdAt: bot.createdAt,
     updatedAt: bot.updatedAt,
-    company: lead.company,
+    company: { ...company, websiteUrl: websiteUrl(lead.company) },
   };
 }
 
@@ -132,14 +170,51 @@ export class PrismaLeadBotRepository implements LeadBotRepo {
     return row ? mapBot(row) : null;
   }
 
+  async claimNextKnowledge(
+    now: Date,
+    staleBefore: Date,
+    options: { tenantId?: string; leadId?: string } = {},
+  ): Promise<LeadBotItem | null> {
+    const tenant = options.tenantId ? Prisma.sql`AND x."tenantId" = ${options.tenantId}` : Prisma.empty;
+    const unlocked = Prisma.sql`(x."knowledgeLockedAt" IS NULL OR x."knowledgeLockedAt" < ${staleBefore})`;
+    const dueAt = options.leadId ? Prisma.sql`TRUE` : Prisma.sql`(x."knowledgeNextAt" IS NULL OR x."knowledgeNextAt" <= ${now})`;
+    const lead = options.leadId ? Prisma.sql`AND x."leadId" = ${options.leadId}` : Prisma.empty;
+    const rows = await this.db.$queryRaw<Array<{ id: string }>>`
+      UPDATE "LeadBot" AS b
+      SET "knowledgeStatus" = CASE WHEN b."knowledgeStatus" = 'training' THEN 'training' ELSE 'discovering' END,
+          "knowledgeAttempts" = CASE WHEN b."knowledgeStatus" = 'training' THEN b."knowledgeAttempts" ELSE b."knowledgeAttempts" + 1 END,
+          "knowledgeLockedAt" = ${now},
+          "updatedAt" = ${now}
+      WHERE b.id = (
+        SELECT x.id FROM "LeadBot" x
+        WHERE x.status = 'created' AND x."chatbotId" IS NOT NULL ${lead} ${tenant}
+          AND ((x."knowledgeStatus" = 'pending' AND ${dueAt})
+            OR (x."knowledgeStatus" = 'discovering' AND x."knowledgeLockedAt" < ${staleBefore})
+            OR (x."knowledgeStatus" = 'training' AND ${dueAt} AND ${unlocked}))
+        ORDER BY EXISTS (
+          SELECT 1 FROM "SiteSnapshot" s JOIN "JobRun" j ON j.id = s."jobId" WHERE s."leadId" = x."leadId" AND ${WAITING_COPY}
+        ) DESC, (x."knowledgeStatus" = 'training') DESC, x."createdBotAt" ASC NULLS LAST, x.id
+        FOR UPDATE OF x SKIP LOCKED
+        LIMIT 1
+      )
+      RETURNING b.id`;
+    const claimed = rows[0];
+    if (!claimed) return null;
+    const row = await this.db.leadBot.findUnique({ where: { id: claimed.id }, include: companySelect });
+    return row ? mapBot(row) : null;
+  }
+
   async update(tenantId: string, id: string, patch: LeadBotPatch): Promise<LeadBotItem | null> {
-    const { config, ...rest } = patch;
+    const { config, discoveredUrls, trainingPayload, trainingResult, ...rest } = patch;
     const row = await this.db.$transaction(async (tx) => {
       const { count } = await tx.leadBot.updateMany({
         where: { id, tenantId },
         data: {
           ...rest,
-          ...(config !== undefined ? { config: config === null ? Prisma.JsonNull : (config as Prisma.InputJsonValue) } : {}),
+          ...(config !== undefined ? { config: json(config) } : {}),
+          ...(discoveredUrls !== undefined ? { discoveredUrls: json(discoveredUrls) } : {}),
+          ...(trainingPayload !== undefined ? { trainingPayload: json(trainingPayload) } : {}),
+          ...(trainingResult !== undefined ? { trainingResult: json(trainingResult) } : {}),
         },
       });
       if (!count) return null;
@@ -166,8 +241,12 @@ export class PrismaLeadBotRepository implements LeadBotRepo {
   async list(tenantId: string, query: LeadBotListQuery) {
     const page = clampPage(query.page);
     const pageSize = clampPageSize(query.pageSize);
-    const where: Prisma.LeadBotWhereInput = { tenantId, ...(query.status ? { status: query.status } : {}) };
-    const [rows, total, grouped] = await Promise.all([
+    const where: Prisma.LeadBotWhereInput = {
+      tenantId,
+      ...(query.status ? { status: query.status } : {}),
+      ...(query.knowledgeStatus ? { knowledgeStatus: query.knowledgeStatus } : {}),
+    };
+    const [rows, total, grouped, groupedKnowledge] = await Promise.all([
       this.db.leadBot.findMany({
         where,
         include: companySelect,
@@ -177,10 +256,23 @@ export class PrismaLeadBotRepository implements LeadBotRepo {
       }),
       this.db.leadBot.count({ where }),
       this.db.leadBot.groupBy({ by: ['status'], where: { tenantId }, _count: { _all: true } }),
+      this.db.leadBot.groupBy({ by: ['knowledgeStatus'], where: { tenantId, status: 'created' }, _count: { _all: true } }),
     ]);
     const counts = Object.fromEntries(STATUSES.map((s) => [s, 0])) as Record<LeadBotStatus, number>;
     for (const g of grouped) if ((STATUSES as string[]).includes(g.status)) counts[g.status as LeadBotStatus] = g._count._all;
-    return { items: rows.map(mapBot), total, page, pageSize, totalPages: total === 0 ? 0 : Math.ceil(total / pageSize), counts };
+    const knowledgeCounts = Object.fromEntries(KNOWLEDGE_STATUSES.map((s) => [s, 0])) as Record<LeadBotKnowledgeStatus, number>;
+    for (const g of groupedKnowledge) {
+      if ((KNOWLEDGE_STATUSES as string[]).includes(g.knowledgeStatus)) knowledgeCounts[g.knowledgeStatus as LeadBotKnowledgeStatus] = g._count._all;
+    }
+    return {
+      items: rows.map(mapBot),
+      total,
+      page,
+      pageSize,
+      totalPages: total === 0 ? 0 : Math.ceil(total / pageSize),
+      counts,
+      knowledgeCounts,
+    };
   }
 
   async nameTaken(tenantId: string, environment: string, name: string, exceptLeadId: string): Promise<boolean> {
@@ -197,8 +289,9 @@ export class PrismaLeadBotRepository implements LeadBotRepo {
 
   async failCopiesOfFailedBots(at: Date): Promise<number> {
     return this.failCopies(
-      Prisma.sql`EXISTS (SELECT 1 FROM "LeadBot" b WHERE b."leadId" = s."leadId" AND b.status = 'failed')`,
-      Prisma.sql`'Bot creation failed: ' || COALESCE((SELECT b.error FROM "LeadBot" b WHERE b."leadId" = s."leadId"), 'unknown error')`,
+      Prisma.sql`EXISTS (SELECT 1 FROM "LeadBot" b WHERE b."leadId" = s."leadId" AND (b.status = 'failed' OR b."knowledgeStatus" = 'failed'))`,
+      Prisma.sql`(SELECT CASE WHEN b.status = 'failed' THEN 'Bot creation failed: ' ELSE 'Bot training failed: ' END
+        || COALESCE(b.error, 'unknown error') FROM "LeadBot" b WHERE b."leadId" = s."leadId")`,
       at,
     );
   }

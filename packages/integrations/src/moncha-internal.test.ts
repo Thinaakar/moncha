@@ -216,6 +216,53 @@ describe('MonchaInternalClient.createBot', () => {
   });
 });
 
+describe('MonchaInternalClient knowledge', () => {
+  const BOT = '11111111-1111-4111-8111-111111111111';
+
+  it('discovers with url and max_pages only', async () => {
+    const body = { urls: ['https://acme.sg/', 'https://acme.sg/services'], pagesFetched: 2, truncated: false, next_step: 'x' };
+    const { api, calls } = client(() => json(body));
+    const found = await api.discover({ botId: BOT, url: 'https://acme.sg/', maxPages: 100 });
+    expect(calls[0]!.url).toBe(`${MONCHA_INTERNAL_UAT_URL}/bots/${BOT}/knowledge/discover`);
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({ url: 'https://acme.sg/', max_pages: 100 });
+    expect((calls[0]!.init.headers as Record<string, string>)['Idempotency-Key']).toBeUndefined();
+    expect(found).toEqual({ urls: body.urls, pagesFetched: 2, truncated: false, response: body });
+  });
+
+  it('queues bulk training with the key and reads the training status', async () => {
+    const queued = { data: { training_id: 'tr-1', status: 'queued', total: 2 } };
+    const docs = [{ title: 'Acme - Home', url: 'https://acme.sg/', source_type: 'url' as const }];
+    const ingest = client(() => json(queued, 202));
+    expect(await ingest.api.ingestBulk({ botId: BOT, documents: docs, idempotencyKey: 'lead-abc-train-v1' })).toEqual({
+      trainingId: 'tr-1',
+      status: 'queued',
+      total: 2,
+      response: queued,
+    });
+    expect(ingest.calls[0]!.url).toBe(`${MONCHA_INTERNAL_UAT_URL}/bots/${BOT}/knowledge/ingest-bulk`);
+    expect(JSON.parse(ingest.calls[0]!.init.body as string)).toEqual({ documents: docs });
+    expect((ingest.calls[0]!.init.headers as Record<string, string>)['Idempotency-Key']).toBe('lead-abc-train-v1');
+
+    const progress = { training_id: 'tr-1', total: 2, ready: 1, failed: 0, status: 'processing', poll_after_seconds: 5, documents: [] };
+    const poll = client(() => json(progress));
+    expect(await poll.api.training({ botId: BOT, trainingId: 'tr-1' })).toEqual({
+      status: 'processing',
+      total: 2,
+      ready: 1,
+      failed: 0,
+      pollAfterSeconds: 5,
+      response: progress,
+    });
+    expect(poll.calls[0]!.url).toBe(`${MONCHA_INTERNAL_UAT_URL}/bots/${BOT}/training/tr-1`);
+  });
+
+  it('passes knowledge errors through', async () => {
+    const { api } = client(() => json({ error: { code: 'kb_pages_limit', message: 'limit' } }, 409));
+    const error = await caught(api.ingestBulk({ botId: BOT, documents: [], idempotencyKey: 'lead-abc-train-v1' }));
+    expect(error).toMatchObject({ code: 'kb_pages_limit', status: 409 });
+  });
+});
+
 describe('MonchaInternalClient.check', () => {
   it('reports slots when the key works', async () => {
     const { api } = client(() => json({ data: SLOTS }));

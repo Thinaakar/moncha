@@ -524,7 +524,7 @@
     },
     {
       "name": "Lead bots",
-      "description": "MonCha demo bot per lead (internal-lead-agent.md section 3), created before the lead's website is copied: GET /slots, tier with the most free slots, POST /bots with the company name and language en. Needs MONCHA_INTERNAL_KEY in apps/worker/.env (otherwise 503 moncha_not_configured). Create and retry need authToken from login (admin or operator). Set leadId to a qualified lead first. Creating a bot uses one MonCha slot.",
+      "description": "MonCha demo bot per lead (internal-lead-agent.md sections 3 and 7), created and trained before the lead's website is copied: GET /slots, tier with the most free slots, POST /bots with the company name and language en; then knowledge/discover (url, max_pages 100), knowledge/ingest-bulk (title, url, source_type per page) and the training status until completed. Needs MONCHA_INTERNAL_KEY in apps/worker/.env (otherwise 503 moncha_not_configured). Create and retry need authToken from login (admin or operator). Set leadId to a qualified lead first. Creating a bot uses one MonCha slot.",
       "event": [
         {
           "listen": "prerequest",
@@ -549,7 +549,8 @@
                 "exec": [
                   "pm.test('status 200', () => pm.response.to.have.status(200));",
                   "const body = pm.response.json();",
-                  "pm.test('counts per status', () => pm.expect(body.counts).to.have.all.keys('pending', 'creating', 'created', 'failed'));"
+                  "pm.test('counts per status', () => pm.expect(body.counts).to.have.all.keys('pending', 'creating', 'created', 'failed'));",
+                  "pm.test('training counts per status', () => pm.expect(body.knowledgeCounts).to.have.all.keys('pending', 'discovering', 'training', 'trained', 'failed'));"
                 ]
               }
             }
@@ -620,6 +621,61 @@
                 "exec": [
                   "pm.test('status 200', () => pm.response.to.have.status(200));",
                   "pm.test('has botStatus', () => pm.expect(pm.response.json()).to.have.property('botStatus'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Train lead bot now (discover + ingest-bulk)",
+          "request": { "method": "POST", "url": "{{baseUrl}}/api/v1/leads/{{leadId}}/bot/train" },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('submitted (202), polled or already trained (200)', () => pm.expect(pm.response.code).to.be.oneOf([200, 202]));",
+                  "const k = pm.response.json().bot.knowledge;",
+                  "pm.test('training submitted or done', () => pm.expect(k.status).to.be.oneOf(['training', 'trained']));",
+                  "pm.test('discovered URLs stored', () => pm.expect(k.discoveredUrls).to.be.an('array'));",
+                  "pm.test('documents carry only title, url and source_type', () => { pm.expect(k.documents.length).to.be.within(1, 100); k.documents.forEach((d) => pm.expect(d).to.have.all.keys('title', 'url', 'source_type')); });",
+                  "pm.test('titles are company - page path', () => k.documents.forEach((d) => pm.expect(d.title).to.match(/ - /)));",
+                  "pm.test('training id stored', () => pm.expect(k.trainingId).to.be.a('string'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Poll training (run again until trained)",
+          "request": { "method": "POST", "url": "{{baseUrl}}/api/v1/leads/{{leadId}}/bot/train" },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const bot = pm.response.json().bot;",
+                  "pm.test('training or trained', () => pm.expect(bot.knowledge.status).to.be.oneOf(['training', 'trained']));",
+                  "if (bot.knowledge.status === 'trained') pm.test('error column says success', () => pm.expect(bot.error).to.match(/^success/));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Bots in training",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/lead-bots?knowledgeStatus=training" },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('only bots in training', () => pm.response.json().items.forEach((b) => pm.expect(b.knowledge.status).to.eql('training')));"
                 ]
               }
             }

@@ -8,6 +8,8 @@ export const MONCHA_INTERNAL_PRODUCTION_URL = 'https://api.moncha.co/vendor/inte
 export const MONCHA_INTERNAL_MAX_BODY_BYTES = 11 * 1024 * 1024;
 
 const REQUEST_TIMEOUT_MS = 30_000;
+/** Discovery crawls the website (up to 100 pages) before it answers. */
+const DISCOVER_TIMEOUT_MS = 180_000;
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9_:.-]{8,200}$/;
 
 export type MonchaInternalEnvironment = 'uat' | 'production' | 'custom';
@@ -56,6 +58,52 @@ export type MonchaCreatedBot = {
   response: unknown;
 };
 
+/** Discover answers with the fields at the top level; ingest wraps them in `data`. Both shapes are accepted. */
+function unwrap(body: unknown): unknown {
+  if (body && typeof body === 'object' && 'data' in body && (body as { data: unknown }).data && typeof (body as { data: unknown }).data === 'object') {
+    return (body as { data: unknown }).data;
+  }
+  return body;
+}
+
+const discoverSchema = z.object({
+  urls: z.array(z.string()),
+  pagesFetched: z.number().nullish(),
+  pages_fetched: z.number().nullish(),
+  truncated: z.boolean().nullish(),
+});
+
+const ingestSchema = z.object({
+  training_id: z.string().min(1),
+  status: z.string().nullish(),
+  total: z.number().nullish(),
+});
+
+const trainingSchema = z.object({
+  training_id: z.string().nullish(),
+  status: z.string(),
+  total: z.number().nullish(),
+  ready: z.number().nullish(),
+  failed: z.number().nullish(),
+  poll_after_seconds: z.number().nullish(),
+});
+
+export type MonchaKnowledgeDocument = { title: string; url: string; source_type: 'url' };
+
+export type MonchaDiscovered = { urls: string[]; pagesFetched: number | null; truncated: boolean; response: unknown };
+
+export type MonchaTrainingQueued = { trainingId: string; status: string | null; total: number | null; response: unknown };
+
+export type MonchaTraining = {
+  /** processing, completed, partial_failure or failed. */
+  status: string;
+  total: number | null;
+  ready: number | null;
+  failed: number | null;
+  pollAfterSeconds: number | null;
+  response: unknown;
+};
+
 export type MonchaInternalCheck = {
   environment: MonchaInternalEnvironment;
   baseUrl: string;
@@ -90,6 +138,8 @@ export type MonchaInternalRequest = {
   /** Required by create and ingest operations; reuse the same key and body when retrying. */
   idempotencyKey?: string;
   signal?: AbortSignal;
+  /** Defaults to 30 seconds. */
+  timeoutMs?: number;
 };
 
 export function monchaInternalEnvironment(baseUrl: string): MonchaInternalEnvironment {
@@ -171,7 +221,7 @@ export class MonchaInternalClient {
   }
 
   async request<T>(method: string, path: string, options: MonchaInternalRequest = {}): Promise<T> {
-    const { body, idempotencyKey, signal } = options;
+    const { body, idempotencyKey, signal, timeoutMs = REQUEST_TIMEOUT_MS } = options;
     if (!path.startsWith('/') || path.includes(':')) {
       throw new MonchaInternalError('invalid_path', `Path must start with / and contain real IDs, not :placeholders (${path})`, null);
     }
@@ -198,7 +248,7 @@ export class MonchaInternalClient {
       headers['Idempotency-Key'] = idempotencyKey;
     }
 
-    const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+    const timeout = AbortSignal.timeout(timeoutMs);
     let response: Response;
     try {
       response = await this.fetchImpl(`${this.baseUrl}${path}`, {
@@ -209,7 +259,7 @@ export class MonchaInternalClient {
       });
     } catch (error) {
       if (signal?.aborted) throw new MonchaInternalError('aborted', 'Request was cancelled', null);
-      if (timeout.aborted) throw new MonchaInternalError('moncha_timeout', `No response within ${REQUEST_TIMEOUT_MS / 1000}s`, null);
+      if (timeout.aborted) throw new MonchaInternalError('moncha_timeout', `No response within ${timeoutMs / 1000}s`, null);
       const message = error instanceof Error ? error.message : String(error);
       throw new MonchaInternalError('moncha_unreachable', this.scrub(message).slice(0, 200), null);
     }
@@ -256,6 +306,58 @@ export class MonchaInternalClient {
       tenantId: data.customer_tenant_id,
       connectionId: data.connection_id ?? null,
       planTier: data.plan_tier ?? null,
+      response,
+    };
+  }
+
+  /** `POST /bots/:botId/knowledge/discover`: candidate page URLs of a website. Trains nothing. */
+  async discover(input: { botId: string; url: string; maxPages?: number; signal?: AbortSignal }): Promise<MonchaDiscovered> {
+    const body: Record<string, unknown> = { url: input.url };
+    if (input.maxPages !== undefined) body.max_pages = input.maxPages;
+    const response = await this.request<unknown>('POST', `/bots/${encodeURIComponent(input.botId)}/knowledge/discover`, {
+      body,
+      signal: input.signal,
+      timeoutMs: DISCOVER_TIMEOUT_MS,
+    });
+    const parsed = discoverSchema.safeParse(unwrap(response));
+    if (!parsed.success) throw new MonchaInternalError('unexpected_response', 'knowledge/discover returned no urls', 200);
+    const { urls, pagesFetched, pages_fetched, truncated } = parsed.data;
+    return { urls, pagesFetched: pagesFetched ?? pages_fetched ?? null, truncated: truncated ?? false, response };
+  }
+
+  /** `POST /bots/:botId/knowledge/ingest-bulk`: queues training of 1-100 documents. */
+  async ingestBulk(input: {
+    botId: string;
+    documents: MonchaKnowledgeDocument[];
+    idempotencyKey: string;
+    signal?: AbortSignal;
+  }): Promise<MonchaTrainingQueued> {
+    const response = await this.request<unknown>('POST', `/bots/${encodeURIComponent(input.botId)}/knowledge/ingest-bulk`, {
+      body: { documents: input.documents },
+      idempotencyKey: input.idempotencyKey,
+      signal: input.signal,
+    });
+    const parsed = ingestSchema.safeParse(unwrap(response));
+    if (!parsed.success) throw new MonchaInternalError('unexpected_response', 'knowledge/ingest-bulk returned no training_id', 202);
+    return { trainingId: parsed.data.training_id, status: parsed.data.status ?? null, total: parsed.data.total ?? null, response };
+  }
+
+  /** `GET /bots/:botId/training/:trainingId`: progress of one training job. */
+  async training(input: { botId: string; trainingId: string; signal?: AbortSignal }): Promise<MonchaTraining> {
+    const response = await this.request<unknown>(
+      'GET',
+      `/bots/${encodeURIComponent(input.botId)}/training/${encodeURIComponent(input.trainingId)}`,
+      { signal: input.signal },
+    );
+    const parsed = trainingSchema.safeParse(unwrap(response));
+    if (!parsed.success) throw new MonchaInternalError('unexpected_response', 'training status returned no status', 200);
+    const { status, total, ready, failed, poll_after_seconds } = parsed.data;
+    return {
+      status,
+      total: total ?? null,
+      ready: ready ?? null,
+      failed: failed ?? null,
+      pollAfterSeconds: poll_after_seconds ?? null,
       response,
     };
   }

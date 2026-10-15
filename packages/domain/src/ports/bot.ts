@@ -8,6 +8,14 @@ export type BotSlots = Record<BotPlanTier, BotSlot>;
 /** `pending` waits for the worker (first try or a retry), `creating` is in progress, `failed` gave up after its tries. */
 export type LeadBotStatus = 'pending' | 'creating' | 'created' | 'failed';
 
+/**
+ * Website training of a created bot: `pending` waits for the worker, `discovering` runs discover + ingest-bulk,
+ * `training` is submitted and polled, `trained` is done, `failed` gave up after its tries.
+ */
+export type LeadBotKnowledgeStatus = 'pending' | 'discovering' | 'training' | 'trained' | 'failed';
+
+export type KnowledgeDocument = { title: string; url: string; source_type: 'url' };
+
 export type LeadBotRecord = {
   id: string;
   tenantId: string;
@@ -27,11 +35,29 @@ export type LeadBotRecord = {
   connectionId: string | null;
   config: unknown;
   createdBotAt: Date | null;
+  knowledgeStatus: LeadBotKnowledgeStatus;
+  knowledgeAttempts: number;
+  knowledgeNextAt: Date | null;
+  knowledgeLockedAt: Date | null;
+  websiteUrl: string | null;
+  discoveredUrls: string[] | null;
+  pagesFetched: number | null;
+  discoveryTruncated: boolean | null;
+  discoveredAt: Date | null;
+  trainingKey: string | null;
+  trainingPayload: { documents: KnowledgeDocument[] } | null;
+  trainingId: string | null;
+  trainingResult: unknown;
+  trainingSubmittedAt: Date | null;
+  trainedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 };
 
-export type LeadBotItem = LeadBotRecord & { company: { id: string; name: string; domain: string | null } };
+/** `websiteUrl`: the lead's website (final URL of the audit, else its URL, else https://domain). */
+export type LeadBotItem = LeadBotRecord & {
+  company: { id: string; name: string; domain: string | null; websiteUrl: string | null };
+};
 
 export type LeadBotPatch = Partial<
   Pick<
@@ -49,10 +75,30 @@ export type LeadBotPatch = Partial<
     | 'connectionId'
     | 'config'
     | 'createdBotAt'
+    | 'knowledgeStatus'
+    | 'knowledgeAttempts'
+    | 'knowledgeNextAt'
+    | 'knowledgeLockedAt'
+    | 'websiteUrl'
+    | 'discoveredUrls'
+    | 'pagesFetched'
+    | 'discoveryTruncated'
+    | 'discoveredAt'
+    | 'trainingKey'
+    | 'trainingPayload'
+    | 'trainingId'
+    | 'trainingResult'
+    | 'trainingSubmittedAt'
+    | 'trainedAt'
   >
 >;
 
-export type LeadBotListQuery = { status?: LeadBotStatus; page?: number; pageSize?: number };
+export type LeadBotListQuery = {
+  status?: LeadBotStatus;
+  knowledgeStatus?: LeadBotKnowledgeStatus;
+  page?: number;
+  pageSize?: number;
+};
 
 export interface LeadBotRepo {
   /** Adds a pending bot for every lead whose website copy waits for its first try and that has no bot yet. */
@@ -67,6 +113,12 @@ export interface LeadBotRepo {
    * With `leadId`, only that lead's bot, whatever its `nextAt`.
    */
   claimNext(now: Date, staleBefore: Date, options?: { tenantId?: string; leadId?: string }): Promise<LeadBotItem | null>;
+  /**
+   * Atomically takes the next created bot whose training step is due (leads with a waiting copy first, then polls):
+   * `pending` (or `discovering` locked before `staleBefore`) becomes `discovering` with one more knowledge attempt;
+   * `training` with `knowledgeNextAt` due is locked for one poll. With `leadId`, only that bot, whatever its next time.
+   */
+  claimNextKnowledge(now: Date, staleBefore: Date, options?: { tenantId?: string; leadId?: string }): Promise<LeadBotItem | null>;
   /** Also keeps Lead.botStatus (and botCreatedAt) in step with the bot. */
   update(tenantId: string, id: string, patch: LeadBotPatch): Promise<LeadBotItem | null>;
   getForLead(tenantId: string, leadId: string): Promise<LeadBotItem | null>;
@@ -80,12 +132,13 @@ export interface LeadBotRepo {
     pageSize: number;
     totalPages: number;
     counts: Record<LeadBotStatus, number>;
+    knowledgeCounts: Record<LeadBotKnowledgeStatus, number>;
   }>;
   /** Another lead's bot in this environment already uses the name. */
   nameTaken(tenantId: string, environment: string, name: string, exceptLeadId: string): Promise<boolean>;
   /** The lead's copies still waiting for their first try become failed (`bot_failed`) with `error`. */
   failWaitingCopies(tenantId: string, leadId: string, error: string, at: Date): Promise<number>;
-  /** Same for every lead whose bot already gave up (copies queued after it failed). */
+  /** Same for every lead whose bot creation or training already gave up (copies queued after it failed). */
   failCopiesOfFailedBots(at: Date): Promise<number>;
 }
 
@@ -100,4 +153,24 @@ export interface MonchaBotApi {
     idempotencyKey: string;
     signal?: AbortSignal;
   }): Promise<{ botId: string; tenantId: string; connectionId: string | null; planTier: string | null; response: unknown }>;
+  discover(input: {
+    botId: string;
+    url: string;
+    maxPages?: number;
+    signal?: AbortSignal;
+  }): Promise<{ urls: string[]; pagesFetched: number | null; truncated: boolean; response: unknown }>;
+  ingestBulk(input: {
+    botId: string;
+    documents: KnowledgeDocument[];
+    idempotencyKey: string;
+    signal?: AbortSignal;
+  }): Promise<{ trainingId: string; status: string | null; total: number | null; response: unknown }>;
+  training(input: { botId: string; trainingId: string; signal?: AbortSignal }): Promise<{
+    status: string;
+    total: number | null;
+    ready: number | null;
+    failed: number | null;
+    pollAfterSeconds: number | null;
+    response: unknown;
+  }>;
 }

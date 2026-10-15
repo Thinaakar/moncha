@@ -27,7 +27,7 @@ copies) were added on 2026-10-08.
 - [Reviews](#reviews): list review tasks, get one, resolve one (confirm, mark chatbot, re-audit)
 - [Website copies](#website-copies): copy a lead's homepage, list copies, get one, view source, stored files, queue, cancel, GitHub push, Worker deploy, copy progress
 - [Copy automation](#copy-automation): queue copies for new qualified leads after each country crawl
-- [Lead bots](#lead-bots): a MonCha demo bot per lead, created before the lead's website is copied
+- [Lead bots](#lead-bots): a MonCha demo bot per lead, created and trained on the lead's website before it is copied
 - [How a lead's queue is decided](#how-a-leads-queue-is-decided)
 - [Enums](#enums)
 - [Background processing](#background-processing)
@@ -88,7 +88,8 @@ copies) were added on 2026-10-08.
 | 42 | GET | `/api/v1/lead-bots` | Read | Paginated lead bots with counts per status | 200 | LeadBot, Lead, Company |
 | 43 | GET | `/api/v1/leads/:id/bot` | Read | One lead's MonCha bot (IDs and the full `POST /bots` response) | 200 | LeadBot |
 | 44 | POST | `/api/v1/leads/:id/bot` | Create | Create the lead's bot now (editor session) | 201 / 200 | LeadBot, Lead |
-| 45 | POST | `/api/v1/leads/:id/bot/retry` | Update | Retry a failed bot and queue the lead's copy again (editor session) | 200 | LeadBot, Lead, SiteSnapshot, JobRun |
+| 45 | POST | `/api/v1/leads/:id/bot/retry` | Update | Retry a failed bot or training and queue the lead's copy again (editor session) | 200 | LeadBot, Lead, SiteSnapshot, JobRun |
+| 46 | POST | `/api/v1/leads/:id/bot/train` | Update | Discover and train the bot on the lead's website now, or poll its training (editor session) | 202 / 200 | LeadBot |
 
 The only PATCH is #20. To change a schedule time, delete the old one (#6) and create the new one (#5).
 
@@ -2063,7 +2064,7 @@ and copies websites as before.
    call, so a retry after a timeout or a worker restart sends the same request and never creates a second bot.
 4. The response is stored in `LeadBot`: `chatbotId` (`data.bot_id`), `monchaTenantId` (`data.customer_tenant_id`),
    `connectionId`, `planTier`, and the entire response in `config`. `Lead.botStatus` becomes `created` and
-   `Lead.botCreatedAt` is set; then the lead's copy starts.
+   `Lead.botCreatedAt` is set.
 5. **Up to 3 tries.** A failed try waits 1 minute, then 5 minutes. `bot_name_taken` retries with a lead reference
    (`Acme Dental L4f2a9`) and `slot_unavailable` picks the tier again, both with a new key. After the 3rd failed try the
    bot is `failed`, `error` keeps the last `code: message`, and the lead's waiting copy ends `failed` with
@@ -2073,18 +2074,46 @@ and copies websites as before.
    (`401`/`402`/`403`) pauses every bot for 15 minutes, `rate_limit_exceeded` until `Retry-After`, and every tier full
    for 1 hour.
 
+**Training on the lead's website** (section 7), one bot at a time in its own worker loop, once the bot is created
+(`knowledge.status` in #43):
+
+1. **7.1 Discover:** `POST /bots/{chatbotId}/knowledge/discover` with only `url` (the lead's website: the audit's final
+   URL, else its URL, else `https://{domain}/`) and `max_pages: 100`. The returned `urls`, `pagesFetched` and
+   `truncated` are stored (`knowledge.discoveredUrls`). Status `discovering`.
+2. **7.3 Train:** `POST /bots/{chatbotId}/knowledge/ingest-bulk` with one document per discovered URL (at most 100,
+   without fragments or duplicates; the website alone when none was found), each only
+   `{ "title": "{company} - {page path}", "url": "...", "source_type": "url" }`, for example
+   `Acme Dental - services / implants`, and `Acme Dental - Home` for the homepage. The body and its
+   `Idempotency-Key` (`lead-{leadId}-train-v{n}`) are saved before sending, so a retry never trains the pages twice.
+   The returned `training_id` is stored. Status `training`.
+3. **7.4 Wait:** `GET /bots/{chatbotId}/training/{trainingId}` every `poll_after_seconds` (at least 5 seconds) until it is
+   `completed`. The latest answer is kept in `knowledge.trainingResult`. Then status `trained`, `error` is `success`
+   (`success: 2 of 40 pages failed to train` for a `partial_failure` with pages ready), and the lead's copy starts.
+4. **Up to 3 tries**, 1 minute then 5 minutes apart. A training that ends `failed` (or `partial_failure` with no page
+   ready, or still unfinished after 24 hours) is a failed try and starts over with a new discovery and key; a submit
+   that fails sends the same saved request again. After the 3rd failed try the training is `failed`, `error` keeps the
+   MonCha error, and the lead's waiting copy ends `failed` (`bot_failed`, `lastError: "Bot training failed after 3
+   attempts: ..."`); the worker moves on to the next lead. `kb_pages_limit` and `training_limit_reached` (page quota used
+   up) and a lead without a website fail at once. #45 tries again.
+5. `401`/`402` (for example the sponsored entitlement is not live)/`403` and `discovery_unavailable` pause training for
+   15 minutes, `rate_limit_exceeded` until `Retry-After`, without using up a try. A failed status poll (network or 5xx)
+   is tried again a minute later.
+
 `GET /api/v1/leads` and `GET /api/v1/leads/:id` include `botStatus` (`null` when no bot was queued yet, else one of
 the statuses below) and `botCreatedAt`.
 
 **Backfill** for websites copied before this step (from `apps/worker`):
 `pnpm bots:backfill -- --dry-run` prints how many live websites have no bot; `pnpm bots:backfill` queues them
-(`--tenant <id>` for one tenant) and the running worker creates them one at a time.
+(`--tenant <id>` for one tenant) and the running worker creates them one at a time. Every created bot that is not
+trained yet (backfilled ones too) is trained by the worker.
 
 ### 42. GET `/api/v1/lead-bots`
 
-Query: `page` (default 1), `pageSize` (1 to 100, default 25), `status` (`pending`, `creating`, `created`, `failed`).
-Most recently updated first. **200 OK** `{ "items": [ ...as #43 ], "total", "page", "pageSize", "totalPages", "counts" }` with
-`counts` per status, for example `{ "pending": 4, "creating": 1, "created": 120, "failed": 2 }`.
+Query: `page` (default 1), `pageSize` (1 to 100, default 25), `status` (`pending`, `creating`, `created`, `failed`),
+`knowledgeStatus` (`pending`, `discovering`, `training`, `trained`, `failed`). Most recently updated first.
+**200 OK** `{ "items": [ ...as #43 ], "total", "page", "pageSize", "totalPages", "counts", "knowledgeCounts" }` with
+`counts` per status, for example `{ "pending": 4, "creating": 1, "created": 120, "failed": 2 }`, and `knowledgeCounts`
+per training status of the created bots, for example `{ "pending": 80, "discovering": 1, "training": 2, "trained": 37, "failed": 0 }`.
 
 ### 43. GET `/api/v1/leads/:id/bot`
 
@@ -2102,7 +2131,7 @@ Most recently updated first. **200 OK** `{ "items": [ ...as #43 ], "total", "pag
   "attempts": 1,
   "maxAttempts": 3,
   "nextAt": null,
-  "error": null,
+  "error": "success",
   "chatbotId": "11111111-1111-4111-8111-111111111111",
   "monchaTenantId": "22222222-2222-4222-8222-222222222222",
   "connectionId": "33333333-3333-4333-8333-333333333333",
@@ -2117,13 +2146,35 @@ Most recently updated first. **200 OK** `{ "items": [ ...as #43 ], "total", "pag
     }
   },
   "createdBotAt": "2026-10-15T10:20:00.000Z",
+  "knowledge": {
+    "status": "trained",
+    "attempts": 1,
+    "maxAttempts": 3,
+    "nextAt": null,
+    "websiteUrl": "https://acmedental.sg/",
+    "discoveredUrls": ["https://acmedental.sg/", "https://acmedental.sg/services"],
+    "pagesFetched": 2,
+    "truncated": false,
+    "discoveredAt": "2026-10-15T10:20:05.000Z",
+    "documents": [
+      { "title": "Acme Dental - Home", "url": "https://acmedental.sg/", "source_type": "url" },
+      { "title": "Acme Dental - services", "url": "https://acmedental.sg/services", "source_type": "url" }
+    ],
+    "trainingKey": "lead-cmv0...-train-v1",
+    "trainingId": "44444444-4444-4444-8444-444444444444",
+    "trainingResult": { "training_id": "44444444-4444-4444-8444-444444444444", "total": 2, "ready": 2, "failed": 0, "status": "completed" },
+    "submittedAt": "2026-10-15T10:20:30.000Z",
+    "trainedAt": "2026-10-15T10:21:10.000Z"
+  },
   "createdAt": "2026-10-15T10:19:40.000Z",
-  "updatedAt": "2026-10-15T10:20:00.000Z"
+  "updatedAt": "2026-10-15T10:21:10.000Z"
 }
 ```
 
-`status` `pending` with `nextAt` is waiting for its next try; `failed` has the last error in `error`. 404
-`bot_not_found` when the lead has no bot yet.
+`status` `pending` with `nextAt` is waiting for its next try; `failed` has the last error in `error`. `knowledge.status`
+`pending` with `knowledge.nextAt` waits for its next try, `training` with `knowledge.nextAt` for its next status poll.
+`error` is the last MonCha error of creation or training, `success` once trained. 404 `bot_not_found` when the lead
+has no bot yet.
 
 ### 44. POST `/api/v1/leads/:id/bot`
 
@@ -2149,9 +2200,33 @@ bot already existed (`outcome: null`) or the try did not succeed (`outcome.statu
 ### 45. POST `/api/v1/leads/:id/bot/retry`
 
 **Headers:** `authorization: Bearer <token>` (role `admin` or `operator`). No body. Puts a `failed` bot back to
-`pending` with 3 new tries; the worker creates it within seconds. When the lead's latest copy ended with
-`bot_failed`, a new copy is queued too (`copyQueued: true`). **200 OK** `{ "bot": { ...as #43 }, "copyQueued": true }`.
-404 `bot_not_found`, 409 `bot_not_failed` when the bot is not `failed`.
+`pending` with 3 new tries, or a `failed` training back to `pending` with 3 new tries and a new discovery; the worker
+picks it up within seconds. When the lead's latest copy ended with `bot_failed`, a new copy is queued too
+(`copyQueued: true`). **200 OK** `{ "bot": { ...as #43 }, "copyQueued": true }`. 404 `bot_not_found`, 409
+`bot_not_failed` when neither creation nor training failed.
+
+### 46. POST `/api/v1/leads/:id/bot/train`
+
+**Headers:** `authorization: Bearer <token>` (role `admin` or `operator`). No body. Runs the lead's training step now
+instead of waiting for the worker: discover and submit when it waits (**202 Accepted**, `outcome.status: "submitted"`),
+or one status poll while it trains (**200 OK**, `outcome.status` `training` or `trained`). Call it again to poll.
+**200 OK** with `outcome: null` when the bot is already trained.
+
+```json
+{
+  "bot": { "...": "as #43" },
+  "outcome": { "status": "submitted", "leadId": "cmv0...", "botId": "6b0f...", "trainingId": "44444444-...", "documents": 2, "nextAt": "2026-10-15T10:20:35.000Z" }
+}
+```
+
+| Status | `code` | When |
+|---|---|---|
+| 401 / 403 | `unauthorized` / `forbidden` | No editor session |
+| 404 | `bot_not_found` | The lead has no bot |
+| 409 | `bot_not_created` | The bot is not created yet |
+| 409 | `training_failed` | Training already gave up after 3 tries; use #45 |
+| 409 | `bot_busy` | The worker is running this bot's training step right now |
+| 503 | `moncha_not_configured` | `MONCHA_INTERNAL_KEY` is not set |
 
 ---
 
@@ -2201,6 +2276,7 @@ can still be `QUALIFIED`.
 | GitHub push status | `pending`, `pushing`, `pushed`, `failed` |
 | Lead bot status (`LeadBot.status`, `Lead.botStatus`) | `pending`, `creating`, `created`, `failed` |
 | Lead bot plan tier | `starter`, `growth`, `scale` |
+| Lead bot training status (`LeadBot.knowledgeStatus`) | `pending`, `discovering`, `training`, `trained`, `failed` |
 | User role | `admin`, `operator`, `viewer` |
 
 ---
@@ -2219,7 +2295,7 @@ The API only stores requests. The work is done by the background worker (`apps/w
 | `POST /api/v1/source-imports` | Import files over 1,000 rows, and audit the imported leads' websites |
 | `POST /api/v1/leads/:id/site-snapshots` | Capture the homepage, extract the brand and upload the copy to R2 |
 | `PUT /api/v1/site-automation` with `enabled: true` | Queue copies for qualified leads after each finished crawl |
-| Every queued copy (with `MONCHA_INTERNAL_KEY`), `POST /api/v1/leads/:id/bot/retry`, `pnpm bots:backfill` | Create the lead's MonCha bot before its website is copied |
+| Every queued copy (with `MONCHA_INTERNAL_KEY`), `POST /api/v1/leads/:id/bot/retry`, `pnpm bots:backfill` | Create the lead's MonCha bot and train it on the lead's website before the website is copied |
 | `POST /api/v1/site-snapshots/:id/github-push` (and every finished copy) | Push the website to its own GitHub repo |
 | `POST /api/v1/site-snapshots/:id/deploy` (and every finished copy) | Deploy the website to its own Cloudflare Worker |
 

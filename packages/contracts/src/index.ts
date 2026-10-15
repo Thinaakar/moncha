@@ -333,11 +333,13 @@ export const siteSnapshotListQuerySchema = z.object({
 });
 
 export const leadBotStatusSchema = z.enum(['pending', 'creating', 'created', 'failed']);
+export const leadBotKnowledgeStatusSchema = z.enum(['pending', 'discovering', 'training', 'trained', 'failed']);
 
 export const leadBotListQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(25),
   status: leadBotStatusSchema.optional(),
+  knowledgeStatus: leadBotKnowledgeStatusSchema.optional(),
 });
 
 export const siteAutomationUpdateSchema = z
@@ -642,6 +644,30 @@ export type MonchaInternalCheckResult = {
 };
 
 export type LeadBotStatus = z.infer<typeof leadBotStatusSchema>;
+export type LeadBotKnowledgeStatus = z.infer<typeof leadBotKnowledgeStatusSchema>;
+
+/** Training of the bot on the lead's website: knowledge/discover, knowledge/ingest-bulk, training status. */
+export type LeadBotKnowledgeView = {
+  status: LeadBotKnowledgeStatus;
+  attempts: number;
+  maxAttempts: number;
+  /** Next try, or next training status poll. */
+  nextAt: string | null;
+  websiteUrl: string | null;
+  /** `urls` of knowledge/discover. */
+  discoveredUrls: string[] | null;
+  pagesFetched: number | null;
+  truncated: boolean | null;
+  discoveredAt: string | null;
+  /** The ingest-bulk documents (title, url, source_type). */
+  documents: Array<{ title: string; url: string; source_type: string }> | null;
+  trainingKey: string | null;
+  trainingId: string | null;
+  /** The latest training status response. */
+  trainingResult: unknown;
+  submittedAt: string | null;
+  trainedAt: string | null;
+};
 
 /** A lead's MonCha demo bot (`GET /api/v1/leads/:id/bot`). Created before the lead's website is copied. */
 export type LeadBotView = {
@@ -656,7 +682,7 @@ export type LeadBotView = {
   maxAttempts: number;
   /** When the next try starts (pending after an error or a pause). */
   nextAt: string | null;
-  /** Last error, `code: message`. */
+  /** Last error, `code: message`; `success` once the bot is trained. */
   error: string | null;
   /** data.bot_id: the bot to use in settings, widget and training calls. */
   chatbotId: string | null;
@@ -666,6 +692,7 @@ export type LeadBotView = {
   /** The entire POST /bots response. */
   config: unknown;
   createdBotAt: string | null;
+  knowledge: LeadBotKnowledgeView;
   createdAt: string;
   updatedAt: string;
 };
@@ -678,6 +705,8 @@ export type LeadBotPage = {
   pageSize: number;
   totalPages: number;
   counts: Record<LeadBotStatus, number>;
+  /** Training status of the created bots. */
+  knowledgeCounts: Record<LeadBotKnowledgeStatus, number>;
 };
 
 export type SiteSnapshotSource = {
