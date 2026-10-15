@@ -28,6 +28,7 @@ import {
   type SiteCostWebsitePage,
   type SiteAutomationCrawl,
   type SiteAutomationState,
+  type MonchaInternalCheckResult,
   type SiteDeployCheckResult,
   type SiteGithubCheckResult,
   type SiteManifest,
@@ -123,7 +124,7 @@ import {
 } from '@moncha/domain';
 import { createPriceBookFromEnv } from '@moncha/integrations';
 import { CsvImportError, SOURCE_IMPORT_JOB_TYPES, sourceImportView, startCsvImport, type CsvSqlClient } from './csv-import';
-import { siteAgentConfig, siteAutoCopyEnabled, siteGithubPublisher, siteWorkerDeployer } from './site-agent';
+import { monchaInternalClient, siteAgentConfig, siteAutoCopyEnabled, siteGithubPublisher, siteWorkerDeployer } from './site-agent';
 import { workerHealth } from './worker-health';
 
 // Local test API for Postman: exposes the same use cases the console routes call.
@@ -853,6 +854,37 @@ route('GET', '/api/v1/site-automation/deploy-check', async ({ req, tenantId }) =
     checkedAt: new Date().toISOString(),
   };
   logger.info('site_worker.check', { tenantId, canRead: json.canRead, siteWorkers: json.siteWorkers, error: json.error });
+  return { json };
+});
+
+// MonCha internal lead API connectivity: GET /slots with the worker's key. Nothing is created.
+route('GET', '/api/v1/site-automation/moncha-check', async ({ req, tenantId }) => {
+  await requireEditor(req, tenantId, 'check the MonCha internal lead API');
+  const client = monchaInternalClient();
+  const check = client ? await client.check() : null;
+  const json: MonchaInternalCheckResult = {
+    configured: Boolean(client),
+    keys: {
+      MONCHA_INTERNAL_BASE_URL: Boolean(process.env.MONCHA_INTERNAL_BASE_URL?.trim()),
+      MONCHA_INTERNAL_KEY: Boolean(process.env.MONCHA_INTERNAL_KEY?.trim()),
+    },
+    environment: check?.environment ?? null,
+    baseUrl: check?.baseUrl ?? null,
+    canAuthenticate: check?.canAuthenticate ?? false,
+    slots: check?.slots ?? null,
+    error: client
+      ? (check?.error ?? null)
+      : 'MONCHA_INTERNAL_KEY must be set, and MONCHA_INTERNAL_BASE_URL (default UAT) must be an https URL',
+    requestId: check?.requestId ?? null,
+    checkedAt: new Date().toISOString(),
+  };
+  logger.info('moncha_internal.check', {
+    tenantId,
+    environment: json.environment,
+    canAuthenticate: json.canAuthenticate,
+    error: json.error,
+    requestId: json.requestId,
+  });
   return { json };
 });
 

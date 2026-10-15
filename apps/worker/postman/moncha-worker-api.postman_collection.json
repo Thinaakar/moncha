@@ -446,6 +446,10 @@
           "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/site-automation/deploy-check" }
         },
         {
+          "name": "MonCha internal lead API check",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/site-automation/moncha-check" }
+        },
+        {
           "name": "Copy automation settings",
           "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/site-automation" }
         },

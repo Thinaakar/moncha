@@ -616,6 +616,23 @@ export type SiteDeployCheckResult = {
   checkedAt: string;
 };
 
+export type MonchaSlotTier = 'starter' | 'growth' | 'scale';
+
+/** `GET /api/v1/site-automation/moncha-check`: MonCha internal lead API connectivity. Key presence only, never values. */
+export type MonchaInternalCheckResult = {
+  configured: boolean;
+  keys: { MONCHA_INTERNAL_BASE_URL: boolean; MONCHA_INTERNAL_KEY: boolean };
+  /** `uat` and `production` are the two documented base URLs; anything else is `custom`. */
+  environment: 'uat' | 'production' | 'custom' | null;
+  baseUrl: string | null;
+  /** `GET /slots` succeeded with the key. */
+  canAuthenticate: boolean;
+  slots: Record<MonchaSlotTier, { allocated: number; used: number; available: number }> | null;
+  error: string | null;
+  requestId: string | null;
+  checkedAt: string;
+};
+
 export type SiteSnapshotSource = {
   text: string;
   charset: string;

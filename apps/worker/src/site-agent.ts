@@ -2,7 +2,9 @@ import type { SiteGithubPublisher, SiteStore, SiteWorkerDeployer } from '@moncha
 import {
   createCloudflareSiteWorkerDeployerFromEnv,
   createGitHubSitePublisherFromEnv,
+  createMonchaInternalClientFromEnv,
   createR2SiteStoreFromEnv,
+  type MonchaInternalClient,
 } from '@moncha/integrations';
 
 const MB = 1024 * 1024;
@@ -82,6 +84,14 @@ let cachedDeployer: SiteWorkerDeployer | null | undefined;
 export function siteWorkerDeployer(): SiteWorkerDeployer | null {
   if (cachedDeployer === undefined) cachedDeployer = createCloudflareSiteWorkerDeployerFromEnv(process.env);
   return cachedDeployer;
+}
+
+let cachedMonchaInternal: MonchaInternalClient | null | undefined;
+
+/** MONCHA_INTERNAL_KEY (+ MONCHA_INTERNAL_BASE_URL, default UAT): MonCha's internal lead API for demo bots; null when unset. */
+export function monchaInternalClient(): MonchaInternalClient | null {
+  if (cachedMonchaInternal === undefined) cachedMonchaInternal = createMonchaInternalClientFromEnv(process.env);
+  return cachedMonchaInternal;
 }
 
 /** SITE_AUTO_COPY=false switches the copy automation off on this worker, whatever the console setting says. */

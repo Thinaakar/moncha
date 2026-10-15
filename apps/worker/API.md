@@ -83,6 +83,7 @@ copies) were added on 2026-10-08.
 | 41a | GET | `/api/v1/site-automation/github-check` | Read | Check the GitHub connection for the site repos (editor session) | 200 | - |
 | 41c | POST | `/api/v1/site-snapshots/:id/deploy` | Update | Deploy a finished copy to its website's own Cloudflare Worker now (editor session) | 202 | SiteSnapshot |
 | 41d | GET | `/api/v1/site-automation/deploy-check` | Read | Check the Cloudflare Workers connection (editor session) | 200 | - |
+| 41e | GET | `/api/v1/site-automation/moncha-check` | Read | Check the MonCha internal lead API key with `GET /slots` (editor session) | 200 | - |
 
 The only PATCH is #20. To change a schedule time, delete the old one (#6) and create the new one (#5).
 
@@ -1859,6 +1860,39 @@ the token is never returned. The worker runs the same check at start-up and logs
   "checkedAt": "2026-10-13T09:30:00.000Z"
 }
 ```
+
+### 41e. GET `/api/v1/site-automation/moncha-check`
+
+Checks the MonCha internal lead API ([internal-lead-agent.md](../../internal-lead-agent.md), section 1) with the
+worker's own settings: calls `GET {MONCHA_INTERNAL_BASE_URL}/slots` with `Authorization: Bearer {MONCHA_INTERNAL_KEY}`.
+Nothing is created. The key is never returned or logged; `keys` only says which variables are set. An empty
+`MONCHA_INTERNAL_BASE_URL` means UAT (`environment` `uat`); `production` only when the production URL is set on purpose.
+The same check from a shell: `pnpm --filter @moncha/worker exec tsx src/check-moncha-internal.ts`.
+
+**Headers:** `authorization: Bearer <token>` (role `admin` or `operator`). **200 OK**:
+
+```json
+{
+  "configured": true,
+  "keys": { "MONCHA_INTERNAL_BASE_URL": true, "MONCHA_INTERNAL_KEY": true },
+  "environment": "uat",
+  "baseUrl": "https://api.dev-moncha.com/vendor/internal/v1",
+  "canAuthenticate": true,
+  "slots": {
+    "starter": { "allocated": 20, "used": 3, "available": 17 },
+    "growth": { "allocated": 5, "used": 1, "available": 4 },
+    "scale": { "allocated": 0, "used": 0, "available": 0 }
+  },
+  "error": null,
+  "requestId": null,
+  "checkedAt": "2026-10-15T05:40:00.000Z"
+}
+```
+
+Without a key: `configured: false` and `error` says what to set. When MonCha answers with an error, `canAuthenticate`
+is `false` and `error` is `code: message`, for example `invalid_internal_credentials` (wrong key or environment, or
+the Admin options are off), `vendor_subscription_required`, `vendor_disabled`, `internal_workspace_unavailable`,
+`rate_limit_exceeded` or `moncha_unreachable`; `requestId` is MonCha's request ID when it sends one.
 
 ### 41b. Public copy links (`publicUrl`)
 
