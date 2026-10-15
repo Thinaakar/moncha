@@ -261,6 +261,11 @@ export type SiteSnapshotRecord = {
   workerUrl: string | null;
   workerError: string | null;
   workerDeployedAt: Date | null;
+  chatbotStatus: SiteChatbotStatus | null;
+  chatbotAttempts: number;
+  chatbotNextAt: Date | null;
+  chatbotError: string | null;
+  chatbotInstalledAt: Date | null;
   /** The copy job's current step while it runs (and the step it failed in); null before it starts. */
   stage: SiteCopyStage | null;
   stageAt: Date | null;
@@ -279,6 +284,9 @@ export type SiteGithubStatus = 'pending' | 'pushing' | 'pushed' | 'failed';
 
 /** Cloudflare Worker deploy of a finished copy; same lifecycle as SiteGithubStatus. */
 export type SiteWorkerStatus = 'pending' | 'deploying' | 'deployed' | 'failed';
+
+/** MonCha chatbot added to the copy's index.html before the GitHub push; same lifecycle as SiteGithubStatus. */
+export type SiteChatbotStatus = 'pending' | 'installing' | 'installed' | 'failed';
 
 /** Steps of the copy job itself: open the site and download it, read its source for the brand, write the files. */
 export type SiteCopyStage = 'copying' | 'reading_source' | 'building';
@@ -342,10 +350,15 @@ export type SiteSnapshotPatch = Partial<
     | 'workerUrl'
     | 'workerError'
     | 'workerDeployedAt'
+    | 'chatbotStatus'
+    | 'chatbotAttempts'
+    | 'chatbotNextAt'
+    | 'chatbotError'
+    | 'chatbotInstalledAt'
     | 'stage'
     | 'stageAt'
   >
-> & { githubLockedAt?: Date | null; workerLockedAt?: Date | null };
+> & { githubLockedAt?: Date | null; workerLockedAt?: Date | null; chatbotLockedAt?: Date | null };
 
 export type SiteGithubRequestResult = 'queued' | 'not_found' | 'not_done' | 'busy';
 export type SiteWorkerRequestResult = SiteGithubRequestResult;
@@ -404,10 +417,17 @@ export interface SiteSnapshotRepo {
   ): Promise<SiteSnapshotListItem | null>;
   /** Queues a Worker deploy of a done copy now (first deploy, or again after `failed` or `deployed`). */
   requestWorkerDeploy(tenantId: string, id: string, now: Date): Promise<SiteWorkerRequestResult>;
+  /** Same as claimGithubPush for adding the chatbot (`pending` or stale `installing` becomes `installing`). */
+  claimChatbotInstall(now: Date, staleBefore: Date, options?: { id?: string }): Promise<SiteSnapshotListItem | null>;
+  /** Queues adding the chatbot to a done copy now (first time, or again after `failed` or `installed`). */
+  requestChatbotInstall(tenantId: string, id: string, now: Date): Promise<SiteGithubRequestResult>;
 }
 
-/** The publish steps that follow a copy on this worker: GitHub push and/or Cloudflare Worker deploy. */
-export type SitePipelineSteps = { github: boolean; worker: boolean };
+/**
+ * The publish steps that follow a copy on this worker: the MonCha chatbot (when MonCha is configured), then the GitHub
+ * push and/or Cloudflare Worker deploy.
+ */
+export type SitePipelineSteps = { github: boolean; worker: boolean; chatbot?: boolean };
 
 /** Lookups of the website pipeline, which takes one website at a time through copy, GitHub push and Worker deploy. */
 export interface SitePipelineRepo {

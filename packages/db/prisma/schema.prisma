@@ -605,6 +605,15 @@ model SiteSnapshot {
   workerUrl           String?
   workerError         String?
   workerDeployedAt    DateTime?
+  /// MonCha chatbot added to index.html before the GitHub push: null (not added), pending, installing, installed or
+  /// failed (gave up). Widget colour (5.1/5.2) and install values (6.3) are on the lead's LeadBot.
+  chatbotStatus       String?
+  chatbotAttempts     Int       @default(0)
+  /// Earliest time the worker may (re)try adding the chatbot.
+  chatbotNextAt       DateTime?
+  chatbotLockedAt     DateTime?
+  chatbotError        String?
+  chatbotInstalledAt  DateTime?
   /// Copy job step while it runs (and the step it failed in): copying, reading_source or building.
   stage               String?
   stageAt             DateTime?
@@ -622,6 +631,7 @@ model SiteSnapshot {
   @@index([crawlJobId])
   @@index([githubStatus, githubNextAt])
   @@index([workerStatus, workerNextAt])
+  @@index([chatbotStatus, chatbotNextAt])
 }
 
 enum SiteCopyOrigin {
@@ -678,6 +688,14 @@ model LeadBot {
   trainingResult      Json?
   trainingSubmittedAt DateTime?
   trainedAt           DateTime?
+  /// Widget primaryColor picked from the website's brand colours and saved with PUT widget (5.2).
+  widgetPrimaryColor  String?
+  /// GET widget (5.1) response before the change, and the PUT widget (5.2) response after it.
+  widgetConfigBefore  Json?
+  widgetConfig        Json?
+  /// GET install (6.3) response: tenantId, chatbotId, apiUrl, widgetUrl.
+  installValues       Json?
+  widgetConfiguredAt  DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
   tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)

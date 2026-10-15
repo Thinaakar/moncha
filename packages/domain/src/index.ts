@@ -23,6 +23,7 @@ export * from './use-cases/siteSnapshots';
 export * from './use-cases/siteAutomation';
 export * from './use-cases/siteGithub';
 export * from './use-cases/siteWorker';
+export * from './use-cases/siteChatbot';
 export * from './use-cases/sitePipeline';
 export * from './use-cases/siteProgress';
 export * from './use-cases/siteCosts';

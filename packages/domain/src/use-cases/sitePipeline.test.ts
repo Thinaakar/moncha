@@ -73,6 +73,12 @@ function setup(rows: { sites: SiteSnapshotListItem[]; jobs: JobRunRecord[] }) {
       Object.assign(row, { githubStatus: 'pushing', githubAttempts: row.githubAttempts + 1 });
       return { ...row };
     },
+    claimChatbotInstall: async (now: Date, _stale: Date, options?: { id?: string }) => {
+      const row = options?.id ? sites.get(options.id) : undefined;
+      if (!row || row.chatbotStatus !== 'pending' || (row.chatbotNextAt && row.chatbotNextAt > now)) return null;
+      Object.assign(row, { chatbotStatus: 'installing', chatbotAttempts: row.chatbotAttempts + 1 });
+      return { ...row };
+    },
     claimWorkerDeploy: async (now: Date, _stale: Date, options?: { id?: string }) => {
       const row = options?.id ? sites.get(options.id) : undefined;
       if (!row || row.workerStatus !== 'pending' || (row.workerNextAt && row.workerNextAt > now)) return null;
@@ -229,6 +235,40 @@ describe('site pipeline', () => {
     expect(t.jobRows.get('job1')).toMatchObject({ status: 'running', startedAt: NOW, finishedAt: null, lockedAt: null });
     expect(await runSitePipelineTick(t.deps)).toMatchObject({ action: 'finished', status: 'done' });
     expect(t.jobRows.get('job1')!.status).toBe('done');
+  });
+
+  it('adds the chatbot before the GitHub push, and pushes and redeploys a website that was already live', async () => {
+    const t = setup({
+      sites: [site({ githubStatus: 'pushed', githubRepo: 'acme/snap1', workerStatus: 'deployed', workerUrl: 'https://snap1.workers.dev' })],
+      jobs: [job({ status: 'done', finishedAt: NOW })],
+    });
+    const installed: string[] = [];
+    t.deps.installChatbot = async (row) => {
+      installed.push(row.id);
+      Object.assign(t.sites.get(row.id)!, { chatbotStatus: 'installed' });
+      return { status: 'installed', snapshotId: row.id, leadId: row.leadId, primaryColor: '#B91C1C', widgetUrl: 'https://cdn/w.js', removedCsp: 0 };
+    };
+
+    expect(await runSitePipelineTick(t.deps)).toMatchObject({ action: 'ran', step: 'chatbot', result: 'installed' });
+    expect(t.sites.get('snap1')).toMatchObject({ githubStatus: 'pending', workerStatus: 'pending' });
+    expect(t.pushed).toEqual([]);
+
+    expect(await runSitePipelineTick(t.deps)).toMatchObject({ action: 'ran', step: 'github' });
+    expect(await runSitePipelineTick(t.deps)).toMatchObject({ action: 'finished', status: 'done' });
+    expect(installed).toEqual(['snap1']);
+    expect(t.pushed).toEqual(['snap1']);
+    expect(t.deployed).toEqual(['snap1']);
+  });
+
+  it('fails the website with the chatbot error when the chatbot step gives up, without pushing it', async () => {
+    const t = setup({ sites: [site({ githubStatus: 'pending' })], jobs: [job()] });
+    t.deps.installChatbot = async (row) => {
+      Object.assign(t.sites.get(row.id)!, { chatbotStatus: 'failed', chatbotError: 'widget_url_missing: no widgetUrl' });
+      return { status: 'failed', snapshotId: row.id, error: 'widget_url_missing: no widgetUrl' };
+    };
+    expect(await runSitePipelineTick(t.deps)).toMatchObject({ action: 'finished', status: 'failed' });
+    expect(t.jobRows.get('job1')).toMatchObject({ status: 'failed', lastError: 'Chatbot failed: widget_url_missing: no widgetUrl' });
+    expect(t.pushed).toEqual([]);
   });
 
   it('starts the next copy only when nothing is left to publish', async () => {

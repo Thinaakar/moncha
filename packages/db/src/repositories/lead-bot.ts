@@ -74,6 +74,11 @@ function mapBot(row: RowWithCompany): LeadBotItem {
     trainingResult: bot.trainingResult ?? null,
     trainingSubmittedAt: bot.trainingSubmittedAt,
     trainedAt: bot.trainedAt,
+    widgetPrimaryColor: bot.widgetPrimaryColor,
+    widgetConfigBefore: bot.widgetConfigBefore ?? null,
+    widgetConfig: bot.widgetConfig ?? null,
+    installValues: bot.installValues ?? null,
+    widgetConfiguredAt: bot.widgetConfiguredAt,
     createdAt: bot.createdAt,
     updatedAt: bot.updatedAt,
     company: { ...company, websiteUrl: websiteUrl(lead.company) },
@@ -205,7 +210,7 @@ export class PrismaLeadBotRepository implements LeadBotRepo {
   }
 
   async update(tenantId: string, id: string, patch: LeadBotPatch): Promise<LeadBotItem | null> {
-    const { config, discoveredUrls, trainingPayload, trainingResult, ...rest } = patch;
+    const { config, discoveredUrls, trainingPayload, trainingResult, widgetConfigBefore, widgetConfig, installValues, ...rest } = patch;
     const row = await this.db.$transaction(async (tx) => {
       const { count } = await tx.leadBot.updateMany({
         where: { id, tenantId },
@@ -215,6 +220,9 @@ export class PrismaLeadBotRepository implements LeadBotRepo {
           ...(discoveredUrls !== undefined ? { discoveredUrls: json(discoveredUrls) } : {}),
           ...(trainingPayload !== undefined ? { trainingPayload: json(trainingPayload) } : {}),
           ...(trainingResult !== undefined ? { trainingResult: json(trainingResult) } : {}),
+          ...(widgetConfigBefore !== undefined ? { widgetConfigBefore: json(widgetConfigBefore) } : {}),
+          ...(widgetConfig !== undefined ? { widgetConfig: json(widgetConfig) } : {}),
+          ...(installValues !== undefined ? { installValues: json(installValues) } : {}),
         },
       });
       if (!count) return null;

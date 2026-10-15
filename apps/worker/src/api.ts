@@ -99,8 +99,11 @@ import {
   queueSiteSnapshot,
   SiteAutomationError,
   SiteCancelError,
+  requestSiteChatbotInstall,
   requestSiteGithubPush,
   requestSiteWorkerDeploy,
+  SITE_CHATBOT_MAX_ATTEMPTS,
+  SiteChatbotRequestError,
   SITE_GITHUB_MAX_ATTEMPTS,
   SITE_WORKER_MAX_ATTEMPTS,
   siteCopyProgress,
@@ -549,6 +552,16 @@ function siteSummary(snapshot: SiteSnapshotRecord | SiteSnapshotListItem, previe
           deployedAt: snapshot.workerDeployedAt?.toISOString() ?? null,
         }
       : null,
+    chatbot: snapshot.chatbotStatus
+      ? {
+          status: snapshot.chatbotStatus,
+          attempts: snapshot.chatbotAttempts,
+          maxAttempts: SITE_CHATBOT_MAX_ATTEMPTS,
+          nextAt: snapshot.chatbotNextAt?.toISOString() ?? null,
+          error: snapshot.chatbotError,
+          installedAt: snapshot.chatbotInstalledAt?.toISOString() ?? null,
+        }
+      : null,
     publicUrl: publicUrlFor(snapshot),
     progress: progressFor(snapshot),
   };
@@ -558,6 +571,7 @@ function progressFor(snapshot: SiteSnapshotRecord): SiteCopyProgress {
   const progress = siteCopyProgress(snapshot, {
     githubEnabled: Boolean(siteGithubPublisher()),
     workerEnabled: Boolean(siteWorkerDeployer()),
+    chatbotEnabled: Boolean(monchaInternalClient()),
   });
   return { ...progress, since: progress.since?.toISOString() ?? null, nextAt: progress.nextAt?.toISOString() ?? null };
 }
@@ -637,13 +651,21 @@ route('GET', '/api/v1/site-snapshots/queue', async ({ tenantId }) => {
 
 route('GET', '/api/v1/site-pipeline', async ({ tenantId }) => {
   const view = await describeSitePipeline(
-    { pipeline: siteSnapshots, jobs, steps: { github: Boolean(siteGithubPublisher()), worker: Boolean(siteWorkerDeployer()) } },
+    {
+      pipeline: siteSnapshots,
+      jobs,
+      steps: {
+        github: Boolean(siteGithubPublisher()),
+        worker: Boolean(siteWorkerDeployer()),
+        chatbot: Boolean(monchaInternalClient()),
+      },
+    },
     { tenantId },
   );
   const current = view.current;
   const json: SitePipelineStatus = {
     enabled: siteAgentConfig().ready,
-    steps: { github: view.steps.github, deploy: view.steps.worker },
+    steps: { github: view.steps.github, deploy: view.steps.worker, chatbot: Boolean(view.steps.chatbot) },
     current: current
       ? {
           site: siteSummary(current.snapshot, null),
@@ -936,6 +958,13 @@ function leadBotView(bot: LeadBotItem): LeadBotView {
       submittedAt: bot.trainingSubmittedAt?.toISOString() ?? null,
       trainedAt: bot.trainedAt?.toISOString() ?? null,
     },
+    widget: {
+      primaryColor: bot.widgetPrimaryColor,
+      configBefore: bot.widgetConfigBefore,
+      config: bot.widgetConfig,
+      install: bot.installValues,
+      configuredAt: bot.widgetConfiguredAt?.toISOString() ?? null,
+    },
     createdAt: bot.createdAt.toISOString(),
     updatedAt: bot.updatedAt.toISOString(),
   };
@@ -1110,6 +1139,25 @@ route('POST', '/api/v1/site-snapshots/:id/deploy', async ({ req, tenantId, param
       if (error.code === 'not_found') throw new HttpError(404, 'not_found', 'Website copy not found');
       if (error.code === 'not_done') throw new HttpError(409, 'not_ready', 'Only finished copies can be deployed');
       throw new HttpError(409, 'deploy_in_progress', 'This copy is being deployed right now');
+    }
+    throw error;
+  }
+});
+
+// Adds the lead's MonCha chatbot to a done copy again (first time, a retry after it failed, or a refresh). The pipeline
+// sets the widget colour, adds the embed to index.html, then pushes and redeploys the website.
+route('POST', '/api/v1/site-snapshots/:id/chatbot', async ({ req, tenantId, params }) => {
+  await requireEditor(req, tenantId, 'add chatbots to website copies');
+  requireMonchaInternal();
+  try {
+    const result = await requestSiteChatbotInstall({ snapshots: siteSnapshots }, { tenantId, id: params.id! });
+    logger.info('site_chatbot.install_requested', { tenantId, snapshotId: params.id });
+    return { status: 202, json: result };
+  } catch (error) {
+    if (error instanceof SiteChatbotRequestError) {
+      if (error.code === 'not_found') throw new HttpError(404, 'not_found', 'Website copy not found');
+      if (error.code === 'not_done') throw new HttpError(409, 'not_ready', 'Only finished copies can get the chatbot');
+      throw new HttpError(409, 'chatbot_in_progress', 'The chatbot is being added to this copy right now');
     }
     throw error;
   }

@@ -85,6 +85,7 @@ copies) were added on 2026-10-08.
 | 41c | POST | `/api/v1/site-snapshots/:id/deploy` | Update | Deploy a finished copy to its website's own Cloudflare Worker now (editor session) | 202 | SiteSnapshot |
 | 41d | GET | `/api/v1/site-automation/deploy-check` | Read | Check the Cloudflare Workers connection (editor session) | 200 | - |
 | 41e | GET | `/api/v1/site-automation/moncha-check` | Read | Check the MonCha internal lead API key with `GET /slots` (editor session) | 200 | - |
+| 41f | POST | `/api/v1/site-snapshots/:id/chatbot` | Update | Add the lead's MonCha chatbot to a finished copy again, then push and redeploy it (editor session) | 202 | SiteSnapshot, LeadBot |
 | 42 | GET | `/api/v1/lead-bots` | Read | Paginated lead bots with counts per status | 200 | LeadBot, Lead, Company |
 | 43 | GET | `/api/v1/leads/:id/bot` | Read | One lead's MonCha bot (IDs and the full `POST /bots` response) | 200 | LeadBot |
 | 44 | POST | `/api/v1/leads/:id/bot` | Create | Create the lead's bot now (editor session) | 201 / 200 | LeadBot, Lead |
@@ -1589,17 +1590,22 @@ expected start for waiting ones, chained with `averageRunMs` (mean of the last 2
 
 ### 36a. GET `/api/v1/site-pipeline`
 
-The worker takes **one website at a time** through three steps: copy, GitHub push (#41), Cloudflare Worker deploy
-(#41c). The next website starts only when the current one is live or one of its steps gave up:
+The worker takes **one website at a time** through its steps: copy, MonCha chatbot (#41f, when `MONCHA_INTERNAL_KEY`
+is set), GitHub push (#41), Cloudflare Worker deploy (#41c). The next website starts only when the current one is
+live or one of its steps gave up:
 
 - Each step gets 3 tries, 1 min then 5 min apart. Errors a retry cannot fix fail at once.
-- After the last try the step is `failed`, the website's job is `failed` with the step's error, and the next website starts.
+- After the last try the step is `failed`, the website's job is `failed` with the step's error, and the next website
+  starts. A failed chatbot step blocks the website: it is not pushed or deployed (`lastError: "Chatbot failed: ..."`).
 - When the Worker is deployed, the job is `done` with `result.liveUrl`, and the next website starts.
-- A GitHub rate limit (`github_rate_limited`) or a full Cloudflare account (`worker_limit_reached`) **pauses** the
-  whole pipeline on the current website without using up a try. It resumes by itself (the Worker limit is checked
-  every 15 min).
+- A GitHub rate limit (`github_rate_limited`), a full Cloudflare account (`worker_limit_reached`), a MonCha account
+  problem or rate limit, or a lead bot that is still being trained (`waiting_for_bot`) **pauses** the whole pipeline on
+  the current website without using up a try. It resumes by itself (the Worker limit and MonCha account are checked
+  every 15 min, the bot every 5 min).
 - Finished copies never pushed or deployed (backlog) go through the same steps when no new copy is in progress,
   already-live copies first, then newest first. An older copy of a website that has a newer finished copy is skipped.
+  With the chatbot step, live websites without the chatbot are part of this backlog: each one gets the chatbot, then is
+  pushed and redeployed, as soon as its lead's bot is trained (copies whose bot is not trained yet are not picked).
 - After a restart the worker resumes at the step the website was on.
 
 **CRUD:** Read. **200 OK**:
@@ -1607,7 +1613,7 @@ The worker takes **one website at a time** through three steps: copy, GitHub pus
 ```json
 {
   "enabled": true,
-  "steps": { "github": true, "deploy": true },
+  "steps": { "github": true, "deploy": true, "chatbot": true },
   "current": {
     "site": { "...summary": "..." },
     "step": "deploy",
@@ -1627,11 +1633,11 @@ The worker takes **one website at a time** through three steps: copy, GitHub pus
 | `enabled` | The worker can copy websites (R2 and `SITE_PREVIEW_SECRET` set) |
 | `steps` | Which publish steps are configured; a missing one is skipped |
 | `current` | The website in the pipeline, `null` when idle (or busy with another tenant's website). `site` is a summary (#31) plus `company` |
-| `current.step` | `copy`, `github` or `deploy` |
-| `current.state` | `working` (running or about to), `retrying` (waits for `nextAt` after an error), `paused` (waits for a GitHub or Cloudflare limit) |
+| `current.step` | `copy`, `chatbot`, `github` or `deploy` |
+| `current.state` | `working` (running or about to), `retrying` (waits for `nextAt` after an error), `paused` (waits for a GitHub, Cloudflare or MonCha limit, or the lead's bot training) |
 | `current.attempts` / `maxAttempts` | Tries of this step so far |
 | `current.error` | Last error of this step, `"code: message"` |
-| `toPublish` | Finished copies still waiting for their push or deploy (the current website not counted) |
+| `toPublish` | Finished copies still waiting for their chatbot, push or deploy (the current website not counted) |
 | `waitingCopies` | Copies waiting for their first try |
 
 ### 37. POST `/api/v1/site-snapshots/:id/cancel`
@@ -1805,6 +1811,66 @@ Backfill (newest copy per website, from `apps/worker`): `pnpm sites:backfill -- 
 worker; add `--dry-run` to list them, `--run` to publish from this machine, `--only github|worker`, `--site ja-edu-sg`.
 With `--run` each website is pushed to GitHub first and its Worker deployed only once that push is done.
 
+### 41f. POST `/api/v1/site-snapshots/:id/chatbot`
+
+Every website gets its lead's MonCha chatbot ([internal-lead-agent.md](../../internal-lead-agent.md), sections 5
+and 6.3). When `MONCHA_INTERNAL_KEY` is set, the worker runs this step on every finished copy before the GitHub push,
+so the repo and the Worker URL both serve the page with the chatbot:
+
+1. **Colour:** the website's brand colours (`brand.colors`, extracted from the copy) give the widget colour: `primary`,
+   else `accent`, else `secondary`, skipping white and light greys, else MonCha's default `#1677FF`. It is sent as
+   six-digit uppercase hex and darkened (same hue) until white text on it has at least 3:1 contrast.
+2. **5.1** `GET /bots/{chatbotId}/widget` reads the current widget configuration.
+3. **5.2** `PUT /bots/{chatbotId}/widget` writes that same configuration back with **only `primaryColor` changed**
+   (the PUT replaces the saved configuration). Fields the PUT does not accept are left out, and `hideBranding` is
+   always `false`. The answer must show the new colour.
+4. **6.3** `GET /bots/{chatbotId}/install` gives `tenantId`, `chatbotId`, `apiUrl` and `widgetUrl`. A `null`
+   `widgetUrl` is never guessed: the step fails with `widget_url_missing`.
+5. The documented embed goes into the copy's `index.html` in R2, just before `</body>`, with only these public values
+   (never the internal key). `apiUrl` is reduced to its origin. Content-Security-Policy meta tags are removed so they
+   cannot block the widget; an embed added earlier is replaced.
+
+   ```html
+   <!-- moncha-chatbot:start -->
+   <script src="https://cdn.dev-moncha.com/moncha-widget.iife.js"></script>
+   <script>if (window.MonCha) window.MonCha.init({"tenantId":"…","chatbotId":"…","apiUrl":"https://api.dev-moncha.com"});</script>
+   <!-- moncha-chatbot:end -->
+   ```
+
+The colour, the GET and PUT widget answers and the install values are stored on the lead's bot (`widget` in #43).
+Retries work like GitHub pushes (1 min, 5 min; 3 tries). After the last try the chatbot is `failed`, and the website
+is **not** pushed or deployed (#36a). A failed bot (`bot_failed`), `widget_url_missing` or a missing `index.html` fail
+at once. A bot still being created or trained waits (`waiting_for_bot`, checked every 5 minutes) without using up a
+try; MonCha account errors pause 15 minutes, `rate_limit_exceeded` until `Retry-After`. When the chatbot is added to a
+copy that was already pushed or live, it is pushed and deployed again.
+
+This route queues the step right away: a retry after `failed`, or adding it again (for example after the brand
+colours changed). **Headers:** `authorization: Bearer <token>` (role `admin` or `operator`). **202 Accepted**
+`{ "queued": true }`.
+
+The summary's `chatbot` object (`null` when the copy was never queued):
+
+```json
+{
+  "status": "installed",
+  "attempts": 1,
+  "maxAttempts": 3,
+  "nextAt": null,
+  "error": null,
+  "installedAt": "2026-10-15T14:05:12.000Z"
+}
+```
+
+`status` is `pending`, `installing`, `installed` or `failed`.
+
+| Status | `code` | When |
+|---|---|---|
+| 401 / 403 | `unauthorized` / `forbidden` | No editor session |
+| 404 | `not_found` | Unknown copy |
+| 409 | `not_ready` | The copy is not `done` |
+| 409 | `chatbot_in_progress` | The worker is adding the chatbot to this copy right now |
+| 503 | `moncha_not_configured` | `MONCHA_INTERNAL_KEY` is not set |
+
 ### 41e. Copy progress (`progress`)
 
 Every copy summary (lists, lead copies, queue items, copy detail) has `progress`: one ordered list of steps from the
@@ -1816,12 +1882,14 @@ queue to the live URL, and the step the copy is on now. Older API versions omit 
 | `copying` | Copying website | The worker opens the site and downloads its pages and assets |
 | `reading_source` | Viewing source code | The source is read for the brand, colours and contact details |
 | `building` | Building website | The website files are built and saved to R2 |
+| `adding_chatbot` | Adding chatbot | Widget colour set and the lead's MonCha chatbot added to `index.html` (#41f) |
 | `updating_git` | Updating Git | Push to the website's own GitHub repo |
 | `deploying_url` | Deploying URL | Deploy to the website's own Cloudflare Worker (after the push) |
 | `live` | Live | The Worker URL is up |
 
 Each step's `state` is `not_started` (not reached, or never queued for this copy), `waiting`, `active`, `retrying`,
-`failed` or `done`. `updating_git` is listed when GitHub is configured or the copy was pushed before;
+`failed` or `done`. `adding_chatbot` is listed when `MONCHA_INTERNAL_KEY` is set or the copy had the step before;
+`updating_git` when GitHub is configured or the copy was pushed before;
 `deploying_url` and `live` when Cloudflare is configured or the copy was deployed before. A failed copy keeps the
 step it failed in.
 
@@ -2167,6 +2235,18 @@ per training status of the created bots, for example `{ "pending": 80, "discover
     "submittedAt": "2026-10-15T10:20:30.000Z",
     "trainedAt": "2026-10-15T10:21:10.000Z"
   },
+  "widget": {
+    "primaryColor": "#B91C1C",
+    "configBefore": { "config": { "botName": "Acme Dental", "primaryColor": "#1877F2", "position": "bottom-right", "hideBranding": false } },
+    "config": { "config": { "botName": "Acme Dental", "primaryColor": "#B91C1C", "position": "bottom-right", "hideBranding": false } },
+    "install": {
+      "tenantId": "22222222-2222-4222-8222-222222222222",
+      "chatbotId": "11111111-1111-4111-8111-111111111111",
+      "apiUrl": "https://api.dev-moncha.com",
+      "widgetUrl": "https://cdn.dev-moncha.com/moncha-widget.iife.js"
+    },
+    "configuredAt": "2026-10-15T10:25:02.000Z"
+  },
   "createdAt": "2026-10-15T10:19:40.000Z",
   "updatedAt": "2026-10-15T10:21:10.000Z"
 }
@@ -2174,8 +2254,9 @@ per training status of the created bots, for example `{ "pending": 80, "discover
 
 `status` `pending` with `nextAt` is waiting for its next try; `failed` has the last error in `error`. `knowledge.status`
 `pending` with `knowledge.nextAt` waits for its next try, `training` with `knowledge.nextAt` for its next status poll.
-`error` is the last MonCha error of creation or training, `success` once trained. 404 `bot_not_found` when the lead
-has no bot yet.
+`error` is the last MonCha error of creation or training, `success` once trained. `widget` is filled in by the
+website's chatbot step (#41f): the colour picked from the website, the 5.1 answer before and the 5.2 answer after the
+change, and the 6.3 install values; all `null` until then. 404 `bot_not_found` when the lead has no bot yet.
 
 ### 44. POST `/api/v1/leads/:id/bot`
 
@@ -2275,6 +2356,7 @@ can still be `QUALIFIED`.
 | Website copy origin | `manual`, `auto` |
 | Copy automation crawl status | `waiting_audits`, `queuing`, `complete` |
 | GitHub push status | `pending`, `pushing`, `pushed`, `failed` |
+| Website chatbot status (`chatbot.status`) | `pending`, `installing`, `installed`, `failed` |
 | Lead bot status (`LeadBot.status`, `Lead.botStatus`) | `pending`, `creating`, `created`, `failed` |
 | Lead bot plan tier | `starter`, `growth`, `scale` |
 | Lead bot training status (`LeadBot.knowledgeStatus`) | `pending`, `discovering`, `training`, `trained`, `failed` |
@@ -2297,6 +2379,7 @@ The API only stores requests. The work is done by the background worker (`apps/w
 | `POST /api/v1/leads/:id/site-snapshots` | Capture the homepage, extract the brand and upload the copy to R2 |
 | `PUT /api/v1/site-automation` with `enabled: true` | Queue copies for qualified leads after each finished crawl |
 | Every queued copy (with `MONCHA_INTERNAL_KEY`), `POST /api/v1/leads/:id/bot/retry`, `pnpm bots:backfill` | Create the lead's MonCha bot and train it on the lead's website before the website is copied |
+| `POST /api/v1/site-snapshots/:id/chatbot` (and every finished copy, with `MONCHA_INTERNAL_KEY`) | Set the widget colour and add the lead's MonCha chatbot to the website |
 | `POST /api/v1/site-snapshots/:id/github-push` (and every finished copy) | Push the website to its own GitHub repo |
 | `POST /api/v1/site-snapshots/:id/deploy` (and every finished copy) | Deploy the website to its own Cloudflare Worker |
 

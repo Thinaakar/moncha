@@ -45,7 +45,7 @@ export const LEAD_BOT_TRAINED = 'success';
 const KNOWLEDGE_FINAL_CODES = new Set(['kb_pages_limit', 'training_limit_reached']);
 
 /** Errors about the MonCha account rather than the lead: retrying another lead would fail the same way. */
-const ACCOUNT_CODES = new Set([
+export const MONCHA_ACCOUNT_CODES = new Set([
   'invalid_internal_credentials',
   'vendor_tenant_mismatch',
   'vendor_subscription_required',
@@ -214,7 +214,7 @@ export async function createLeadBot(deps: LeadBotDeps, bot: LeadBotItem, signal?
     const e = apiError(error);
     const text = `${e.code}: ${e.message}`.slice(0, 300);
     if (e.code === 'aborted' || signal?.aborted) return giveBack(text, now());
-    if (ACCOUNT_CODES.has(e.code) || e.status === 401 || e.status === 402 || e.status === 403) {
+    if (MONCHA_ACCOUNT_CODES.has(e.code) || e.status === 401 || e.status === 402 || e.status === 403) {
       return giveBack(text, new Date(now().getTime() + LEAD_BOT_ACCOUNT_PAUSE_MS));
     }
     if (e.status === 429) return giveBack(text, e.retryAt ?? new Date(now().getTime() + LEAD_BOT_BACKOFF_MS[0]!));
@@ -286,7 +286,7 @@ export type LeadBotTrainOutcome =
   | { status: 'paused'; leadId: string; botId: string; error: string; until: Date };
 
 function isAccountError(e: ApiError): boolean {
-  return ACCOUNT_CODES.has(e.code) || e.status === 401 || e.status === 402 || e.status === 403;
+  return MONCHA_ACCOUNT_CODES.has(e.code) || e.status === 401 || e.status === 402 || e.status === 403;
 }
 
 /**

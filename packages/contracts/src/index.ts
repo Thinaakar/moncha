@@ -483,6 +483,8 @@ export type SiteSnapshotSummary = {
   github?: SiteGithubPush | null;
   /** Deploy to the website's own Cloudflare Worker; null when never queued. Older API versions omit it. */
   deploy?: SiteWorkerDeploy | null;
+  /** MonCha chatbot added to index.html before the GitHub push; null when never queued. Older API versions omit it. */
+  chatbot?: SiteChatbotInstall | null;
   /**
    * Public link once done: the Worker URL (`https://{siteName}.{subdomain}.workers.dev`) when deployed, else the older
    * shared Pages link when the worker has SITE_PUBLIC_BASE_URL; null otherwise. Older API versions omit it.
@@ -493,10 +495,19 @@ export type SiteSnapshotSummary = {
 };
 
 /**
- * Ordered steps of a website copy: queued, copying the website, reading its source code, building the files,
- * updating its GitHub repo, deploying its Worker URL, live. The Worker deploy starts only after the GitHub push.
+ * Ordered steps of a website copy: queued, copying the website, reading its source code, building the files, adding
+ * the MonCha chatbot, updating its GitHub repo, deploying its Worker URL, live. The Worker deploy starts only after
+ * the GitHub push. `adding_chatbot` is new; older API versions never return it.
  */
-export type SiteCopyStep = 'queued' | 'copying' | 'reading_source' | 'building' | 'updating_git' | 'deploying_url' | 'live';
+export type SiteCopyStep =
+  | 'queued'
+  | 'copying'
+  | 'reading_source'
+  | 'building'
+  | 'adding_chatbot'
+  | 'updating_git'
+  | 'deploying_url'
+  | 'live';
 
 /**
  * not_started = not reached yet (or never queued), waiting = queued for its turn, active = running now,
@@ -520,6 +531,21 @@ export type SiteCopyProgress = {
 
 /** Same lifecycle as SiteGithubStatus: pending, deploying, deployed, or failed after repeated errors. */
 export type SiteWorkerStatus = 'pending' | 'deploying' | 'deployed' | 'failed';
+
+/** Same lifecycle as SiteGithubStatus: pending, installing, installed, or failed after repeated errors. */
+export type SiteChatbotStatus = 'pending' | 'installing' | 'installed' | 'failed';
+
+/** The lead's MonCha chatbot on this copy: widget colour set (PUT widget) and the embed added to index.html. */
+export type SiteChatbotInstall = {
+  status: SiteChatbotStatus;
+  attempts: number;
+  maxAttempts: number;
+  /** Next try while `pending`. */
+  nextAt: string | null;
+  /** Last error, `code: message`; `waiting_for_bot: …` while the lead's bot is still being trained. */
+  error: string | null;
+  installedAt: string | null;
+};
 
 export type SiteWorkerDeploy = {
   status: SiteWorkerStatus;
@@ -669,6 +695,19 @@ export type LeadBotKnowledgeView = {
   trainedAt: string | null;
 };
 
+/** The widget of the lead's bot as the website chatbot step set it (GET widget, PUT widget, GET install). */
+export type LeadBotWidgetView = {
+  /** primaryColor picked from the website's brand colours; every other widget field is kept as it was. */
+  primaryColor: string | null;
+  /** GET widget response before the change. */
+  configBefore: unknown;
+  /** PUT widget response after it. */
+  config: unknown;
+  /** GET install response: tenantId, chatbotId, apiUrl, widgetUrl (public values; never the internal key). */
+  install: unknown;
+  configuredAt: string | null;
+};
+
 /** A lead's MonCha demo bot (`GET /api/v1/leads/:id/bot`). Created before the lead's website is copied. */
 export type LeadBotView = {
   id: string;
@@ -693,6 +732,8 @@ export type LeadBotView = {
   config: unknown;
   createdBotAt: string | null;
   knowledge: LeadBotKnowledgeView;
+  /** Widget colour and install values used for the website's chatbot. Older API versions omit it. */
+  widget?: LeadBotWidgetView;
   createdAt: string;
   updatedAt: string;
 };
@@ -748,7 +789,8 @@ export type SiteQueue = {
   measured: boolean;
 };
 
-export type SitePipelineStep = 'copy' | 'github' | 'deploy';
+/** `chatbot` is new; older API versions never return it. */
+export type SitePipelineStep = 'copy' | 'chatbot' | 'github' | 'deploy';
 
 /** `working` runs now or is about to; `retrying` waits before its next try; `paused` waits for a GitHub or Cloudflare limit. */
 export type SitePipelineState = 'working' | 'retrying' | 'paused';
@@ -760,7 +802,8 @@ export type SitePipelineState = 'working' | 'retrying' | 'paused';
 export type SitePipelineStatus = {
   /** False when the worker cannot copy websites (R2 or the preview secret is missing). */
   enabled: boolean;
-  steps: { github: boolean; deploy: boolean };
+  /** `chatbot`: MonCha is configured, so each website gets its chatbot before the push. Older API versions omit it. */
+  steps: { github: boolean; deploy: boolean; chatbot?: boolean };
   /** Null when idle, or busy with another tenant's website. */
   current: {
     site: SiteSnapshotSummary;
@@ -774,7 +817,7 @@ export type SitePipelineStatus = {
     /** Last error of this step, `code: message`. */
     error: string | null;
   } | null;
-  /** Finished copies still waiting for their GitHub push or Worker deploy (the current website not counted). */
+  /** Finished copies still waiting for their chatbot, GitHub push or Worker deploy (the current website not counted). */
   toPublish: number;
   /** Copies waiting for their first try. */
   waitingCopies: number;

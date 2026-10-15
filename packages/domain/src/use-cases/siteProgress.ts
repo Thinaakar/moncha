@@ -1,7 +1,15 @@
 import type { SiteSnapshotRecord } from '../ports';
 
 /** Ordered steps of a website copy, from the queue to its live Worker URL. */
-export type SiteCopyStep = 'queued' | 'copying' | 'reading_source' | 'building' | 'updating_git' | 'deploying_url' | 'live';
+export type SiteCopyStep =
+  | 'queued'
+  | 'copying'
+  | 'reading_source'
+  | 'building'
+  | 'adding_chatbot'
+  | 'updating_git'
+  | 'deploying_url'
+  | 'live';
 
 /**
  * not_started = not reached yet (or never queued), waiting = queued for its turn, active = running now,
@@ -42,6 +50,11 @@ type Row = Pick<
   | 'workerNextAt'
   | 'workerError'
   | 'workerDeployedAt'
+  | 'chatbotStatus'
+  | 'chatbotAttempts'
+  | 'chatbotNextAt'
+  | 'chatbotError'
+  | 'chatbotInstalledAt'
 >;
 
 type StepInfo = { step: SiteCopyStep; state: SiteCopyStepState; error: string | null; since: Date | null; nextAt: Date | null };
@@ -73,30 +86,44 @@ function copySteps(row: Row): StepInfo[] {
   ];
 }
 
-/** State of a GitHub push or Worker deploy from its status columns (both share one lifecycle). */
+/** State of the chatbot step, GitHub push or Worker deploy from its status columns (all share one lifecycle). */
 function publishState(
-  status: 'pending' | 'pushing' | 'pushed' | 'deploying' | 'deployed' | 'failed' | null,
+  status: 'pending' | 'pushing' | 'pushed' | 'deploying' | 'deployed' | 'installing' | 'installed' | 'failed' | null,
   attempts: number,
   error: string | null,
 ): SiteCopyStepState {
   if (!status) return 'not_started';
-  if (status === 'pushed' || status === 'deployed') return 'done';
-  if (status === 'pushing' || status === 'deploying') return 'active';
+  if (status === 'pushed' || status === 'deployed' || status === 'installed') return 'done';
+  if (status === 'pushing' || status === 'deploying' || status === 'installing') return 'active';
   if (status === 'failed') return 'failed';
   return attempts > 0 || error ? 'retrying' : 'waiting';
 }
 
 /**
- * Where a copy is on the way to its live URL: copy (copying, reading the source, building the files), then the
- * GitHub push, then the Worker deploy, which only starts once the push is done when GitHub is configured.
- * GitHub and Worker steps appear when they are configured or the copy already has them.
+ * Where a copy is on the way to its live URL: copy (copying, reading the source, building the files), then the MonCha
+ * chatbot, then the GitHub push, then the Worker deploy, which only starts once the push is done when GitHub is
+ * configured. Chatbot, GitHub and Worker steps appear when they are configured or the copy already has them.
  */
-export function siteCopyProgress(row: Row, options: { githubEnabled: boolean; workerEnabled: boolean }): SiteCopyProgress {
+export function siteCopyProgress(
+  row: Row,
+  options: { githubEnabled: boolean; workerEnabled: boolean; chatbotEnabled?: boolean },
+): SiteCopyProgress {
   const steps = copySteps(row);
   const copied = row.status === 'done';
+  const withChatbot = Boolean(options.chatbotEnabled) || row.chatbotStatus !== null;
   const withGit = options.githubEnabled || row.githubStatus !== null;
   const withWorker = options.workerEnabled || row.workerStatus !== null;
 
+  if (withChatbot) {
+    const state = copied ? publishState(row.chatbotStatus, row.chatbotAttempts, row.chatbotError) : 'not_started';
+    steps.push({
+      step: 'adding_chatbot',
+      state,
+      error: state === 'retrying' || state === 'failed' ? row.chatbotError : null,
+      since: state === 'done' ? row.chatbotInstalledAt : null,
+      nextAt: state === 'waiting' || state === 'retrying' ? row.chatbotNextAt : null,
+    });
+  }
   if (withGit) {
     const state = copied ? publishState(row.githubStatus, row.githubAttempts, row.githubError) : 'not_started';
     steps.push({

@@ -2,6 +2,7 @@ import { Prisma, type PrismaClient, type SiteSnapshot } from '@prisma/client';
 import type {
   SiteBrand,
   SiteCancelResult,
+  SiteChatbotStatus,
   SiteCopyOrigin,
   SiteGithubRequestResult,
   SiteGithubStatus,
@@ -68,6 +69,11 @@ function mapSnapshot(row: SiteSnapshot): SiteSnapshotRecord {
     workerUrl: row.workerUrl,
     workerError: row.workerError,
     workerDeployedAt: row.workerDeployedAt,
+    chatbotStatus: (row.chatbotStatus as SiteChatbotStatus | null) ?? null,
+    chatbotAttempts: row.chatbotAttempts,
+    chatbotNextAt: row.chatbotNextAt,
+    chatbotError: row.chatbotError,
+    chatbotInstalledAt: row.chatbotInstalledAt,
     stage: (row.stage as SiteCopyStage | null) ?? null,
     stageAt: row.stageAt,
     createdAt: row.createdAt,
@@ -353,6 +359,39 @@ export class PrismaSiteSnapshotRepository implements SiteSnapshotRepo, SitePipel
     return count ? 'queued' : 'busy';
   }
 
+  async claimChatbotInstall(now: Date, staleBefore: Date, options: { id?: string } = {}): Promise<SiteSnapshotListItem | null> {
+    const onlyId = options.id ? Prisma.sql`AND id = ${options.id}` : Prisma.empty;
+    const rows = await this.db.$queryRaw<Array<{ id: string; tenantId: string }>>`
+      UPDATE "SiteSnapshot" AS s
+      SET "chatbotStatus" = 'installing', "chatbotLockedAt" = ${now}, "chatbotAttempts" = s."chatbotAttempts" + 1
+      WHERE s.id = (
+        SELECT id FROM "SiteSnapshot"
+        WHERE status = 'done'
+          ${onlyId}
+          AND (
+            ("chatbotStatus" = 'pending' AND ("chatbotNextAt" IS NULL OR "chatbotNextAt" <= ${now}))
+            OR ("chatbotStatus" = 'installing' AND "chatbotLockedAt" < ${staleBefore})
+          )
+        ORDER BY "chatbotNextAt" ASC NULLS FIRST, "createdAt" ASC
+        LIMIT 1
+        FOR UPDATE SKIP LOCKED
+      )
+      RETURNING s.id, s."tenantId"`;
+    const claimed = rows[0];
+    return claimed ? this.get(claimed.tenantId, claimed.id) : null;
+  }
+
+  async requestChatbotInstall(tenantId: string, id: string, now: Date): Promise<SiteGithubRequestResult> {
+    const snapshot = await this.db.siteSnapshot.findFirst({ where: { id, tenantId }, select: { status: true } });
+    if (!snapshot) return 'not_found';
+    if (snapshot.status !== 'done') return 'not_done';
+    const { count } = await this.db.siteSnapshot.updateMany({
+      where: { id, tenantId, status: 'done', OR: [{ chatbotStatus: null }, { chatbotStatus: { not: 'installing' } }] },
+      data: { chatbotStatus: 'pending', chatbotAttempts: 0, chatbotNextAt: now, chatbotError: null, chatbotLockedAt: null },
+    });
+    return count ? 'queued' : 'busy';
+  }
+
   async currentPublish(): Promise<SiteSnapshotListItem | null> {
     const rows = await this.db.$queryRaw<Array<{ id: string; tenantId: string }>>`
       SELECT s.id, s."tenantId" FROM "SiteSnapshot" s
@@ -402,15 +441,25 @@ export class PrismaSiteSnapshotRepository implements SiteSnapshotRepo, SitePipel
 /**
  * A done copy that still needs a publish step and whose steps have not given up. Copies with no job are left to the
  * console buttons, and so is an older copy once a newer copy of the same lead is done (it would overwrite the Worker).
+ * With the chatbot step, a copy waits until its lead's MonCha bot is created and trained (live websites without the
+ * chatbot are picked up as their bots finish training).
  */
 function needsPublish(steps: SitePipelineSteps): Prisma.Sql {
+  const chatbot = steps.chatbot ? Prisma.sql`s."chatbotStatus" IS DISTINCT FROM 'installed'` : Prisma.sql`FALSE`;
   const github = steps.github ? Prisma.sql`s."githubStatus" IS DISTINCT FROM 'pushed'` : Prisma.sql`FALSE`;
   const worker = steps.worker ? Prisma.sql`s."workerStatus" IS DISTINCT FROM 'deployed'` : Prisma.sql`FALSE`;
+  const botReady = steps.chatbot
+    ? Prisma.sql`AND EXISTS (
+        SELECT 1 FROM "LeadBot" b WHERE b."leadId" = s."leadId" AND b.status = 'created' AND b."knowledgeStatus" = 'trained'
+      )`
+    : Prisma.empty;
   return Prisma.sql`s.status = 'done'
     AND s."jobId" IS NOT NULL
     AND s."githubStatus" IS DISTINCT FROM 'failed'
     AND s."workerStatus" IS DISTINCT FROM 'failed'
-    AND (${github} OR ${worker})
+    AND s."chatbotStatus" IS DISTINCT FROM 'failed'
+    AND (${chatbot} OR ${github} OR ${worker})
+    ${botReady}
     AND NOT EXISTS (
       SELECT 1 FROM "SiteSnapshot" n
       WHERE n."leadId" = s."leadId" AND n.status = 'done' AND n."createdAt" > s."createdAt"

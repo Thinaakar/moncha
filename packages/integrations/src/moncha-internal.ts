@@ -88,6 +88,23 @@ const trainingSchema = z.object({
   poll_after_seconds: z.number().nullish(),
 });
 
+const widgetSchema = z.object({ config: z.record(z.string(), z.unknown()) });
+
+const installSchema = z.object({
+  tenantId: z.string().min(1),
+  chatbotId: z.string().min(1),
+  apiUrl: z.string().min(1),
+  widgetUrl: z.string().nullish(),
+});
+
+/** Widget configuration as GET/PUT /bots/:botId/widget return it (saved values merged with defaults). */
+export type MonchaWidgetConfig = Record<string, unknown>;
+
+export type MonchaWidget = { config: MonchaWidgetConfig; response: unknown };
+
+/** GET /bots/:botId/install: the public values the embed needs. `widgetUrl` is null until MonCha configures it. */
+export type MonchaInstall = { tenantId: string; chatbotId: string; apiUrl: string; widgetUrl: string | null; response: unknown };
+
 export type MonchaKnowledgeDocument = { title: string; url: string; source_type: 'url' };
 
 export type MonchaDiscovered = { urls: string[]; pagesFetched: number | null; truncated: boolean; response: unknown };
@@ -360,6 +377,34 @@ export class MonchaInternalClient {
       pollAfterSeconds: poll_after_seconds ?? null,
       response,
     };
+  }
+
+  /** `GET /bots/:botId/widget`: the widget configuration, saved values merged with defaults and the bot name. */
+  async widget(input: { botId: string; signal?: AbortSignal }): Promise<MonchaWidget> {
+    const response = await this.request<unknown>('GET', `/bots/${encodeURIComponent(input.botId)}/widget`, { signal: input.signal });
+    const parsed = widgetSchema.safeParse(unwrap(response));
+    if (!parsed.success) throw new MonchaInternalError('unexpected_response', 'GET widget returned no config', 200);
+    return { config: parsed.data.config, response };
+  }
+
+  /** `PUT /bots/:botId/widget`: replaces the saved configuration with `config` (sent as is, not wrapped). */
+  async updateWidget(input: { botId: string; config: MonchaWidgetConfig; signal?: AbortSignal }): Promise<MonchaWidget> {
+    const response = await this.request<unknown>('PUT', `/bots/${encodeURIComponent(input.botId)}/widget`, {
+      body: input.config,
+      signal: input.signal,
+    });
+    const parsed = widgetSchema.safeParse(unwrap(response));
+    if (!parsed.success) throw new MonchaInternalError('unexpected_response', 'PUT widget returned no config', 200);
+    return { config: parsed.data.config, response };
+  }
+
+  /** `GET /bots/:botId/install`: tenantId, chatbotId, apiUrl (an origin) and widgetUrl for the embed. */
+  async install(input: { botId: string; signal?: AbortSignal }): Promise<MonchaInstall> {
+    const response = await this.request<unknown>('GET', `/bots/${encodeURIComponent(input.botId)}/install`, { signal: input.signal });
+    const parsed = installSchema.safeParse(unwrap(response));
+    if (!parsed.success) throw new MonchaInternalError('unexpected_response', 'GET install returned no tenantId, chatbotId or apiUrl', 200);
+    const { tenantId, chatbotId, apiUrl, widgetUrl } = parsed.data;
+    return { tenantId, chatbotId, apiUrl, widgetUrl: widgetUrl?.trim() || null, response };
   }
 
   /** Read-only: proves the key, environment and enterprise prerequisites with `GET /slots`. */

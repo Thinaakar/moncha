@@ -8,23 +8,28 @@ import type {
   SiteSnapshotRecord,
   SiteSnapshotRepo,
 } from '../ports';
+import { MONCHA_ACCOUNT_CODES } from './leadBots';
+import { SITE_CHATBOT_MAX_ATTEMPTS, SITE_CHATBOT_STALE_MS, type SiteChatbotOutcome } from './siteChatbot';
 import { SITE_GITHUB_MAX_ATTEMPTS, SITE_GITHUB_STALE_MS, type SiteGithubPushOutcome } from './siteGithub';
 import { SITE_SNAPSHOT_MAX_ATTEMPTS } from './siteSnapshots';
 import { SITE_WORKER_MAX_ATTEMPTS, SITE_WORKER_STALE_MS, type SiteWorkerDeployOutcome } from './siteWorker';
 
 /**
- * The website pipeline takes one website at a time through copy, GitHub push and Cloudflare Worker deploy. The next
- * website starts only when the current one is live or one of its steps gave up (3 tries; errors a retry cannot fix
- * stop at once). A GitHub rate limit or a full Cloudflare account pauses the pipeline on the current website without
- * using up a try. Everything it needs to resume after a restart is on the SiteSnapshot and JobRun rows.
+ * The website pipeline takes one website at a time through copy, MonCha chatbot, GitHub push and Cloudflare Worker
+ * deploy. The next website starts only when the current one is live or one of its steps gave up (3 tries; errors a
+ * retry cannot fix stop at once). A GitHub rate limit, a full Cloudflare account, a MonCha account problem or a bot
+ * still in training pauses the pipeline on the current website without using up a try. Everything it needs to resume
+ * after a restart is on the SiteSnapshot and JobRun rows.
  */
-export type SitePipelineStep = 'copy' | 'github' | 'deploy';
+export type SitePipelineStep = 'copy' | 'chatbot' | 'github' | 'deploy';
 
-type PublishFields = Pick<SiteSnapshotRecord, 'status' | 'githubStatus' | 'workerStatus'>;
+type PublishFields = Pick<SiteSnapshotRecord, 'status' | 'githubStatus' | 'workerStatus' | 'chatbotStatus'>;
 
 /** The publish step a finished copy still needs, or null once it went through every step or a step gave up. */
-export function sitePublishStep(snapshot: PublishFields, steps: SitePipelineSteps): 'github' | 'deploy' | null {
+export function sitePublishStep(snapshot: PublishFields, steps: SitePipelineSteps): 'chatbot' | 'github' | 'deploy' | null {
   if (snapshot.status !== 'done' || snapshot.githubStatus === 'failed' || snapshot.workerStatus === 'failed') return null;
+  if (snapshot.chatbotStatus === 'failed') return null;
+  if (steps.chatbot && snapshot.chatbotStatus !== 'installed') return 'chatbot';
   if (steps.github && snapshot.githubStatus !== 'pushed') return 'github';
   if (steps.worker && snapshot.workerStatus !== 'deployed') return 'deploy';
   return null;
@@ -32,8 +37,9 @@ export function sitePublishStep(snapshot: PublishFields, steps: SitePipelineStep
 
 /** How a website's job ends once no step is left: done when every step succeeded, failed with the step's error otherwise. */
 export function sitePublishVerdict(
-  snapshot: Pick<SiteSnapshotRecord, 'githubStatus' | 'githubError' | 'workerStatus' | 'workerError'>,
+  snapshot: Pick<SiteSnapshotRecord, 'githubStatus' | 'githubError' | 'workerStatus' | 'workerError' | 'chatbotStatus' | 'chatbotError'>,
 ): { status: 'done' | 'failed'; lastError: string | null } {
+  if (snapshot.chatbotStatus === 'failed') return { status: 'failed', lastError: `Chatbot failed: ${snapshot.chatbotError ?? 'unknown error'}` };
   if (snapshot.githubStatus === 'failed') return { status: 'failed', lastError: `GitHub push failed: ${snapshot.githubError ?? 'unknown error'}` };
   if (snapshot.workerStatus === 'failed') return { status: 'failed', lastError: `Deploy failed: ${snapshot.workerError ?? 'unknown error'}` };
   return { status: 'done', lastError: null };
@@ -46,6 +52,8 @@ export type SitePipelineDeps = {
   /** Claims copy job `jobId` when it is due, or without an id the next copy in line; null when there is none. */
   claimCopy(jobId?: string): Promise<JobRunRecord | null>;
   runCopy(job: JobRunRecord): Promise<unknown>;
+  /** Missing when MonCha is not configured: the step is skipped. */
+  installChatbot?: (snapshot: SiteSnapshotListItem) => Promise<SiteChatbotOutcome>;
   /** Missing when GitHub is not configured: the step is skipped. */
   push?: (snapshot: SiteSnapshotListItem) => Promise<SiteGithubPushOutcome>;
   /** Missing when Cloudflare is not configured: the step is skipped. */
@@ -60,8 +68,8 @@ export type SitePipelineTickOutcome =
   | { action: 'waiting'; step: SitePipelineStep; snapshotId: string; until: Date | null }
   | { action: 'finished'; snapshotId: string; status: 'done' | 'failed' };
 
-export function sitePipelineSteps(deps: Pick<SitePipelineDeps, 'push' | 'deploy'>): SitePipelineSteps {
-  return { github: Boolean(deps.push), worker: Boolean(deps.deploy) };
+export function sitePipelineSteps(deps: Pick<SitePipelineDeps, 'push' | 'deploy' | 'installChatbot'>): SitePipelineSteps {
+  return { github: Boolean(deps.push), worker: Boolean(deps.deploy), chatbot: Boolean(deps.installChatbot) };
 }
 
 /** Moves the pipeline one step: the website being published first, then a copy that started, older copies, new copies. */
@@ -124,7 +132,26 @@ async function publishStep(
   if (!step) return finishPublish(deps, site, now);
 
   let result: string;
-  if (step === 'github') {
+  if (step === 'chatbot') {
+    if (!site.chatbotStatus) {
+      await deps.snapshots.update(site.tenantId, site.id, { chatbotStatus: 'pending', chatbotAttempts: 0, chatbotNextAt: now, chatbotError: null });
+    }
+    const claimed = await deps.snapshots.claimChatbotInstall(now, new Date(now.getTime() - SITE_CHATBOT_STALE_MS), { id: site.id });
+    if (!claimed) return { action: 'waiting', step, snapshotId: site.id, until: site.chatbotNextAt };
+    result = (await deps.installChatbot!(claimed)).status;
+    if (result === 'installed') {
+      // index.html changed: a copy that was already pushed or live is pushed and deployed again.
+      const at = deps.now?.() ?? new Date();
+      await deps.snapshots.update(site.tenantId, site.id, {
+        ...(steps.github && claimed.githubStatus !== 'pending'
+          ? { githubStatus: 'pending' as const, githubAttempts: 0, githubNextAt: at, githubError: null }
+          : {}),
+        ...(steps.worker && claimed.workerStatus !== 'pending'
+          ? { workerStatus: 'pending' as const, workerAttempts: 0, workerNextAt: at, workerError: null }
+          : {}),
+      });
+    }
+  } else if (step === 'github') {
     if (!site.githubStatus) {
       await deps.snapshots.update(site.tenantId, site.id, { githubStatus: 'pending', githubAttempts: 0, githubNextAt: now, githubError: null });
     }
@@ -200,8 +227,14 @@ export type SitePipelineView = {
   waitingCopies: number;
 };
 
-/** Errors that pause the whole pipeline: the account is limited, not the website. */
-const PAUSE_CODES = new Set(['github_rate_limited', 'worker_limit_reached']);
+/** Errors that pause the whole pipeline: an account is limited, or the lead's bot is not trained yet, not the website. */
+const PAUSE_CODES = new Set([
+  'github_rate_limited',
+  'worker_limit_reached',
+  'waiting_for_bot',
+  'rate_limit_exceeded',
+  ...MONCHA_ACCOUNT_CODES,
+]);
 
 function errorCode(error: string | null): string | null {
   return error?.match(/^([a-z0-9_]+):/)?.[1] ?? null;
@@ -213,7 +246,19 @@ function waitState(nextAt: Date | null, error: string | null, now: Date): SitePi
 }
 
 function publishCurrent(site: SiteSnapshotListItem, steps: SitePipelineSteps, now: Date): SitePipelineCurrent {
-  const step = sitePublishStep(site, steps) ?? (steps.worker ? 'deploy' : 'github');
+  const step = sitePublishStep(site, steps) ?? (site.chatbotStatus === 'failed' ? 'chatbot' : steps.worker ? 'deploy' : 'github');
+  if (step === 'chatbot') {
+    const waiting = site.chatbotStatus === 'pending';
+    return {
+      snapshot: site,
+      step,
+      state: waiting ? waitState(site.chatbotNextAt, site.chatbotError, now) : 'working',
+      attempts: site.chatbotAttempts,
+      maxAttempts: SITE_CHATBOT_MAX_ATTEMPTS,
+      nextAt: waiting ? site.chatbotNextAt : null,
+      error: site.chatbotError,
+    };
+  }
   if (step === 'github') {
     const waiting = site.githubStatus === 'pending';
     return {

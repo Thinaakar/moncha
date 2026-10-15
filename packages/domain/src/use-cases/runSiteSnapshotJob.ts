@@ -56,6 +56,8 @@ export type SiteSnapshotJobDeps = {
   githubEnabled?: boolean;
   /** When Cloudflare is configured, a finished copy is queued for a deploy to its own Worker. */
   workerEnabled?: boolean;
+  /** When MonCha is configured, a finished copy is queued for its chatbot (added before the GitHub push). */
+  chatbotEnabled?: boolean;
   logger: Logger;
   now?: () => Date;
 };
@@ -282,6 +284,9 @@ export async function runSiteSnapshotJob(
       ...(deps.workerEnabled
         ? { workerStatus: 'pending' as const, workerAttempts: 0, workerNextAt: now(), workerError: null }
         : {}),
+      ...(deps.chatbotEnabled
+        ? { chatbotStatus: 'pending' as const, chatbotAttempts: 0, chatbotNextAt: now(), chatbotError: null }
+        : {}),
     });
     const result = {
       snapshotId,
@@ -292,7 +297,7 @@ export async function runSiteSnapshotJob(
       brandSource: brand.source,
       warnings: uniqueWarnings.length,
     };
-    if (deps.githubEnabled || deps.workerEnabled) {
+    if (deps.githubEnabled || deps.workerEnabled || deps.chatbotEnabled) {
       // The job is done when the website is live (or a publish step gave up); no lock, so it is never re-claimed.
       await deps.jobs.update(tenantId, job.id, { status: 'running', lockedAt: null, lockedBy: null, lastError: null, result });
     } else {

@@ -412,6 +412,22 @@
           ]
         },
         {
+          "name": "Add chatbot to website copy",
+          "request": { "method": "POST", "url": "{{baseUrl}}/api/v1/site-snapshots/{{snapshotId}}/chatbot" },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('queued, or 404/409/503 when not possible', () => pm.expect(pm.response.code).to.be.oneOf([202, 404, 409, 503]));",
+                  "if (pm.response.code === 202) pm.test('queued', () => pm.expect(pm.response.json().queued).to.eql(true));"
+                ]
+              }
+            }
+          ]
+        },
+        {
           "name": "Push copy to GitHub",
           "request": { "method": "POST", "url": "{{baseUrl}}/api/v1/site-snapshots/{{snapshotId}}/github-push" },
           "event": [

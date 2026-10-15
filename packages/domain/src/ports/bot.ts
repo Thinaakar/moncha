@@ -50,6 +50,14 @@ export type LeadBotRecord = {
   trainingResult: unknown;
   trainingSubmittedAt: Date | null;
   trainedAt: Date | null;
+  /** Widget primaryColor picked from the website's brand and saved with PUT widget. */
+  widgetPrimaryColor: string | null;
+  /** GET widget response before the change and PUT widget response after it. */
+  widgetConfigBefore: unknown;
+  widgetConfig: unknown;
+  /** GET install response (tenantId, chatbotId, apiUrl, widgetUrl). */
+  installValues: unknown;
+  widgetConfiguredAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -90,6 +98,11 @@ export type LeadBotPatch = Partial<
     | 'trainingResult'
     | 'trainingSubmittedAt'
     | 'trainedAt'
+    | 'widgetPrimaryColor'
+    | 'widgetConfigBefore'
+    | 'widgetConfig'
+    | 'installValues'
+    | 'widgetConfiguredAt'
   >
 >;
 
@@ -173,4 +186,17 @@ export interface MonchaBotApi {
     pollAfterSeconds: number | null;
     response: unknown;
   }>;
+}
+
+/** Widget configuration as GET/PUT widget return it (saved values merged with defaults). */
+export type WidgetConfig = Record<string, unknown>;
+
+/** GET install: the public values of the embed. `widgetUrl` is null until MonCha configures it. */
+export type MonchaInstallValues = { tenantId: string; chatbotId: string; apiUrl: string; widgetUrl: string | null };
+
+/** MonCha internal lead API, as the website chatbot step uses it (5.1, 5.2, 6.3). */
+export interface MonchaWidgetApi {
+  widget(input: { botId: string; signal?: AbortSignal }): Promise<{ config: WidgetConfig; response: unknown }>;
+  updateWidget(input: { botId: string; config: WidgetConfig; signal?: AbortSignal }): Promise<{ config: WidgetConfig; response: unknown }>;
+  install(input: { botId: string; signal?: AbortSignal }): Promise<MonchaInstallValues & { response: unknown }>;
 }

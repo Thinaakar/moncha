@@ -27,6 +27,7 @@ import {
   createConsoleLogger,
   deploySiteSnapshotToWorker,
   enqueueDueSchedules,
+  installSiteChatbot,
   pushSiteSnapshotToGithub,
   resolveCountry,
   runCountryDiscoveryJob,
@@ -245,8 +246,9 @@ async function runCrawl(job: JobRunRecord) {
 }
 
 /**
- * One website at a time: copy, GitHub push, Cloudflare Worker deploy. The next website starts only when the current one
- * is live or a step gave up after its tries (see sitePipeline.ts). Audits and crawls keep running in their own loops.
+ * One website at a time: copy, MonCha chatbot (widget colour + embed in index.html), GitHub push, Cloudflare Worker
+ * deploy. The next website starts only when the current one is live or a step gave up after its tries (see
+ * sitePipeline.ts). Audits and crawls keep running in their own loops.
  */
 async function pipelineTick() {
   if (!siteAgent.ready || !siteAgent.store || activePipeline || crawlAbort.signal.aborted) return;
@@ -260,6 +262,10 @@ async function pipelineTick() {
       (await withDbRetry(() => jobs.claimJobs(WORKER_ID, 1, 'site_snapshot', { id: jobId, requireLeadBot: !jobId && Boolean(monchaBots) })))[0] ??
       null,
     runCopy: (job) => copySite(job, store),
+    installChatbot: monchaBots
+      ? (snapshot) =>
+          installSiteChatbot({ snapshots: siteSnapshots, bots: leadBots, api: monchaBots, store, logger }, snapshot, crawlAbort.signal)
+      : undefined,
     push: githubPublisher
       ? (snapshot) =>
           pushSiteSnapshotToGithub(
@@ -334,6 +340,7 @@ function copySite(job: JobRunRecord, store: SiteStore) {
       maxLlmCallsPerDay: Number(process.env.LLM_MAX_CALLS_PER_DAY || 0) || undefined,
       githubEnabled: Boolean(githubPublisher),
       workerEnabled: Boolean(workerDeployer),
+      chatbotEnabled: Boolean(monchaBots),
       logger,
     },
     { job, timeoutMs: siteAgent.jobTimeoutMs, signal: crawlAbort.signal },
@@ -366,7 +373,7 @@ async function main() {
     render: true,
     siteAgent: siteAgent.ready,
     siteAutoCopy: siteAgent.ready && siteAutoCopyEnabled(),
-    sitePipeline: 'one website at a time: copy, GitHub push, Worker deploy',
+    sitePipeline: `one website at a time: copy, ${monchaBots ? 'chatbot, ' : ''}GitHub push, Worker deploy`,
     githubSites: githubPublisher ? `${githubPublisher.owner}/{site}@${githubPublisher.branch}` : false,
     workerSites: Boolean(workerDeployer),
     leadBots: monchaBots ? `${monchaBots.environment}: bot created and trained on the website before each copy` : false,

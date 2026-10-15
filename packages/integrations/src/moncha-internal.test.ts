@@ -263,6 +263,37 @@ describe('MonchaInternalClient knowledge', () => {
   });
 });
 
+describe('MonchaInternalClient widget and install', () => {
+  const BOT = '11111111-1111-4111-8111-111111111111';
+  const CONFIG = { botName: 'Acme', primaryColor: '#1877F2', position: 'bottom-right', hideBranding: false };
+
+  it('reads the widget config and PUTs a new one directly, not wrapped', async () => {
+    const read = client(() => json({ config: CONFIG }));
+    expect(await read.api.widget({ botId: BOT })).toEqual({ config: CONFIG, response: { config: CONFIG } });
+    expect(read.calls[0]!.url).toBe(`${MONCHA_INTERNAL_UAT_URL}/bots/${BOT}/widget`);
+    expect(read.calls[0]!.init.method).toBe('GET');
+
+    const next = { ...CONFIG, primaryColor: '#B91C1C' };
+    const write = client(() => json({ config: next }));
+    expect(await write.api.updateWidget({ botId: BOT, config: next })).toEqual({ config: next, response: { config: next } });
+    expect(write.calls[0]!.init.method).toBe('PUT');
+    expect(JSON.parse(write.calls[0]!.init.body as string)).toEqual(next);
+  });
+
+  it('reads the install values, with widgetUrl null when MonCha has none', async () => {
+    const body = { tenantId: 't-1', chatbotId: BOT, apiUrl: 'https://api.dev-moncha.com', widgetUrl: 'https://cdn.dev-moncha.com/w.js' };
+    const ok = client(() => json(body));
+    expect(await ok.api.install({ botId: BOT })).toEqual({ ...body, response: body });
+    expect(ok.calls[0]!.url).toBe(`${MONCHA_INTERNAL_UAT_URL}/bots/${BOT}/install`);
+
+    const none = client(() => json({ ...body, widgetUrl: null }));
+    expect((await none.api.install({ botId: BOT })).widgetUrl).toBeNull();
+
+    const bad = client(() => json({ chatbotId: BOT }));
+    expect(await caught(bad.api.install({ botId: BOT }))).toMatchObject({ code: 'unexpected_response' });
+  });
+});
+
 describe('MonchaInternalClient.check', () => {
   it('reports slots when the key works', async () => {
     const { api } = client(() => json({ data: SLOTS }));

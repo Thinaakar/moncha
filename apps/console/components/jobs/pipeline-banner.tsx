@@ -13,6 +13,7 @@ import { cn } from '@/lib/utils';
 
 const STEP_TEXT: Record<SitePipelineStep, string> = {
   copy: 'Copying the website',
+  chatbot: 'Adding the chatbot to',
   github: 'Pushing to GitHub',
   deploy: 'Deploying to Cloudflare',
 };
