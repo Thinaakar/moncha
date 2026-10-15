@@ -24,6 +24,37 @@ const slotsSchema = z.object({ data: z.object({ starter: slotSchema, growth: slo
 
 export type MonchaSlot = z.infer<typeof slotSchema>;
 export type MonchaSlots = z.infer<typeof slotsSchema>['data'];
+export type MonchaPlanTier = keyof MonchaSlots;
+
+const createdBotSchema = z.object({
+  data: z.object({
+    bot_id: z.string().min(1),
+    customer_tenant_id: z.string().min(1),
+    connection_id: z.string().nullish(),
+    plan_tier: z.string().nullish(),
+  }),
+});
+
+export type MonchaBotCreateInput = {
+  /** 1-30 characters, unique within the MonCha workspace. */
+  name: string;
+  planTier: MonchaPlanTier;
+  /** Defaults to `en`. */
+  language?: string;
+  /** Stable per logical create; reuse it with the identical body when retrying. */
+  idempotencyKey: string;
+  signal?: AbortSignal;
+};
+
+export type MonchaCreatedBot = {
+  botId: string;
+  /** The MonCha enterprise workspace (`customer_tenant_id` / `install.tenantId`). */
+  tenantId: string;
+  connectionId: string | null;
+  planTier: string | null;
+  /** The whole response body, stored as is. */
+  response: unknown;
+};
 
 export type MonchaInternalCheck = {
   environment: MonchaInternalEnvironment;
@@ -208,6 +239,25 @@ export class MonchaInternalClient {
     const parsed = slotsSchema.safeParse(data);
     if (!parsed.success) throw new MonchaInternalError('unexpected_response', 'GET /slots returned an unexpected shape', 200);
     return parsed.data.data;
+  }
+
+  /** `POST /bots`: one demo bot in the chosen tier; uses one available slot. */
+  async createBot(input: MonchaBotCreateInput): Promise<MonchaCreatedBot> {
+    const response = await this.request<unknown>('POST', '/bots', {
+      body: { name: input.name, plan_tier: input.planTier, language: input.language ?? 'en' },
+      idempotencyKey: input.idempotencyKey,
+      signal: input.signal,
+    });
+    const parsed = createdBotSchema.safeParse(response);
+    if (!parsed.success) throw new MonchaInternalError('unexpected_response', 'POST /bots returned no bot_id or customer_tenant_id', 201);
+    const { data } = parsed.data;
+    return {
+      botId: data.bot_id,
+      tenantId: data.customer_tenant_id,
+      connectionId: data.connection_id ?? null,
+      planTier: data.plan_tier ?? null,
+      response,
+    };
   }
 
   /** Read-only: proves the key, environment and enterprise prerequisites with `GET /slots`. */

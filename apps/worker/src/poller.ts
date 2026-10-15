@@ -12,6 +12,7 @@ import {
   PrismaDiscoveryScheduleRepository,
   PrismaHostAuditCacheRepository,
   PrismaJobRunRepository,
+  PrismaLeadBotRepository,
   PrismaLeadRepository,
   PrismaLlmUsageRepository,
   PrismaReviewTaskRepository,
@@ -29,6 +30,7 @@ import {
   pushSiteSnapshotToGithub,
   resolveCountry,
   runCountryDiscoveryJob,
+  runLeadBotTick,
   runSitePipelineTick,
   runSiteSnapshotJob,
   runWebsiteAuditJob,
@@ -47,7 +49,7 @@ import {
 } from '@moncha/crawling';
 import { createOpenRouterFromEnv, GeminiBrandExtractor } from '@moncha/integrations';
 import { countryCrawlDeps, discoveryBudget, liveCountryCrawls } from './country-crawls';
-import { siteAgentConfig, siteAutoCopyEnabled, siteGithubPublisher, siteWorkerDeployer } from './site-agent';
+import { monchaInternalClient, siteAgentConfig, siteAutoCopyEnabled, siteGithubPublisher, siteWorkerDeployer } from './site-agent';
 
 const WORKER_ID = `worker-${process.env.HOSTNAME || 'local'}-${randomUUID().slice(0, 8)}`;
 const CONCURRENCY = Math.max(1, Number(process.env.WORKER_CONCURRENCY || 3));
@@ -95,6 +97,10 @@ let activePipeline: Promise<void> | null = null;
 let lastPipelineWait = '';
 const siteSnapshots = new PrismaSiteSnapshotRepository(prisma);
 const siteAutomation = new PrismaSiteAutomationRepository(prisma);
+const monchaBots = monchaInternalClient();
+const leadBots = new PrismaLeadBotRepository(prisma);
+/** Account problems, rate limits and full tiers pause every bot until this time. */
+let botsPausedUntil = 0;
 
 function auditDeps() {
   return {
@@ -246,7 +252,10 @@ async function pipelineTick() {
     pipeline: siteSnapshots,
     snapshots: siteSnapshots,
     jobs,
-    claimCopy: async (jobId) => (await withDbRetry(() => jobs.claimJobs(WORKER_ID, 1, 'site_snapshot', { id: jobId })))[0] ?? null,
+    // A new copy starts only once its lead's MonCha bot is created; a copy that already started keeps going.
+    claimCopy: async (jobId) =>
+      (await withDbRetry(() => jobs.claimJobs(WORKER_ID, 1, 'site_snapshot', { id: jobId, requireLeadBot: !jobId && Boolean(monchaBots) })))[0] ??
+      null,
     runCopy: (job) => copySite(job, store),
     push: githubPublisher
       ? (snapshot) =>
@@ -281,6 +290,19 @@ async function pipelineTick() {
       activePipeline = null;
     });
   await activePipeline;
+}
+
+/**
+ * One MonCha bot at a time, for leads whose website copy waits (then backfilled leads). A bot that fails its 3 tries
+ * fails the lead's copy and the next lead goes on.
+ */
+async function leadBotTick() {
+  if (!monchaBots || crawlAbort.signal.aborted || Date.now() < botsPausedUntil) return;
+  const tick = await withDbRetry(() => runLeadBotTick({ bots: leadBots, api: monchaBots, logger }, { signal: crawlAbort.signal }));
+  if (tick.action === 'ran') {
+    if (tick.outcome.status === 'paused') botsPausedUntil = tick.outcome.until.getTime();
+    logger.info('lead_bot_tick', { ...tick.outcome });
+  }
 }
 
 function copySite(job: JobRunRecord, store: SiteStore) {
@@ -331,6 +353,7 @@ async function main() {
     sitePipeline: 'one website at a time: copy, GitHub push, Worker deploy',
     githubSites: githubPublisher ? `${githubPublisher.owner}/{site}@${githubPublisher.branch}` : false,
     workerSites: Boolean(workerDeployer),
+    leadBots: monchaBots ? `${monchaBots.environment}: bot before each website copy` : false,
     schedulerTickMs: SCHEDULER_TICK_MS,
     ...discoveryBudget(),
   });
@@ -399,6 +422,7 @@ async function main() {
     every('country_tick_error', POLL_MS, countryTick),
     every('csv_tick_error', POLL_MS, csvTick),
     every('site_pipeline_tick_error', POLL_MS, pipelineTick),
+    every('lead_bot_tick_error', POLL_MS, leadBotTick),
   ]);
 }
 

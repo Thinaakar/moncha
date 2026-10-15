@@ -129,6 +129,7 @@ model Tenant {
   siteSnapshots      SiteSnapshot[]
   siteAutomation     SiteAutomationSettings?
   siteAutomationCrawls SiteAutomationCrawl[]
+  leadBots           LeadBot[]
 }
 
 model User {
@@ -212,11 +213,15 @@ model Lead {
   /// Lead-facing pointer to the audit that last set queue/verdict. Written in the same
   /// transaction as Website.latestAuditId (same audit id). See Website.latestAuditId.
   latestAuditId       String?
+  /// MonCha demo bot for this lead (mirrors LeadBot.status): null = none, pending, creating, created or failed.
+  botStatus           String?
+  botCreatedAt        DateTime?
   version             Int               @default(1)
   createdAt           DateTime          @default(now())
   updatedAt           DateTime          @updatedAt
   tenant              Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   company             Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  bot                 LeadBot?
   latestAudit         WebsiteAudit?     @relation("LeadLatestAudit", fields: [latestAuditId], references: [id], onDelete: SetNull)
   websiteAudits       WebsiteAudit[]    @relation("LeadAudits")
   reviewTasks         ReviewTask[]
@@ -622,6 +627,43 @@ model SiteSnapshot {
 enum SiteCopyOrigin {
   manual
   auto
+}
+
+/// One MonCha demo bot per lead, created through the internal lead API (POST /bots) before its website is copied.
+model LeadBot {
+  id             String    @id @default(cuid())
+  tenantId       String
+  leadId         String    @unique
+  /// The website copy that was waiting for this bot, if any.
+  siteSnapshotId String?
+  /// uat, production or custom: the MonCha environment the bot lives in.
+  environment    String
+  /// pending, creating, created or failed (gave up after its tries).
+  status         String    @default("pending")
+  /// Name, tier and key of the create request. Saved before sending; retries send exactly the same request.
+  name           String?
+  planTier       String?
+  idempotencyKey String?
+  attempts       Int       @default(0)
+  nextAt         DateTime?
+  lockedAt       DateTime?
+  /// Last error, `code: message`.
+  error          String?
+  /// data.bot_id (= install.chatbotId).
+  chatbotId      String?
+  /// data.customer_tenant_id (= install.tenantId): the MonCha enterprise workspace, not our tenant.
+  monchaTenantId String?
+  connectionId   String?
+  /// The entire POST /bots response.
+  config         Json?
+  createdBotAt   DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lead           Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status])
+  @@index([status, nextAt])
 }
 
 /// Per-tenant switch and daily cap for automatic website copies.

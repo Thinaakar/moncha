@@ -185,11 +185,15 @@ export class PrismaJobRunRepository implements JobRepo {
     workerId: string,
     limit: number,
     type: WorkerJobType = 'website_audit',
-    options: { id?: string } = {},
+    options: { id?: string; requireLeadBot?: boolean } = {},
   ): Promise<JobRunRecord[]> {
     // The console runs its own csv_import jobs in-process; only API-queued ones belong to the worker.
     const onlyQueuedCsv = type === 'csv_import' ? Prisma.sql`AND payload->>'mode' = 'queued'` : Prisma.empty;
     const onlyId = options.id ? Prisma.sql`AND id = ${options.id}` : Prisma.empty;
+    // Website copies wait until the lead's MonCha bot is created.
+    const leadBotReady = options.requireLeadBot
+      ? Prisma.sql`AND EXISTS (SELECT 1 FROM "LeadBot" b WHERE b."leadId" = "JobRun"."leadId" AND b.status = 'created')`
+      : Prisma.empty;
     const rows = await this.db.$queryRaw<
       Array<{
         id: string;
@@ -227,6 +231,7 @@ export class PrismaJobRunRepository implements JobRepo {
           AND type = ${type}::"JobType"
           ${onlyQueuedCsv}
           ${onlyId}
+          ${leadBotReady}
         ORDER BY "runAfter" ASC, "createdAt" ASC
         FOR UPDATE SKIP LOCKED
         LIMIT ${limit}

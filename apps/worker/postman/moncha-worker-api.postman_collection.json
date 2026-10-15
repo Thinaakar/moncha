@@ -521,6 +521,141 @@
           ]
         }
       ]
+    },
+    {
+      "name": "Lead bots",
+      "description": "MonCha demo bot per lead (internal-lead-agent.md section 3), created before the lead's website is copied: GET /slots, tier with the most free slots, POST /bots with the company name and language en. Needs MONCHA_INTERNAL_KEY in apps/worker/.env (otherwise 503 moncha_not_configured). Create and retry need authToken from login (admin or operator). Set leadId to a qualified lead first. Creating a bot uses one MonCha slot.",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const token = pm.collectionVariables.get('authToken');",
+              "if (token) pm.request.headers.upsert({ key: 'Authorization', value: `Bearer ${token}` });"
+            ]
+          }
+        }
+      ],
+      "item": [
+        {
+          "name": "List lead bots",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/lead-bots?page=1&pageSize=25" },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('counts per status', () => pm.expect(body.counts).to.have.all.keys('pending', 'creating', 'created', 'failed'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Failed lead bots",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/lead-bots?status=failed" },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('only failed bots, each with its error', () => pm.response.json().items.forEach((b) => { pm.expect(b.status).to.eql('failed'); pm.expect(b.error).to.be.a('string'); }));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create lead bot now",
+          "request": { "method": "POST", "url": "{{baseUrl}}/api/v1/leads/{{leadId}}/bot" },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('created (201) or already there (200)', () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
+                  "const body = pm.response.json();",
+                  "if (pm.response.code === 201 || body.bot?.status === 'created') {",
+                  "  pm.test('bot IDs stored', () => { pm.expect(body.bot.status).to.eql('created'); pm.expect(body.bot.chatbotId).to.be.a('string'); pm.expect(body.bot.monchaTenantId).to.be.a('string'); pm.expect(body.bot.config).to.be.an('object'); });",
+                  "  pm.test('tier is a plan tier', () => pm.expect(body.bot.planTier).to.be.oneOf(['starter', 'growth', 'scale']));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get lead bot",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/leads/{{leadId}}/bot" },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const bot = pm.response.json();",
+                  "pm.test('belongs to the lead', () => pm.expect(bot.leadId).to.eql(pm.collectionVariables.get('leadId')));",
+                  "pm.test('3 tries at most', () => pm.expect(bot.maxAttempts).to.eql(3));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get lead (botStatus)",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/leads/{{leadId}}" },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('has botStatus', () => pm.expect(pm.response.json()).to.have.property('botStatus'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Retry failed bot (409 when not failed)",
+          "request": { "method": "POST", "url": "{{baseUrl}}/api/v1/leads/{{leadId}}/bot/retry" },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('retried (200) or not failed (409)', () => pm.expect(pm.response.code).to.be.oneOf([200, 409]));",
+                  "if (pm.response.code === 200) pm.test('back to pending', () => pm.expect(pm.response.json().bot.status).to.eql('pending'));",
+                  "if (pm.response.code === 409) pm.test('bot_not_failed', () => pm.expect(pm.response.json().error.code).to.eql('bot_not_failed'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Bot of unknown lead (expect 404)",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/leads/no-such-lead/bot" },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('404 bot_not_found', () => { pm.response.to.have.status(404); pm.expect(pm.response.json().error.code).to.eql('bot_not_found'); });"]
+              }
+            }
+          ]
+        }
+      ]
     }
   ]
 }

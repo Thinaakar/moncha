@@ -176,6 +176,46 @@ describe('MonchaInternalClient errors', () => {
   });
 });
 
+describe('MonchaInternalClient.createBot', () => {
+  const created = {
+    data: {
+      bot_id: '11111111-1111-4111-8111-111111111111',
+      customer_tenant_id: '22222222-2222-4222-8222-222222222222',
+      connection_id: '33333333-3333-4333-8333-333333333333',
+      plan_tier: 'starter',
+      funding: 'vendor',
+      install: { tenantId: '22222222-2222-4222-8222-222222222222', chatbotId: '11111111-1111-4111-8111-111111111111' },
+    },
+  };
+
+  it('posts name, tier and language with the idempotency key and returns the IDs and full response', async () => {
+    const { api, calls } = client(() => json(created, 201));
+    const bot = await api.createBot({ name: 'Acme Dental', planTier: 'starter', idempotencyKey: 'lead-abc-bot-v1' });
+    expect(calls[0]!.url).toBe(`${MONCHA_INTERNAL_UAT_URL}/bots`);
+    expect(calls[0]!.init.method).toBe('POST');
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({ name: 'Acme Dental', plan_tier: 'starter', language: 'en' });
+    expect((calls[0]!.init.headers as Record<string, string>)['Idempotency-Key']).toBe('lead-abc-bot-v1');
+    expect(bot).toEqual({
+      botId: created.data.bot_id,
+      tenantId: created.data.customer_tenant_id,
+      connectionId: created.data.connection_id,
+      planTier: 'starter',
+      response: created,
+    });
+  });
+
+  it('flags a response without IDs and passes MonCha errors through', async () => {
+    const empty = client(() => json({ data: {} }, 201));
+    expect((await caught(empty.api.createBot({ name: 'A', planTier: 'growth', idempotencyKey: 'lead-abc-bot-v1' }))).code).toBe(
+      'unexpected_response',
+    );
+    const taken = client(() => json({ error: { code: 'bot_name_taken', message: 'name taken' } }, 409));
+    const error = await caught(taken.api.createBot({ name: 'A', planTier: 'scale', idempotencyKey: 'lead-abc-bot-v1' }));
+    expect(error.code).toBe('bot_name_taken');
+    expect(error.status).toBe(409);
+  });
+});
+
 describe('MonchaInternalClient.check', () => {
   it('reports slots when the key works', async () => {
     const { api } = client(() => json({ data: SLOTS }));

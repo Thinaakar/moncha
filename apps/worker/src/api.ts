@@ -4,6 +4,7 @@ import { neon } from '@neondatabase/serverless';
 import {
   countryDiscoverySchema,
   jobListQuerySchema,
+  leadBotListQuerySchema,
   leadExportQuerySchema,
   leadListQuerySchema,
   manualLeadSchema,
@@ -28,6 +29,8 @@ import {
   type SiteCostWebsitePage,
   type SiteAutomationCrawl,
   type SiteAutomationState,
+  type LeadBotPage,
+  type LeadBotView,
   type MonchaInternalCheckResult,
   type SiteDeployCheckResult,
   type SiteGithubCheckResult,
@@ -49,6 +52,7 @@ import {
   PrismaCompanyRepository,
   PrismaDiscoveryScheduleRepository,
   PrismaJobRunRepository,
+  PrismaLeadBotRepository,
   PrismaLeadRepository,
   PrismaReviewTaskRepository,
   PrismaSessionRepository,
@@ -115,6 +119,11 @@ import {
   listSiteCostWebsites,
   R2_STORAGE_USD_PER_GB_MONTH,
   storageUsdPerMonth,
+  createLeadBotNow,
+  LEAD_BOT_MAX_ATTEMPTS,
+  LeadBotRequestError,
+  retryLeadBot,
+  type LeadBotItem,
   type CountryDiscoveryJobPayload,
   type ModelPriceRow,
   type SiteCostPricing as DomainSiteCostPricing,
@@ -886,6 +895,86 @@ route('GET', '/api/v1/site-automation/moncha-check', async ({ req, tenantId }) =
     requestId: json.requestId,
   });
   return { json };
+});
+
+// MonCha demo bots: one per lead, created (POST /bots) before the lead's website is copied.
+const leadBots = new PrismaLeadBotRepository(prisma);
+
+function leadBotView(bot: LeadBotItem): LeadBotView {
+  return {
+    id: bot.id,
+    leadId: bot.leadId,
+    company: bot.company,
+    environment: bot.environment,
+    status: bot.status,
+    name: bot.name,
+    planTier: bot.planTier,
+    attempts: bot.attempts,
+    maxAttempts: LEAD_BOT_MAX_ATTEMPTS,
+    nextAt: bot.nextAt?.toISOString() ?? null,
+    error: bot.error,
+    chatbotId: bot.chatbotId,
+    monchaTenantId: bot.monchaTenantId,
+    connectionId: bot.connectionId,
+    config: bot.config,
+    createdBotAt: bot.createdBotAt?.toISOString() ?? null,
+    createdAt: bot.createdAt.toISOString(),
+    updatedAt: bot.updatedAt.toISOString(),
+  };
+}
+
+function requireMonchaInternal() {
+  const client = monchaInternalClient();
+  if (!client) throw new HttpError(503, 'moncha_not_configured', 'Lead bots need MONCHA_INTERNAL_KEY in apps/worker/.env');
+  return client;
+}
+
+route('GET', '/api/v1/lead-bots', async ({ tenantId, url }) => {
+  const q = leadBotListQuerySchema.parse(query(url, 'page', 'pageSize', 'status'));
+  const page = await leadBots.list(tenantId, q);
+  const json: LeadBotPage = { ...page, items: page.items.map(leadBotView) };
+  return { json };
+});
+
+route('GET', '/api/v1/leads/:id/bot', async ({ tenantId, params }) => {
+  const bot = await leadBots.getForLead(tenantId, params.id!);
+  if (!bot) throw new HttpError(404, 'bot_not_found', 'This lead has no bot yet');
+  return { json: leadBotView(bot) };
+});
+
+// Creates the lead's bot now (3.1 tier with the most free slots, 3.2 POST /bots). Normally the worker does this
+// before it copies the lead's website.
+route('POST', '/api/v1/leads/:id/bot', async ({ req, tenantId, params }) => {
+  const client = requireMonchaInternal();
+  await requireEditor(req, tenantId, 'create lead bots');
+  const lead = await leads.get(tenantId, params.id!);
+  if (!lead) throw new HttpError(404, 'not_found', 'Lead not found');
+  try {
+    const { bot, outcome } = await createLeadBotNow({ bots: leadBots, api: client, logger }, { tenantId, leadId: lead.id });
+    return { status: outcome?.status === 'created' ? 201 : 200, json: { bot: leadBotView(bot), outcome } };
+  } catch (error) {
+    if (error instanceof LeadBotRequestError) {
+      if (error.code === 'bot_failed') {
+        throw new HttpError(409, 'bot_failed', 'Bot creation gave up after 3 tries; POST /api/v1/leads/:id/bot/retry first');
+      }
+      if (error.code === 'busy') throw new HttpError(409, 'bot_busy', 'The worker is creating this bot right now');
+    }
+    throw error;
+  }
+});
+
+route('POST', '/api/v1/leads/:id/bot/retry', async ({ req, tenantId, params }) => {
+  await requireEditor(req, tenantId, 'retry lead bots');
+  try {
+    const { bot, copyQueued } = await retryLeadBot({ bots: leadBots, leads, snapshots: siteSnapshots }, { tenantId, leadId: params.id! });
+    return { json: { bot: leadBotView(bot), copyQueued } };
+  } catch (error) {
+    if (error instanceof LeadBotRequestError) {
+      if (error.code === 'not_found') throw new HttpError(404, 'bot_not_found', 'This lead has no bot yet');
+      if (error.code === 'not_failed') throw new HttpError(409, 'bot_not_failed', 'Only a failed bot can be retried');
+    }
+    throw error;
+  }
 });
 
 route('GET', '/api/v1/site-automation/crawls', async ({ tenantId, url }) => {

@@ -27,6 +27,7 @@ copies) were added on 2026-10-08.
 - [Reviews](#reviews): list review tasks, get one, resolve one (confirm, mark chatbot, re-audit)
 - [Website copies](#website-copies): copy a lead's homepage, list copies, get one, view source, stored files, queue, cancel, GitHub push, Worker deploy, copy progress
 - [Copy automation](#copy-automation): queue copies for new qualified leads after each country crawl
+- [Lead bots](#lead-bots): a MonCha demo bot per lead, created before the lead's website is copied
 - [How a lead's queue is decided](#how-a-leads-queue-is-decided)
 - [Enums](#enums)
 - [Background processing](#background-processing)
@@ -84,6 +85,10 @@ copies) were added on 2026-10-08.
 | 41c | POST | `/api/v1/site-snapshots/:id/deploy` | Update | Deploy a finished copy to its website's own Cloudflare Worker now (editor session) | 202 | SiteSnapshot |
 | 41d | GET | `/api/v1/site-automation/deploy-check` | Read | Check the Cloudflare Workers connection (editor session) | 200 | - |
 | 41e | GET | `/api/v1/site-automation/moncha-check` | Read | Check the MonCha internal lead API key with `GET /slots` (editor session) | 200 | - |
+| 42 | GET | `/api/v1/lead-bots` | Read | Paginated lead bots with counts per status | 200 | LeadBot, Lead, Company |
+| 43 | GET | `/api/v1/leads/:id/bot` | Read | One lead's MonCha bot (IDs and the full `POST /bots` response) | 200 | LeadBot |
+| 44 | POST | `/api/v1/leads/:id/bot` | Create | Create the lead's bot now (editor session) | 201 / 200 | LeadBot, Lead |
+| 45 | POST | `/api/v1/leads/:id/bot/retry` | Update | Retry a failed bot and queue the lead's copy again (editor session) | 200 | LeadBot, Lead, SiteSnapshot, JobRun |
 
 The only PATCH is #20. To change a schedule time, delete the old one (#6) and create the new one (#5).
 
@@ -2042,6 +2047,114 @@ or more than 1,000 leads that are queued over several sweeps) or `complete`. Onl
 
 ---
 
+## Lead bots
+
+Every lead whose website is copied gets a MonCha demo bot first, through the internal lead API
+([internal-lead-agent.md](../../internal-lead-agent.md), section 3). The bot's IDs are stored so later bot settings,
+widget and training calls can find it. Needs `MONCHA_INTERNAL_KEY` (see #41e); without it the worker skips this step
+and copies websites as before.
+
+1. A copy that is queued (by the automation after a scheduled or manual crawl, or by hand) waits until its lead has a
+   `created` bot. On every poll (`WORKER_POLL_MS`, default 2 seconds) the worker queues a bot for each lead whose copy
+   waits, then creates one bot at a time, leads with a waiting copy first.
+2. **3.1 Pick the tier:** `GET /slots`, then the tier with the most `available` slots (ties: starter, growth, scale).
+3. **3.2 Create:** `POST /bots` with `name` = the lead's company name (at most 30 characters), `plan_tier` = that tier,
+   `language` = `en`, and an `Idempotency-Key` of `lead-{leadId}-bot-v{n}`. The name, tier and key are saved before the
+   call, so a retry after a timeout or a worker restart sends the same request and never creates a second bot.
+4. The response is stored in `LeadBot`: `chatbotId` (`data.bot_id`), `monchaTenantId` (`data.customer_tenant_id`),
+   `connectionId`, `planTier`, and the entire response in `config`. `Lead.botStatus` becomes `created` and
+   `Lead.botCreatedAt` is set; then the lead's copy starts.
+5. **Up to 3 tries.** A failed try waits 1 minute, then 5 minutes. `bot_name_taken` retries with a lead reference
+   (`Acme Dental L4f2a9`) and `slot_unavailable` picks the tier again, both with a new key. After the 3rd failed try the
+   bot is `failed`, `error` keeps the last `code: message`, and the lead's waiting copy ends `failed` with
+   `failureReason: "bot_failed"` and `lastError: "Bot creation failed after 3 attempts: ..."`. The worker then moves
+   on to the next lead. #45 tries again.
+6. Problems that are not the lead's fault do not use up a try: an invalid key, subscription or Admin option
+   (`401`/`402`/`403`) pauses every bot for 15 minutes, `rate_limit_exceeded` until `Retry-After`, and every tier full
+   for 1 hour.
+
+`GET /api/v1/leads` and `GET /api/v1/leads/:id` include `botStatus` (`null` when no bot was queued yet, else one of
+the statuses below) and `botCreatedAt`.
+
+**Backfill** for websites copied before this step (from `apps/worker`):
+`pnpm bots:backfill -- --dry-run` prints how many live websites have no bot; `pnpm bots:backfill` queues them
+(`--tenant <id>` for one tenant) and the running worker creates them one at a time.
+
+### 42. GET `/api/v1/lead-bots`
+
+Query: `page` (default 1), `pageSize` (1 to 100, default 25), `status` (`pending`, `creating`, `created`, `failed`).
+Most recently updated first. **200 OK** `{ "items": [ ...as #43 ], "total", "page", "pageSize", "totalPages", "counts" }` with
+`counts` per status, for example `{ "pending": 4, "creating": 1, "created": 120, "failed": 2 }`.
+
+### 43. GET `/api/v1/leads/:id/bot`
+
+**200 OK**:
+
+```json
+{
+  "id": "6b0f...",
+  "leadId": "cmv0...",
+  "company": { "id": "cmv0...", "name": "Acme Dental", "domain": "acmedental.sg" },
+  "environment": "uat",
+  "status": "created",
+  "name": "Acme Dental",
+  "planTier": "starter",
+  "attempts": 1,
+  "maxAttempts": 3,
+  "nextAt": null,
+  "error": null,
+  "chatbotId": "11111111-1111-4111-8111-111111111111",
+  "monchaTenantId": "22222222-2222-4222-8222-222222222222",
+  "connectionId": "33333333-3333-4333-8333-333333333333",
+  "config": {
+    "data": {
+      "bot_id": "11111111-1111-4111-8111-111111111111",
+      "customer_tenant_id": "22222222-2222-4222-8222-222222222222",
+      "connection_id": "33333333-3333-4333-8333-333333333333",
+      "plan_tier": "starter",
+      "funding": "vendor",
+      "install": { "tenantId": "22222222-2222-4222-8222-222222222222", "chatbotId": "11111111-1111-4111-8111-111111111111" }
+    }
+  },
+  "createdBotAt": "2026-10-15T10:20:00.000Z",
+  "createdAt": "2026-10-15T10:19:40.000Z",
+  "updatedAt": "2026-10-15T10:20:00.000Z"
+}
+```
+
+`status` `pending` with `nextAt` is waiting for its next try; `failed` has the last error in `error`. 404
+`bot_not_found` when the lead has no bot yet.
+
+### 44. POST `/api/v1/leads/:id/bot`
+
+**Headers:** `authorization: Bearer <token>` (role `admin` or `operator`). No body. Creates the lead's bot right away
+(3.1 and 3.2 above) instead of waiting for the worker. **201 Created** when MonCha created it now; **200 OK** when the
+bot already existed (`outcome: null`) or the try did not succeed (`outcome.status` `retry`, `failed` or `paused`):
+
+```json
+{
+  "bot": { "...": "as #43" },
+  "outcome": { "status": "created", "leadId": "cmv0...", "botId": "6b0f...", "chatbotId": "11111111-1111-4111-8111-111111111111", "planTier": "starter", "name": "Acme Dental" }
+}
+```
+
+| Status | `code` | When |
+|---|---|---|
+| 401 / 403 | `unauthorized` / `forbidden` | No editor session |
+| 404 | `not_found` | Lead not found |
+| 409 | `bot_failed` | The bot already gave up after 3 tries; use #45 |
+| 409 | `bot_busy` | The worker is creating this bot right now |
+| 503 | `moncha_not_configured` | `MONCHA_INTERNAL_KEY` is not set |
+
+### 45. POST `/api/v1/leads/:id/bot/retry`
+
+**Headers:** `authorization: Bearer <token>` (role `admin` or `operator`). No body. Puts a `failed` bot back to
+`pending` with 3 new tries; the worker creates it within seconds. When the lead's latest copy ended with
+`bot_failed`, a new copy is queued too (`copyQueued: true`). **200 OK** `{ "bot": { ...as #43 }, "copyQueued": true }`.
+404 `bot_not_found`, 409 `bot_not_failed` when the bot is not `failed`.
+
+---
+
 ## How a lead's queue is decided
 
 The worker audits the lead's website in up to three passes and stops at the first clear answer:
@@ -2086,6 +2199,8 @@ can still be `QUALIFIED`.
 | Website copy origin | `manual`, `auto` |
 | Copy automation crawl status | `waiting_audits`, `queuing`, `complete` |
 | GitHub push status | `pending`, `pushing`, `pushed`, `failed` |
+| Lead bot status (`LeadBot.status`, `Lead.botStatus`) | `pending`, `creating`, `created`, `failed` |
+| Lead bot plan tier | `starter`, `growth`, `scale` |
 | User role | `admin`, `operator`, `viewer` |
 
 ---
@@ -2104,6 +2219,7 @@ The API only stores requests. The work is done by the background worker (`apps/w
 | `POST /api/v1/source-imports` | Import files over 1,000 rows, and audit the imported leads' websites |
 | `POST /api/v1/leads/:id/site-snapshots` | Capture the homepage, extract the brand and upload the copy to R2 |
 | `PUT /api/v1/site-automation` with `enabled: true` | Queue copies for qualified leads after each finished crawl |
+| Every queued copy (with `MONCHA_INTERNAL_KEY`), `POST /api/v1/leads/:id/bot/retry`, `pnpm bots:backfill` | Create the lead's MonCha bot before its website is copied |
 | `POST /api/v1/site-snapshots/:id/github-push` (and every finished copy) | Push the website to its own GitHub repo |
 | `POST /api/v1/site-snapshots/:id/deploy` (and every finished copy) | Deploy the website to its own Cloudflare Worker |
 

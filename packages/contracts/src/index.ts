@@ -332,6 +332,14 @@ export const siteSnapshotListQuerySchema = z.object({
   origin: siteCopyOriginSchema.optional(),
 });
 
+export const leadBotStatusSchema = z.enum(['pending', 'creating', 'created', 'failed']);
+
+export const leadBotListQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(25),
+  status: leadBotStatusSchema.optional(),
+});
+
 export const siteAutomationUpdateSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -631,6 +639,45 @@ export type MonchaInternalCheckResult = {
   error: string | null;
   requestId: string | null;
   checkedAt: string;
+};
+
+export type LeadBotStatus = z.infer<typeof leadBotStatusSchema>;
+
+/** A lead's MonCha demo bot (`GET /api/v1/leads/:id/bot`). Created before the lead's website is copied. */
+export type LeadBotView = {
+  id: string;
+  leadId: string;
+  company: { id: string; name: string; domain: string | null };
+  environment: string;
+  status: LeadBotStatus;
+  name: string | null;
+  planTier: MonchaSlotTier | null;
+  attempts: number;
+  maxAttempts: number;
+  /** When the next try starts (pending after an error or a pause). */
+  nextAt: string | null;
+  /** Last error, `code: message`. */
+  error: string | null;
+  /** data.bot_id: the bot to use in settings, widget and training calls. */
+  chatbotId: string | null;
+  /** data.customer_tenant_id: the MonCha enterprise workspace (not our tenant). */
+  monchaTenantId: string | null;
+  connectionId: string | null;
+  /** The entire POST /bots response. */
+  config: unknown;
+  createdBotAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/** `GET /api/v1/lead-bots` */
+export type LeadBotPage = {
+  items: LeadBotView[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+  counts: Record<LeadBotStatus, number>;
 };
 
 export type SiteSnapshotSource = {
