@@ -1,0 +1,689 @@
+{
+  "info": {
+    "name": "MonCha \u2014 Internal Lead Service",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "All 23 currently exposed internal operations. See internal-lead-agent.md. Set internal_key in a local, unshared secret environment; blank by default. UAT is the default base URL. Run requests individually; the collection includes destructive cleanup and alternative ingestion examples. It is not an unattended workflow. Existing enterprise billing and limits apply. No actual credentials are included."
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{internal_key}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "https://api.dev-moncha.com/vendor/internal/v1",
+      "type": "string"
+    },
+    {
+      "key": "internal_key",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "lead_ref",
+      "value": "lead-123",
+      "type": "string"
+    },
+    {
+      "key": "bot_name",
+      "value": "Acme Demo L123",
+      "type": "string"
+    },
+    {
+      "key": "source_url",
+      "value": "https://example.com/",
+      "type": "string"
+    },
+    {
+      "key": "second_source_url",
+      "value": "https://example.com/services",
+      "type": "string"
+    },
+    {
+      "key": "preview_domain",
+      "value": "preview.example.com",
+      "type": "string"
+    },
+    {
+      "key": "bot_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "tenant_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "connection_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "training_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "document_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "widget_url",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "api_origin",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "01 \u2014 Provision",
+      "item": [
+        {
+          "name": "Available enterprise slots",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/slots",
+            "description": "Read-only preflight. Existing paid enterprise limits apply."
+          },
+          "response": []
+        },
+        {
+          "name": "Create internal demo bot",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{lead_ref}}-create-v1"
+              }
+            ],
+            "url": "{{base_url}}/bots",
+            "description": "One paid slot is required. Persist the returned IDs. Retry with the same lead_ref and identical payload; choose a new lead_ref and unique name only for a new demo.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{bot_name}}\",\n  \"plan_tier\": \"starter\",\n  \"language\": \"en\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) {",
+                  "  const body = pm.response.json();",
+                  "  if (body.data?.bot_id) pm.collectionVariables.set(\"bot_id\", body.data?.bot_id);",
+                  "  if (body.data?.customer_tenant_id) pm.collectionVariables.set(\"tenant_id\", body.data?.customer_tenant_id);",
+                  "  if (body.data?.connection_id) pm.collectionVariables.set(\"connection_id\", body.data?.connection_id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Read bot",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/bots/{{bot_id}}",
+            "description": ""
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "02 \u2014 Configure",
+      "item": [
+        {
+          "name": "Read bot settings",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/bots/{{bot_id}}/settings",
+            "description": "Read before replacing settings on an existing bot."
+          },
+          "response": []
+        },
+        {
+          "name": "Replace bot settings",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/bots/{{bot_id}}/settings",
+            "description": "Replaces saved settings. Merge GET settings with changes first when preserving existing custom values.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"modelTier\": \"fast\",\n  \"language\": \"en\",\n  \"languageMode\": \"match\",\n  \"historyMessages\": 2,\n  \"instructionPreset\": \"custom\",\n  \"instructions\": \"Answer from the business website information. Do not invent prices, services or opening hours.\",\n  \"personaPreset\": \"custom\",\n  \"persona\": \"Friendly, clear and concise.\",\n  \"temperature\": 0.3,\n  \"collectUserData\": \"off\",\n  \"captureMode\": \"off\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Read widget configuration",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/bots/{{bot_id}}/widget",
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Replace widget configuration",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/bots/{{bot_id}}/widget",
+            "description": "Replaces saved config. Merge GET config first to preserve custom fields. hideBranding:true is forbidden.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"botName\": \"{{bot_name}}\",\n  \"welcomeMessage\": \"Hello! How can I help you learn about this business?\",\n  \"inputPlaceholder\": \"Type your question...\",\n  \"primaryColor\": \"#1677FF\",\n  \"position\": \"bottom-right\",\n  \"iconSize\": \"medium\",\n  \"iconShape\": \"circle\",\n  \"quickPrompts\": [\n    \"What services do you offer?\",\n    \"How can I contact you?\"\n  ],\n  \"chatDisabled\": false,\n  \"voiceMode\": false,\n  \"hideBranding\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Read allowed domains",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/bots/{{bot_id}}/domains",
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Replace allowed domains",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/bots/{{bot_id}}/domains",
+            "description": "The preview hostname, not the original training website. Replaces the list. Empty array disables the domain restriction. Listed hosts also allow subdomains.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"domains\": [\n    \"{{preview_domain}}\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update bot name and flags",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/bots/{{bot_id}}",
+            "description": "Optional properties. This sample disables auto-sync. Does not change plan tier or clear vendor deactivation.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{bot_name}}\",\n  \"is_active\": true,\n  \"auto_sync_enabled\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "03 \u2014 Discover and train",
+      "item": [
+        {
+          "name": "Discover source website URLs",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/bots/{{bot_id}}/knowledge/discover",
+            "description": "Discovery does not train. Select returned URLs and place them in single or bulk ingestion.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"url\": \"{{source_url}}\",\n  \"max_pages\": 50,\n  \"exclude_paths\": [\n    \"/privacy\",\n    \"/terms\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Ingest one URL (alternative to bulk)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{lead_ref}}-{{bot_id}}-single-v1"
+              }
+            ],
+            "url": "{{base_url}}/bots/{{bot_id}}/knowledge/ingest",
+            "description": "Exactly one document. Queued is not ready. Do not also ingest this source through bulk unless duplicate documents are intended.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"documents\": [\n    {\n      \"title\": \"Business homepage\",\n      \"url\": \"{{source_url}}\",\n      \"source_type\": \"url\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) {",
+                  "  const body = pm.response.json();",
+                  "  if (body.data?.training_id) pm.collectionVariables.set(\"training_id\", body.data?.training_id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Ingest selected URLs in bulk (alternative to single)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{lead_ref}}-{{bot_id}}-batch-01-v1"
+              }
+            ],
+            "url": "{{base_url}}/bots/{{bot_id}}/knowledge/ingest-bulk",
+            "description": "Replace candidate URLs with selected discovery results. 1\u2013100 documents. Keep key and payload stable on retry; use a separate key per new batch.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"documents\": [\n    {\n      \"title\": \"Business homepage\",\n      \"url\": \"{{source_url}}\",\n      \"source_type\": \"url\"\n    },\n    {\n      \"title\": \"Business services\",\n      \"url\": \"{{second_source_url}}\",\n      \"source_type\": \"url\",\n      \"scrape_options\": {\n        \"extractMainOnly\": true,\n        \"excludeSelectors\": [\n          \"nav\",\n          \"footer\"\n        ]\n      }\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) {",
+                  "  const body = pm.response.json();",
+                  "  if (body.data?.training_id) pm.collectionVariables.set(\"training_id\", body.data?.training_id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Poll training job",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/bots/{{bot_id}}/training/{{training_id}}",
+            "description": "Poll at poll_after_seconds or slower. Check ready/failed/total and status. This sample captures the first document ID only; persist all batch IDs in your service."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) {",
+                  "  const body = pm.response.json();",
+                  "  if (body.documents?.[0]?.id) pm.collectionVariables.set(\"document_id\", body.documents?.[0]?.id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "04 \u2014 Documents",
+      "item": [
+        {
+          "name": "List knowledge documents",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/bots/{{bot_id}}/knowledge",
+            "description": ""
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) {",
+                  "  const body = pm.response.json();",
+                  "  if (body.data?.[0]?.id) pm.collectionVariables.set(\"document_id\", body.data?.[0]?.id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Read knowledge document",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/bots/{{bot_id}}/knowledge/{{document_id}}",
+            "description": ""
+          },
+          "response": []
+        },
+        {
+          "name": "Retrain existing document",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/bots/{{bot_id}}/knowledge/{{document_id}}/retrain",
+            "description": "No request body or required idempotency header. Current in-flight job is returned; repeating after completion may start new training. Poll the returned job."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) {",
+                  "  const body = pm.response.json();",
+                  "  if (body.data?.training_id) pm.collectionVariables.set(\"training_id\", body.data?.training_id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "05 \u2014 Install and usage",
+      "item": [
+        {
+          "name": "Get widget installation values",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/bots/{{bot_id}}/install",
+            "description": "Only these public installation values go into the preview. If widgetUrl is null, obtain the deployed asset URL from MonCha. Never include internal_key in the widget."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) {",
+                  "  const body = pm.response.json();",
+                  "  if (body.tenantId) pm.collectionVariables.set(\"tenant_id\", body.tenantId);",
+                  "  if (body.widgetUrl) pm.collectionVariables.set(\"widget_url\", body.widgetUrl);",
+                  "  if (body.apiUrl) pm.collectionVariables.set(\"api_origin\", body.apiUrl);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Read bot usage and limits",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/bots/{{bot_id}}/usage",
+            "description": ""
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "06 \u2014 Manual lifecycle",
+      "item": [
+        {
+          "name": "Pause bot",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/bots/{{bot_id}}/deactivate",
+            "description": "Manual operation. Keeps the paid slot reserved; does not change enterprise billing."
+          },
+          "response": []
+        },
+        {
+          "name": "Resume bot",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/bots/{{bot_id}}/reactivate",
+            "description": "Manual operation. Requires allocation. Does not reset is_active or widget chatDisabled."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "07 \u2014 Destructive cleanup \u2014 run manually",
+      "item": [
+        {
+          "name": "Delete knowledge document",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/bots/{{bot_id}}/knowledge/{{document_id}}",
+            "description": "Destructive. Removes the selected document; cleanup is asynchronous."
+          },
+          "response": []
+        },
+        {
+          "name": "Delete demo bot",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/bots/{{bot_id}}",
+            "description": "Destructive. Removes the bot and releases its allocation; cleanup is asynchronous. Remove the preview embed. No restore endpoint."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}
