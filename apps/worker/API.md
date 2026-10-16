@@ -87,6 +87,7 @@ copies) were added on 2026-10-08.
 | 41c | POST | `/api/v1/site-snapshots/:id/deploy` | Update | Deploy a finished copy to its website's own Cloudflare Worker now (editor session) | 202 | SiteSnapshot |
 | 41d | GET | `/api/v1/site-automation/deploy-check` | Read | Check the Cloudflare Workers connection (editor session) | 200 | - |
 | 41e | GET | `/api/v1/site-automation/moncha-check` | Read | Check the MonCha internal lead API key with `GET /slots` (editor session) | 200 | - |
+| 41e2 | GET | `/api/v1/moncha` | Read | MonCha connection and slots for the console settings page (any signed-in user) | 200 | - |
 | 41f | POST | `/api/v1/site-snapshots/:id/chatbot` | Update | Add the lead's MonCha chatbot to a finished copy again, then push and redeploy it (editor session) | 202 | SiteSnapshot, LeadBot |
 | 42 | GET | `/api/v1/lead-bots` | Read | Paginated lead bots with counts per status | 200 | LeadBot, Lead, Company |
 | 43 | GET | `/api/v1/leads/:id/bot` | Read | One lead's MonCha bot (IDs and the full `POST /bots` response) | 200 | LeadBot |
@@ -2005,6 +2006,18 @@ Without a key: `configured: false` and `error` says what to set. When MonCha ans
 is `false` and `error` is `code: message`, for example `invalid_internal_credentials` (wrong key or environment, or
 the Admin options are off), `vendor_subscription_required`, `vendor_disabled`, `internal_workspace_unavailable`,
 `rate_limit_exceeded` or `moncha_unreachable`; `requestId` is MonCha's request ID when it sends one.
+
+### 41e2. GET `/api/v1/moncha`
+
+Same payload as #41e for the console **MonCha settings** page. Any signed-in user (including viewers) can read it;
+nothing is created and no secret values are returned.
+
+**Headers:** `authorization: Bearer <token>`. **200 OK:** same JSON as #41e.
+
+| Status | `code` | When |
+|---|---|---|
+| 401 | `unauthorized` | No bearer token, or an invalid one |
+| 403 | `forbidden` | Signed-in user belongs to another tenant |
 
 ### 41b. Public copy links (`publicUrl`)
 

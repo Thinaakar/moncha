@@ -10,6 +10,7 @@ import {
   ClipboardCheck,
   Coins,
   FileUp,
+  Bot,
   LayoutDashboard,
   ListChecks,
   LogOut,
@@ -76,6 +77,7 @@ const NAV: Array<{ title: string; items: NavItem[] }> = [
     title: 'System',
     items: [
       { href: '/jobs', label: 'Jobs', icon: ListChecks },
+      { href: '/moncha-settings', label: 'MonCha settings', icon: Bot },
       { href: '/settings', label: 'Settings', icon: Settings },
     ],
   },

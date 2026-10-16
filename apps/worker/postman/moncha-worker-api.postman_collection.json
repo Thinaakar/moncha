@@ -466,6 +466,26 @@
           "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/site-automation/moncha-check" }
         },
         {
+          "name": "MonCha settings (connection + slots)",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/moncha" },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('has configured and slots shape', () => {",
+                  "  const b = pm.response.json();",
+                  "  pm.expect(b).to.have.property('configured');",
+                  "  pm.expect(b).to.have.property('slots');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+
+        {
           "name": "Queue pause state",
           "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/queue" },
           "event": [

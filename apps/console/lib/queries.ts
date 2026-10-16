@@ -21,6 +21,7 @@ import type {
   SiteAutomationCrawl,
   SiteAutomationState,
   SiteAutomationUpdate,
+  MonchaInternalCheckResult,
   WorkerQueueState,
   WorkerQueueUpdate,
   SiteCopyOrigin,
@@ -57,6 +58,7 @@ export const qk = {
   siteQueue: ['site-snapshots', 'queue'] as const,
   sitePipeline: ['site-pipeline'] as const,
   queue: ['queue'] as const,
+  moncha: ['moncha'] as const,
   automation: ['site-automation'] as const,
   automationCrawls: (limit: number) => ['site-automation', 'crawls', limit] as const,
   costSummary: (days: number | null) => ['costs', 'summary', days] as const,
@@ -306,6 +308,15 @@ export function useSitePipeline() {
       const wait = current.nextAt ? new Date(current.nextAt).getTime() - Date.now() : 0;
       return wait < 2 * 60_000 ? 5_000 : 60_000;
     },
+  });
+}
+
+/** MonCha internal API connection and demo-bot slot capacity (`GET /slots`). */
+export function useMonchaStatus() {
+  return useQuery({
+    queryKey: qk.moncha,
+    queryFn: () => api<MonchaInternalCheckResult>('moncha'),
+    refetchInterval: 60_000,
   });
 }
 

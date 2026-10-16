@@ -922,12 +922,11 @@ route('GET', '/api/v1/site-automation/deploy-check', async ({ req, tenantId }) =
   return { json };
 });
 
-// MonCha internal lead API connectivity: GET /slots with the worker's key. Nothing is created.
-route('GET', '/api/v1/site-automation/moncha-check', async ({ req, tenantId }) => {
-  await requireEditor(req, tenantId, 'check the MonCha internal lead API');
+/** MonCha internal lead API: connection + GET /slots. Nothing is created. */
+async function monchaStatusJson(): Promise<MonchaInternalCheckResult> {
   const client = monchaInternalClient();
   const check = client ? await client.check() : null;
-  const json: MonchaInternalCheckResult = {
+  return {
     configured: Boolean(client),
     keys: {
       MONCHA_INTERNAL_BASE_URL: Boolean(process.env.MONCHA_INTERNAL_BASE_URL?.trim()),
@@ -943,6 +942,28 @@ route('GET', '/api/v1/site-automation/moncha-check', async ({ req, tenantId }) =
     requestId: check?.requestId ?? null,
     checkedAt: new Date().toISOString(),
   };
+}
+
+// Console MonCha settings page: any signed-in user can read connection and slots.
+route('GET', '/api/v1/moncha', async ({ req, tenantId }) => {
+  const token = tokenOf(req);
+  if (!token) throw new HttpError(401, 'unauthorized', 'Sign in to view MonCha settings');
+  const user = await currentUser(auth, { token });
+  if (user.tenantId !== tenantId) throw new HttpError(403, 'forbidden', 'Signed-in user belongs to another tenant');
+  const json = await monchaStatusJson();
+  logger.info('moncha_internal.status', {
+    tenantId,
+    environment: json.environment,
+    canAuthenticate: json.canAuthenticate,
+    error: json.error,
+  });
+  return { json };
+});
+
+// MonCha internal lead API connectivity check (editor session). Same payload as GET /api/v1/moncha.
+route('GET', '/api/v1/site-automation/moncha-check', async ({ req, tenantId }) => {
+  await requireEditor(req, tenantId, 'check the MonCha internal lead API');
+  const json = await monchaStatusJson();
   logger.info('moncha_internal.check', {
     tenantId,
     environment: json.environment,
