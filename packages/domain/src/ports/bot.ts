@@ -125,13 +125,22 @@ export interface LeadBotRepo {
    * has a copy waiting first), or `creating` locked before `staleBefore`. It becomes `creating` with one more attempt.
    * With `leadId`, only that lead's bot, whatever its `nextAt`.
    */
-  claimNext(now: Date, staleBefore: Date, options?: { tenantId?: string; leadId?: string }): Promise<LeadBotItem | null>;
+  claimNext(
+    now: Date,
+    staleBefore: Date,
+    options?: { tenantId?: string; leadId?: string; /** Only resume stale `creating` locks; skip virgin `pending`. */ inFlightOnly?: boolean },
+  ): Promise<LeadBotItem | null>;
   /**
    * Atomically takes the next created bot whose training step is due (leads with a waiting copy first, then polls):
    * `pending` (or `discovering` locked before `staleBefore`) becomes `discovering` with one more knowledge attempt;
    * `training` with `knowledgeNextAt` due is locked for one poll. With `leadId`, only that bot, whatever its next time.
+   * `inFlightOnly` skips virgin `pending` (drain pause): only stale `discovering` and due `training`.
    */
-  claimNextKnowledge(now: Date, staleBefore: Date, options?: { tenantId?: string; leadId?: string }): Promise<LeadBotItem | null>;
+  claimNextKnowledge(
+    now: Date,
+    staleBefore: Date,
+    options?: { tenantId?: string; leadId?: string; inFlightOnly?: boolean },
+  ): Promise<LeadBotItem | null>;
   /** Also keeps Lead.botStatus (and botCreatedAt) in step with the bot. */
   update(tenantId: string, id: string, patch: LeadBotPatch): Promise<LeadBotItem | null>;
   getForLead(tenantId: string, leadId: string): Promise<LeadBotItem | null>;

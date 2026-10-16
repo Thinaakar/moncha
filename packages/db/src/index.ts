@@ -18,3 +18,4 @@ export * from './repositories/site-snapshot';
 export * from './repositories/site-automation';
 export * from './repositories/site-cost';
 export * from './repositories/lead-bot';
+export * from './repositories/worker-settings';

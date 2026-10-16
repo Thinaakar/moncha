@@ -60,6 +60,11 @@ export type SitePipelineDeps = {
   deploy?: (snapshot: SiteSnapshotListItem) => Promise<SiteWorkerDeployOutcome>;
   logger: Logger;
   now?: () => Date;
+  /**
+   * Operator drain pause: finish the current website (and any copy already started), but do not start
+   * `nextToPublish` or a virgin `claimCopy()`.
+   */
+  queuePaused?: boolean;
 };
 
 export type SitePipelineTickOutcome =
@@ -82,6 +87,9 @@ export async function runSitePipelineTick(deps: SitePipelineDeps): Promise<SiteP
 
   const copy = await deps.pipeline.inFlightCopy();
   if (copy) return copyStep(deps, copy, now);
+
+  // Drain pause: do not start publish for a new finished copy, or claim a virgin waiting copy.
+  if (deps.queuePaused) return { action: 'idle' };
 
   const older = await deps.pipeline.nextToPublish(steps);
   if (older) {

@@ -276,6 +276,30 @@ describe('site pipeline', () => {
     expect(await runSitePipelineTick(t.deps)).toEqual({ action: 'idle' });
     expect(t.copies).toEqual([undefined]);
   });
+
+  it('drain pause finishes the current website but does not start the next publish or virgin copy', async () => {
+    const current = site({ githubStatus: 'pending', githubAttempts: 0 });
+    const waiting = site({
+      id: 'snap2',
+      jobId: 'job2',
+      status: 'done',
+      githubStatus: null,
+      githubAttempts: 0,
+    });
+    const t = setup({
+      sites: [current, waiting],
+      jobs: [job(), job({ id: 'job2', status: 'done', lockedAt: null })],
+    });
+    t.deps.queuePaused = true;
+
+    expect(await runSitePipelineTick(t.deps)).toMatchObject({ action: 'ran', step: 'github', snapshotId: 'snap1' });
+    expect(await runSitePipelineTick(t.deps)).toMatchObject({ action: 'finished', snapshotId: 'snap1', status: 'done' });
+    expect(await runSitePipelineTick(t.deps)).toEqual({ action: 'idle' });
+    expect(t.pushed).toEqual(['snap1']);
+    expect(t.deployed).toEqual(['snap1']);
+    expect(t.copies).toEqual([]);
+    expect(t.jobRows.get('job2')?.status).toBe('done');
+  });
 });
 
 describe('describeSitePipeline', () => {

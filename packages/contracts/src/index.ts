@@ -349,6 +349,11 @@ export const siteAutomationUpdateSchema = z
   })
   .refine((v) => v.enabled !== undefined || v.dailyCap !== undefined, { message: 'Nothing to update' });
 
+/** Operator drain pause for bots + website pipeline. Discovery schedules keep running. */
+export const workerQueueUpdateSchema = z.object({
+  paused: z.boolean(),
+});
+
 export const siteAutomationCrawlsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(50),
 });
@@ -403,7 +408,16 @@ export type SiteBrand = z.infer<typeof siteBrandSchema>;
 export type SiteSnapshotListQuery = z.infer<typeof siteSnapshotListQuerySchema>;
 export type SiteCopyOrigin = z.infer<typeof siteCopyOriginSchema>;
 export type SiteAutomationUpdate = z.infer<typeof siteAutomationUpdateSchema>;
+export type WorkerQueueUpdate = z.infer<typeof workerQueueUpdateSchema>;
 export type SiteAutomationCrawlsQuery = z.infer<typeof siteAutomationCrawlsQuerySchema>;
+
+/** `GET/PUT /api/v1/queue`: worker-wide drain pause. */
+export type WorkerQueueState = {
+  paused: boolean;
+  pausedAt: string | null;
+  pausedBy: string | null;
+  updatedAt: string | null;
+};
 export type SiteCostSort = z.infer<typeof siteCostSortSchema>;
 export type SiteCostWebsitesQuery = z.infer<typeof siteCostWebsitesQuerySchema>;
 
@@ -804,6 +818,11 @@ export type SitePipelineStatus = {
   enabled: boolean;
   /** `chatbot`: MonCha is configured, so each website gets its chatbot before the push. Older API versions omit it. */
   steps: { github: boolean; deploy: boolean; chatbot?: boolean };
+  /**
+   * Operator drain pause. When true, the current website finishes; new bots/copies/publishes wait.
+   * Discovery schedules keep running. Older API versions omit this.
+   */
+  queue?: WorkerQueueState;
   /** Null when idle, or busy with another tenant's website. */
   current: {
     site: SiteSnapshotSummary;

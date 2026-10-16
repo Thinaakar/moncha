@@ -21,7 +21,11 @@ The API uses the secret saved in Admin as a **Bearer credential**. There is no c
 11. [Lead-service records and launch checks](#11-lead-service-records-and-launch-checks)
 12. [Scope and deployment notes](#12-scope-and-deployment-notes)
 
+
+
 ## 1. Setup and authentication
+
+
 
 ### Environment
 
@@ -74,6 +78,8 @@ curl --fail-with-body "$MONCHA_INTERNAL_BASE_URL/slots" \
   -H 'Accept: application/json'
 ```
 
+
+
 ### Common request conventions
 
 - All paths below are relative to the environment's internal base URL.
@@ -83,6 +89,8 @@ curl --fail-with-body "$MONCHA_INTERNAL_BASE_URL/slots" \
 - Maximum request body: **11 MiB**, with smaller per-field and per-request limits below.
 - Rate limit: **300 requests/minute per enterprise**, shared with its external Vendor API traffic. Respect `429` and `Retry-After`.
 - Response envelopes vary by operation. For example, creation uses `data`, settings uses `settings`, and install returns fields at the top level.
+
+
 
 ## 2. Recommended integration sequence
 
@@ -103,6 +111,8 @@ For each business lead:
 Website discovery by country, cloning, hosting, lead records and cold-email sending belong to the lead service. These APIs handle the MonCha bot portion of that sequence.
 
 ## 3. Create and manage bots
+
+
 
 ### 3.1 Available slots — `GET /slots`
 
@@ -187,6 +197,8 @@ No body. Success: **200**.
 }
 ```
 
+
+
 ### 3.4 Update basic properties — `PATCH /bots/:botId`
 
 All fields are optional; send only properties being changed:
@@ -228,6 +240,8 @@ No body. Success: **200**.
 Use for intentional demo cleanup. Bot deletion is destructive; associated resource cleanup is dispatched asynchronously. Remove the preview widget and update your lead record. Deletion does not itself cancel the enterprise subscription. There is no restore endpoint in this API.
 
 ## 4. Bot settings
+
+
 
 ### 4.1 Read — `GET /bots/:botId/settings`
 
@@ -297,7 +311,11 @@ The minimal reply-settings defaults are:
 }
 ```
 
+
+
 ## 5. Widget configuration
+
+
 
 ### 5.1 Read — `GET /bots/:botId/widget`
 
@@ -393,6 +411,8 @@ A WhatsApp shortcut is a widget link; it does not create or configure a WhatsApp
 
 ## 6. Domains and installation
 
+
+
 ### 6.1 Read domains — `GET /bots/:botId/domains`
 
 No body. Success: **200**.
@@ -400,6 +420,8 @@ No body. Success: **200**.
 ```json
 {"domains":["preview.example.com"]}
 ```
+
+
 
 ### 6.2 Set domains — `PUT /bots/:botId/domains`
 
@@ -445,6 +467,8 @@ Use these returned values in your preview template:
 Load the widget script before calling `init`; if using async loading, call `init` from its load callback. `apiUrl` is the returned API **origin**, without `/vendor/internal/v1`. The widget uses its normal public runtime. Never pass the internal secret to the widget. Always include `chatbotId` so the intended demo bot is selected.
 
 ## 7. Website discovery and training
+
+
 
 ### 7.1 Discover pages — `POST /bots/:botId/knowledge/discover`
 
@@ -514,6 +538,8 @@ Success: **202**.
 }
 ```
 
+
+
 ### 7.3 Train several documents — `POST /bots/:botId/knowledge/ingest-bulk`
 
 Required header: `Idempotency-Key`. Same document schema, with **1–100** entries:
@@ -526,7 +552,7 @@ Required header: `Idempotency-Key`. Same document schema, with **1–100** entri
       "title": "Acme services",
       "url": "https://example.com/services",
       "source_type": "url",
-      "scrape_options": { "extractMainOnly": true, "excludeSelectors": ["nav", "footer"] }
+      "scrape_options": { "extractMainOnly": true, "excludeSelectors"i: ["nav", "footer"] }
     }
   ]
 }
@@ -592,6 +618,8 @@ Poll no faster than `poll_after_seconds` (currently 5). Bound your worker's wait
 
 ## 8. Documents and retraining
 
+
+
 ### 8.1 List — `GET /bots/:botId/knowledge`
 
 No body or pagination parameters. Success: **200**.
@@ -647,6 +675,8 @@ Removes that document and schedules associated cleanup. It does not delete the b
 
 ## 9. Usage and limits
 
+
+
 ### `GET /bots/:botId/usage`
 
 No body. Success: **200**. Top-level fields:
@@ -672,6 +702,8 @@ Illustrative excerpt, not the full `limits` object:
 The internal key does not provide free bots, unlimited training, quota resets or a payment bypass. Existing enterprise slots, per-bot limits, contract restrictions and subscription gates remain applicable. All management routes require eligible enterprise access, including reads and cleanup operations.
 
 ## 10. Retries and errors
+
+
 
 ### Idempotency
 
@@ -726,6 +758,8 @@ Retry transient network/429/5xx failures with bounded exponential backoff and ji
 
 ## 11. Lead-service records and launch checks
 
+
+
 ### Save per lead
 
 Keep these fields in your own database; they are **not additional MonCha API payload fields**:
@@ -751,6 +785,8 @@ Keep the shared credential in the service secret store, rather than copying it i
 6. Confirm the preview HTML and browser management traffic contain no internal secret.
 7. Exercise pause/resume if your service uses them; delete the test bot only when finished with that fixture.
 8. Run the lead-service workflow once through its normal readiness/outreach handoff before scaling workers.
+
+
 
 ### Postman use
 

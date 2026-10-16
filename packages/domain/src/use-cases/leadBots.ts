@@ -254,23 +254,27 @@ export type LeadBotTickOutcome = { action: 'idle'; queued: number; copiesFailed:
 /**
  * One bot per tick: queues bots for leads whose copy waits, fails copies of leads whose bot already gave up, then
  * creates the next due bot. With `leadId`, only that lead's bot, right away.
+ * `queuePaused` (drain): do not queue new bots or start virgin `pending` creates; only resume stale `creating`.
  */
 export async function runLeadBotTick(
   deps: LeadBotDeps,
-  options: { tenantId?: string; leadId?: string; signal?: AbortSignal } = {},
+  options: { tenantId?: string; leadId?: string; signal?: AbortSignal; queuePaused?: boolean } = {},
 ): Promise<LeadBotTickOutcome> {
   const now = deps.now?.() ?? new Date();
   let queued = 0;
   let copiesFailed = 0;
   if (!options.leadId) {
-    queued = await deps.bots.queueForWaitingCopies(deps.api.environment);
+    if (!options.queuePaused) {
+      queued = await deps.bots.queueForWaitingCopies(deps.api.environment);
+      if (queued) deps.logger.info('lead_bot_queued', { queued });
+    }
     copiesFailed = await deps.bots.failCopiesOfFailedBots(now);
-    if (queued) deps.logger.info('lead_bot_queued', { queued });
     if (copiesFailed) deps.logger.error('lead_bot_copies_failed', { copiesFailed });
   }
   const bot = await deps.bots.claimNext(now, new Date(now.getTime() - LEAD_BOT_STALE_MS), {
     tenantId: options.tenantId,
     leadId: options.leadId,
+    inFlightOnly: Boolean(options.queuePaused) && !options.leadId,
   });
   if (!bot) return { action: 'idle', queued, copiesFailed };
   return { action: 'ran', outcome: await createLeadBot(deps, bot, options.signal) };
@@ -433,15 +437,19 @@ export async function trainLeadBot(deps: LeadBotDeps, bot: LeadBotItem, signal?:
 
 export type LeadBotTrainTickOutcome = { action: 'idle' } | { action: 'ran'; outcome: LeadBotTrainOutcome };
 
-/** One training step per tick: the next created bot to discover and submit, or to poll. */
+/**
+ * One training step per tick: the next created bot to discover and submit, or to poll.
+ * `queuePaused` (drain): skip virgin `pending` training; keep polling / finishing in-flight training.
+ */
 export async function runLeadBotTrainTick(
   deps: LeadBotDeps,
-  options: { tenantId?: string; leadId?: string; signal?: AbortSignal } = {},
+  options: { tenantId?: string; leadId?: string; signal?: AbortSignal; queuePaused?: boolean } = {},
 ): Promise<LeadBotTrainTickOutcome> {
   const now = deps.now?.() ?? new Date();
   const bot = await deps.bots.claimNextKnowledge(now, new Date(now.getTime() - LEAD_BOT_STALE_MS), {
     tenantId: options.tenantId,
     leadId: options.leadId,
+    inFlightOnly: Boolean(options.queuePaused) && !options.leadId,
   });
   if (!bot) return { action: 'idle' };
   return { action: 'ran', outcome: await trainLeadBot(deps, bot, options.signal) };

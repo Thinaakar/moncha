@@ -75,7 +75,9 @@ copies) were added on 2026-10-08.
 | 34 | GET | `/api/v1/site-snapshots/:id/source` | Read | `source.html` decoded for View source | 200 | SiteSnapshot (+ R2) |
 | 35 | GET | `/api/v1/site-files/:token/*path` | Read | One stored file, token-gated (preview iframe) | 200 | none (R2) |
 | 36 | GET | `/api/v1/site-snapshots/queue` | Read | Website copy queue in run order, with start estimates | 200 | SiteSnapshot, JobRun |
-| 36a | GET | `/api/v1/site-pipeline` | Read | The website being copied, pushed or deployed now, and whether the pipeline is paused | 200 | SiteSnapshot, JobRun |
+| 36a | GET | `/api/v1/site-pipeline` | Read | The website being copied, pushed or deployed now, and whether the pipeline is paused | 200 | SiteSnapshot, JobRun, WorkerSettings |
+| 36b | GET | `/api/v1/queue` | Read | Operator drain pause for bots and the website pipeline | 200 | WorkerSettings |
+| 36c | PUT | `/api/v1/queue` | Update | Pause or resume the queue (editor session). In-flight work finishes; schedules keep running | 200 | WorkerSettings |
 | 37 | POST | `/api/v1/site-snapshots/:id/cancel` | Update | Cancel a copy that has not started (editor session) | 200 | SiteSnapshot, JobRun |
 | 38 | GET | `/api/v1/site-automation` | Read | Copy automation settings and today's count | 200 | SiteAutomationSettings, SiteAutomationCrawl, SiteSnapshot |
 | 39 | PUT | `/api/v1/site-automation` | Update | Turn copy automation on or off (editor session) | 200 | SiteAutomationSettings |
@@ -1607,6 +1609,9 @@ live or one of its steps gave up:
   With the chatbot step, live websites without the chatbot are part of this backlog: each one gets the chatbot, then is
   pushed and redeployed, as soon as its lead's bot is trained (copies whose bot is not trained yet are not picked).
 - After a restart the worker resumes at the step the website was on.
+- An **operator drain pause** (`queue.paused`, see #36b/#36c) finishes the current website but does not start new
+  bots, website copies, auto-queue after crawls, or publish for the next finished copy. Country discovery schedules
+  and crawls keep running.
 
 **CRUD:** Read. **200 OK**:
 
@@ -1614,6 +1619,12 @@ live or one of its steps gave up:
 {
   "enabled": true,
   "steps": { "github": true, "deploy": true, "chatbot": true },
+  "queue": {
+    "paused": false,
+    "pausedAt": null,
+    "pausedBy": null,
+    "updatedAt": "2026-10-16T05:00:00.000Z"
+  },
   "current": {
     "site": { "...summary": "..." },
     "step": "deploy",
@@ -1632,6 +1643,7 @@ live or one of its steps gave up:
 |---|---|
 | `enabled` | The worker can copy websites (R2 and `SITE_PREVIEW_SECRET` set) |
 | `steps` | Which publish steps are configured; a missing one is skipped |
+| `queue` | Operator drain pause (#36b). Older API versions omit it |
 | `current` | The website in the pipeline, `null` when idle (or busy with another tenant's website). `site` is a summary (#31) plus `company` |
 | `current.step` | `copy`, `chatbot`, `github` or `deploy` |
 | `current.state` | `working` (running or about to), `retrying` (waits for `nextAt` after an error), `paused` (waits for a GitHub, Cloudflare or MonCha limit, or the lead's bot training) |
@@ -1639,6 +1651,32 @@ live or one of its steps gave up:
 | `current.error` | Last error of this step, `"code: message"` |
 | `toPublish` | Finished copies still waiting for their chatbot, push or deploy (the current website not counted) |
 | `waitingCopies` | Copies waiting for their first try |
+
+### 36b. GET `/api/v1/queue`
+
+Worker-wide operator drain pause. When `paused` is true, bots, website copies and publish steps do not start new work;
+anything already in the pipeline finishes. Discovery schedules keep running.
+
+**CRUD:** Read. **200 OK:**
+
+```json
+{
+  "paused": true,
+  "pausedAt": "2026-10-16T05:10:00.000Z",
+  "pausedBy": "user_…",
+  "updatedAt": "2026-10-16T05:10:00.000Z"
+}
+```
+
+### 36c. PUT `/api/v1/queue`
+
+**Headers:** `authorization: Bearer <token>` (role `admin` or `operator`). Body: `{ "paused": true }` or
+`{ "paused": false }`. Same response as #36b.
+
+| Status | `code` | When |
+|---|---|---|
+| 401 | `unauthorized` | No bearer token, or an invalid one |
+| 403 | `forbidden` | Viewer role, or a user of another tenant |
 
 ### 37. POST `/api/v1/site-snapshots/:id/cancel`
 

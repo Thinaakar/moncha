@@ -149,12 +149,20 @@ export class PrismaLeadBotRepository implements LeadBotRepo {
     return bot;
   }
 
-  async claimNext(now: Date, staleBefore: Date, options: { tenantId?: string; leadId?: string } = {}): Promise<LeadBotItem | null> {
+  async claimNext(
+    now: Date,
+    staleBefore: Date,
+    options: { tenantId?: string; leadId?: string; inFlightOnly?: boolean } = {},
+  ): Promise<LeadBotItem | null> {
     const tenant = options.tenantId ? Prisma.sql`AND x."tenantId" = ${options.tenantId}` : Prisma.empty;
-    const due = options.leadId
-      ? Prisma.sql`x."leadId" = ${options.leadId} AND (x.status = 'pending' OR (x.status = 'creating' AND x."lockedAt" < ${staleBefore}))`
-      : Prisma.sql`((x.status = 'pending' AND (x."nextAt" IS NULL OR x."nextAt" <= ${now}))
-          OR (x.status = 'creating' AND x."lockedAt" < ${staleBefore}))`;
+    const staleCreating = Prisma.sql`(x.status = 'creating' AND x."lockedAt" < ${staleBefore})`;
+    const due = options.inFlightOnly
+      ? options.leadId
+        ? Prisma.sql`x."leadId" = ${options.leadId} AND ${staleCreating}`
+        : staleCreating
+      : options.leadId
+        ? Prisma.sql`x."leadId" = ${options.leadId} AND (x.status = 'pending' OR ${staleCreating})`
+        : Prisma.sql`((x.status = 'pending' AND (x."nextAt" IS NULL OR x."nextAt" <= ${now})) OR ${staleCreating})`;
     const rows = await this.db.$queryRaw<Array<{ id: string; tenantId: string; leadId: string }>>`
       UPDATE "LeadBot" AS b
       SET status = 'creating', attempts = b.attempts + 1, "lockedAt" = ${now}, "updatedAt" = ${now}
@@ -178,12 +186,18 @@ export class PrismaLeadBotRepository implements LeadBotRepo {
   async claimNextKnowledge(
     now: Date,
     staleBefore: Date,
-    options: { tenantId?: string; leadId?: string } = {},
+    options: { tenantId?: string; leadId?: string; inFlightOnly?: boolean } = {},
   ): Promise<LeadBotItem | null> {
     const tenant = options.tenantId ? Prisma.sql`AND x."tenantId" = ${options.tenantId}` : Prisma.empty;
     const unlocked = Prisma.sql`(x."knowledgeLockedAt" IS NULL OR x."knowledgeLockedAt" < ${staleBefore})`;
     const dueAt = options.leadId ? Prisma.sql`TRUE` : Prisma.sql`(x."knowledgeNextAt" IS NULL OR x."knowledgeNextAt" <= ${now})`;
     const lead = options.leadId ? Prisma.sql`AND x."leadId" = ${options.leadId}` : Prisma.empty;
+    const due = options.inFlightOnly
+      ? Prisma.sql`((x."knowledgeStatus" = 'discovering' AND x."knowledgeLockedAt" < ${staleBefore})
+            OR (x."knowledgeStatus" = 'training' AND ${dueAt} AND ${unlocked}))`
+      : Prisma.sql`((x."knowledgeStatus" = 'pending' AND ${dueAt})
+            OR (x."knowledgeStatus" = 'discovering' AND x."knowledgeLockedAt" < ${staleBefore})
+            OR (x."knowledgeStatus" = 'training' AND ${dueAt} AND ${unlocked}))`;
     const rows = await this.db.$queryRaw<Array<{ id: string }>>`
       UPDATE "LeadBot" AS b
       SET "knowledgeStatus" = CASE WHEN b."knowledgeStatus" = 'training' THEN 'training' ELSE 'discovering' END,
@@ -193,9 +207,7 @@ export class PrismaLeadBotRepository implements LeadBotRepo {
       WHERE b.id = (
         SELECT x.id FROM "LeadBot" x
         WHERE x.status = 'created' AND x."chatbotId" IS NOT NULL ${lead} ${tenant}
-          AND ((x."knowledgeStatus" = 'pending' AND ${dueAt})
-            OR (x."knowledgeStatus" = 'discovering' AND x."knowledgeLockedAt" < ${staleBefore})
-            OR (x."knowledgeStatus" = 'training' AND ${dueAt} AND ${unlocked}))
+          AND ${due}
         ORDER BY EXISTS (
           SELECT 1 FROM "SiteSnapshot" s JOIN "JobRun" j ON j.id = s."jobId" WHERE s."leadId" = x."leadId" AND ${WAITING_COPY}
         ) DESC, (x."knowledgeStatus" = 'training') DESC, x."createdBotAt" ASC NULLS LAST, x.id

@@ -21,12 +21,14 @@ import {
   PrismaWebsiteAuditRepository,
   PrismaWebsiteRepository,
   PrismaWorkerHeartbeatRepository,
+  PrismaWorkerSettingsRepository,
   withDbRetry,
 } from '@moncha/db';
 import {
   createConsoleLogger,
   deploySiteSnapshotToWorker,
   enqueueDueSchedules,
+  getWorkerQueueState,
   installSiteChatbot,
   pushSiteSnapshotToGithub,
   resolveCountry,
@@ -99,12 +101,23 @@ let activePipeline: Promise<void> | null = null;
 let lastPipelineWait = '';
 const siteSnapshots = new PrismaSiteSnapshotRepository(prisma);
 const siteAutomation = new PrismaSiteAutomationRepository(prisma);
+const workerSettings = new PrismaWorkerSettingsRepository(prisma);
 const monchaBots = monchaInternalClient();
 const leadBots = new PrismaLeadBotRepository(prisma);
 /** Account problems, rate limits and full tiers pause every bot until this time. */
 let botsPausedUntil = 0;
 /** Same for bot training (also while MonCha's discovery is down). */
 let trainingPausedUntil = 0;
+/** Cached operator drain pause; refreshed at most once per second. */
+let queuePausedCache: { at: number; paused: boolean } = { at: 0, paused: false };
+
+async function isQueuePaused(): Promise<boolean> {
+  const now = Date.now();
+  if (now - queuePausedCache.at < 1_000) return queuePausedCache.paused;
+  const state = await withDbRetry(() => getWorkerQueueState({ settings: workerSettings }));
+  queuePausedCache = { at: now, paused: state.paused };
+  return state.paused;
+}
 
 function auditDeps() {
   return {
@@ -179,6 +192,7 @@ async function schedulerTick() {
 /** Queues website copies for qualified leads from finished crawls (tenants with automation on). */
 async function siteAutomationTick() {
   if (!siteAgent.ready || !siteAutoCopyEnabled() || crawlAbort.signal.aborted) return;
+  if (await isQueuePaused()) return;
   await withDbRetry(() => sweepAllSiteAutomation({ automation: siteAutomation, snapshots: siteSnapshots, logger }));
 }
 
@@ -253,6 +267,7 @@ async function runCrawl(job: JobRunRecord) {
 async function pipelineTick() {
   if (!siteAgent.ready || !siteAgent.store || activePipeline || crawlAbort.signal.aborted) return;
   const store = siteAgent.store;
+  const queuePaused = await isQueuePaused();
   activePipeline = runSitePipelineTick({
     pipeline: siteSnapshots,
     snapshots: siteSnapshots,
@@ -284,6 +299,7 @@ async function pipelineTick() {
       ? (snapshot) =>
           deploySiteSnapshotToWorker({ snapshots: siteSnapshots, store, deployer: workerDeployer, logger }, snapshot, crawlAbort.signal)
       : undefined,
+    queuePaused,
     logger,
   })
     .then((outcome) => {
@@ -307,7 +323,10 @@ async function pipelineTick() {
  */
 async function leadBotTick() {
   if (!monchaBots || crawlAbort.signal.aborted || Date.now() < botsPausedUntil) return;
-  const tick = await withDbRetry(() => runLeadBotTick({ bots: leadBots, api: monchaBots, logger }, { signal: crawlAbort.signal }));
+  const queuePaused = await isQueuePaused();
+  const tick = await withDbRetry(() =>
+    runLeadBotTick({ bots: leadBots, api: monchaBots, logger }, { signal: crawlAbort.signal, queuePaused }),
+  );
   if (tick.action === 'ran') {
     if (tick.outcome.status === 'paused') botsPausedUntil = tick.outcome.until.getTime();
     logger.info('lead_bot_tick', { ...tick.outcome });
@@ -320,7 +339,10 @@ async function leadBotTick() {
  */
 async function leadBotTrainTick() {
   if (!monchaBots || crawlAbort.signal.aborted || Date.now() < trainingPausedUntil) return;
-  const tick = await withDbRetry(() => runLeadBotTrainTick({ bots: leadBots, api: monchaBots, logger }, { signal: crawlAbort.signal }));
+  const queuePaused = await isQueuePaused();
+  const tick = await withDbRetry(() =>
+    runLeadBotTrainTick({ bots: leadBots, api: monchaBots, logger }, { signal: crawlAbort.signal, queuePaused }),
+  );
   if (tick.action === 'ran') {
     if (tick.outcome.status === 'paused') trainingPausedUntil = tick.outcome.until.getTime();
     if (tick.outcome.status !== 'training') logger.info('lead_bot_train_tick', { ...tick.outcome });

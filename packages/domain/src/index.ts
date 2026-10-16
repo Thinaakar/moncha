@@ -29,6 +29,7 @@ export * from './use-cases/siteProgress';
 export * from './use-cases/siteCosts';
 export * from './use-cases/runSiteSnapshotJob';
 export * from './use-cases/leadBots';
+export * from './use-cases/workerQueue';
 export * from './discovery/countries';
 export * from './discovery/schedule-time';
 export * from './discovery/industries';

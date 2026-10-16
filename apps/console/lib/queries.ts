@@ -21,6 +21,8 @@ import type {
   SiteAutomationCrawl,
   SiteAutomationState,
   SiteAutomationUpdate,
+  WorkerQueueState,
+  WorkerQueueUpdate,
   SiteCopyOrigin,
   SiteDeployFilter,
   SitePipelineStatus,
@@ -54,6 +56,7 @@ export const qk = {
   siteSource: (id: string) => ['site-snapshots', 'source', id] as const,
   siteQueue: ['site-snapshots', 'queue'] as const,
   sitePipeline: ['site-pipeline'] as const,
+  queue: ['queue'] as const,
   automation: ['site-automation'] as const,
   automationCrawls: (limit: number) => ['site-automation', 'crawls', limit] as const,
   costSummary: (days: number | null) => ['costs', 'summary', days] as const,
@@ -302,6 +305,19 @@ export function useSitePipeline() {
       if (!current) return 30_000;
       const wait = current.nextAt ? new Date(current.nextAt).getTime() - Date.now() : 0;
       return wait < 2 * 60_000 ? 5_000 : 60_000;
+    },
+  });
+}
+
+/** Operator drain pause for bots + website pipeline. Discovery schedules keep running. */
+export function useUpdateWorkerQueue() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (input: WorkerQueueUpdate) => api<WorkerQueueState>('queue', { method: 'PUT', body: input }),
+    onSuccess: (queue) => {
+      client.setQueryData(qk.queue, queue);
+      client.setQueryData<SitePipelineStatus>(qk.sitePipeline, (prev) => (prev ? { ...prev, queue } : prev));
+      void client.invalidateQueries({ queryKey: qk.sitePipeline });
     },
   });
 }

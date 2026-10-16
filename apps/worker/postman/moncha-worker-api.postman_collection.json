@@ -466,6 +466,57 @@
           "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/site-automation/moncha-check" }
         },
         {
+          "name": "Queue pause state",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/queue" },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('has paused flag', () => { const b = pm.response.json(); pm.expect(b).to.have.property('paused'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Pause the queue",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"paused\": true\n}" },
+            "url": "{{baseUrl}}/api/v1/queue"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('paused', () => pm.expect(pm.response.json().paused).to.eql(true));"]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Resume the queue",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"paused\": false\n}" },
+            "url": "{{baseUrl}}/api/v1/queue"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('resumed', () => pm.expect(pm.response.json().paused).to.eql(false));"]
+              }
+            }
+          ]
+        },
+        {
           "name": "Copy automation settings",
           "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/site-automation" }
         },

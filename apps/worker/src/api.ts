@@ -16,6 +16,7 @@ import {
   scheduleRunsQuerySchema,
   siteAutomationCrawlsQuerySchema,
   siteAutomationUpdateSchema,
+  workerQueueUpdateSchema,
   siteCostSummaryQuerySchema,
   siteCostWebsitesQuerySchema,
   siteSnapshotListQuerySchema,
@@ -29,6 +30,7 @@ import {
   type SiteCostWebsitePage,
   type SiteAutomationCrawl,
   type SiteAutomationState,
+  type WorkerQueueState,
   type LeadBotPage,
   type LeadBotView,
   type MonchaInternalCheckResult,
@@ -60,6 +62,7 @@ import {
   PrismaSiteCostRepository,
   PrismaSiteSnapshotRepository,
   PrismaWebsiteRepository,
+  PrismaWorkerSettingsRepository,
   withDbRetry,
 } from '@moncha/db';
 import {
@@ -96,6 +99,8 @@ import {
   getSiteAutomationStatus,
   describeSitePipeline,
   getSiteQueue,
+  getWorkerQueueState,
+  setWorkerQueuePaused,
   queueSiteSnapshot,
   SiteAutomationError,
   SiteCancelError,
@@ -463,7 +468,17 @@ route('GET', '/api/v1/source-imports/:id', async ({ tenantId, params }) => {
 
 // Website copies (site_snapshot jobs run by the worker; files live in R2).
 const siteSnapshots = new PrismaSiteSnapshotRepository(prisma);
+const workerSettings = new PrismaWorkerSettingsRepository(prisma);
 const SOURCE_VIEW_MAX_BYTES = 3 * 1024 * 1024;
+
+function workerQueueJson(state: Awaited<ReturnType<typeof getWorkerQueueState>>): WorkerQueueState {
+  return {
+    paused: state.paused,
+    pausedAt: state.pausedAt?.toISOString() ?? null,
+    pausedBy: state.pausedBy,
+    updatedAt: state.updatedAt?.toISOString() ?? null,
+  };
+}
 
 function requireSiteAgent() {
   const config = siteAgentConfig();
@@ -650,22 +665,26 @@ route('GET', '/api/v1/site-snapshots/queue', async ({ tenantId }) => {
 });
 
 route('GET', '/api/v1/site-pipeline', async ({ tenantId }) => {
-  const view = await describeSitePipeline(
-    {
-      pipeline: siteSnapshots,
-      jobs,
-      steps: {
-        github: Boolean(siteGithubPublisher()),
-        worker: Boolean(siteWorkerDeployer()),
-        chatbot: Boolean(monchaInternalClient()),
+  const [view, queue] = await Promise.all([
+    describeSitePipeline(
+      {
+        pipeline: siteSnapshots,
+        jobs,
+        steps: {
+          github: Boolean(siteGithubPublisher()),
+          worker: Boolean(siteWorkerDeployer()),
+          chatbot: Boolean(monchaInternalClient()),
+        },
       },
-    },
-    { tenantId },
-  );
+      { tenantId },
+    ),
+    getWorkerQueueState({ settings: workerSettings }),
+  ]);
   const current = view.current;
   const json: SitePipelineStatus = {
     enabled: siteAgentConfig().ready,
     steps: { github: view.steps.github, deploy: view.steps.worker, chatbot: Boolean(view.steps.chatbot) },
+    queue: workerQueueJson(queue),
     current: current
       ? {
           site: siteSummary(current.snapshot, null),
@@ -681,6 +700,20 @@ route('GET', '/api/v1/site-pipeline', async ({ tenantId }) => {
     waitingCopies: view.waitingCopies,
   };
   return { json };
+});
+
+/** Operator drain pause for bots + website pipeline. Discovery schedules keep running. */
+route('GET', '/api/v1/queue', async () => ({ json: workerQueueJson(await getWorkerQueueState({ settings: workerSettings })) }));
+
+route('PUT', '/api/v1/queue', async ({ req, tenantId, body }) => {
+  const user = await requireEditor(req, tenantId, 'pause or resume the queue');
+  const input = workerQueueUpdateSchema.parse(await body());
+  const state = await setWorkerQueuePaused(
+    { settings: workerSettings },
+    { paused: input.paused, pausedBy: user.id },
+  );
+  logger.info('worker_queue.updated', { tenantId, userId: user.id, paused: state.paused });
+  return { json: workerQueueJson(state) };
 });
 
 route('POST', '/api/v1/site-snapshots/:id/cancel', async ({ req, tenantId, params }) => {

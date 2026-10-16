@@ -706,6 +706,17 @@ model LeadBot {
   @@index([status, knowledgeStatus, knowledgeNextAt])
 }
 
+/// Worker-wide operator settings (one row). Pause drains the queue: in-flight work finishes, new work does not start.
+/// Country discovery schedules keep running.
+model WorkerSettings {
+  id        String    @id @default("default")
+  /// When true, bots, website copies and publish steps do not start new work; current items finish.
+  queuePaused Boolean @default(false)
+  pausedAt  DateTime?
+  pausedBy  String?
+  updatedAt DateTime  @updatedAt
+}
+
 /// Per-tenant switch and daily cap for automatic website copies.
 model SiteAutomationSettings {
   tenantId  String    @id
