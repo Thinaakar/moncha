@@ -52,12 +52,22 @@ jobs:
         working-directory: apps/console
         run: |
           set +e
-          pnpm cf:build 2>&1 | tee build.log
-          status=${PIPESTATUS[0]}
-          if [ "$status" -ne 0 ]; then
-            echo "::error title=OpenNext build failed::$(tail -n 60 build.log | sed -e 's/%/%25/g' | sed -e ':a;N;$!ba;s/\n/%0A/g')"
-          fi
-          exit "$status"
+          # next/font Google fetch is occasionally flaky on Actions; retry a few times before failing.
+          for attempt in 1 2 3; do
+            echo "::group::OpenNext build attempt $attempt"
+            pnpm cf:build 2>&1 | tee build.log
+            status=${PIPESTATUS[0]}
+            echo "::endgroup::"
+            if [ "$status" -eq 0 ]; then
+              exit 0
+            fi
+            echo "Build attempt $attempt failed (exit $status)"
+            if [ "$attempt" -lt 3 ]; then
+              sleep 15
+            fi
+          done
+          echo "::error title=OpenNext build failed::$(tail -n 60 build.log | sed -e 's/%/%25/g' | sed -e ':a;N;$!ba;s/\n/%0A/g')"
+          exit 1
 
       - name: Deploy
         working-directory: apps/console
