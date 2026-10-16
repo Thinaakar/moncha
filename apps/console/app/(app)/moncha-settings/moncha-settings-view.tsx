@@ -16,8 +16,28 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState, ErrorState, InlineAlert } from '@/components/app/states';
 import { PageHeader } from '@/components/app/page-header';
-import { DetailRow } from '@/components/app/widgets';
 import { useMonchaStatus } from '@/lib/queries';
+
+/** Label + value without the shared DetailRow 140px cap (env key names overflow there). */
+function ConnectionRow({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="grid gap-1 py-3 text-sm sm:grid-cols-[minmax(10rem,11.5rem)_minmax(0,1fr)] sm:items-start sm:gap-4">
+      <dt className="min-w-0">
+        <p className="font-medium text-muted-foreground">{label}</p>
+        {hint && <p className="mt-0.5 font-mono text-[11px] break-all text-muted-foreground/80">{hint}</p>}
+      </dt>
+      <dd className="min-w-0 break-words text-foreground">{children ?? '—'}</dd>
+    </div>
+  );
+}
 import { errorMessage } from '@/lib/api';
 import { formatDateTime, formatNumber, formatRelative } from '@/lib/format';
 import type { MonchaInternalCheckResult, MonchaSlotTier } from '@/lib/types';
@@ -110,22 +130,26 @@ function ConnectionCard({
             {data.error}
           </InlineAlert>
         )}
-        <dl className="divide-y rounded-lg border">
-          <DetailRow label="Environment">
+        <dl className="divide-y rounded-lg border px-4">
+          <ConnectionRow label="Environment">
             {data.environment ? (
               <Badge variant={data.environment === 'production' ? 'warning' : 'muted'}>{ENV_LABEL[data.environment]}</Badge>
             ) : (
               '—'
             )}
-          </DetailRow>
-          <DetailRow label="Base URL">
+          </ConnectionRow>
+          <ConnectionRow label="API base URL">
             <span className="font-mono text-xs break-all">{data.baseUrl ?? '—'}</span>
-          </DetailRow>
-          <DetailRow label="MONCHA_INTERNAL_KEY">{data.keys.MONCHA_INTERNAL_KEY ? 'Set' : 'Missing'}</DetailRow>
-          <DetailRow label="MONCHA_INTERNAL_BASE_URL">{data.keys.MONCHA_INTERNAL_BASE_URL ? 'Set' : 'Default UAT'}</DetailRow>
-          <DetailRow label="Last checked">
+          </ConnectionRow>
+          <ConnectionRow label="Internal key" hint="MONCHA_INTERNAL_KEY">
+            {data.keys.MONCHA_INTERNAL_KEY ? 'Set' : 'Missing'}
+          </ConnectionRow>
+          <ConnectionRow label="Base URL override" hint="MONCHA_INTERNAL_BASE_URL">
+            {data.keys.MONCHA_INTERNAL_BASE_URL ? 'Set' : 'Default UAT'}
+          </ConnectionRow>
+          <ConnectionRow label="Last checked">
             <span title={formatDateTime(data.checkedAt)}>{formatRelative(data.checkedAt)}</span>
-          </DetailRow>
+          </ConnectionRow>
         </dl>
       </CardContent>
     </Card>
