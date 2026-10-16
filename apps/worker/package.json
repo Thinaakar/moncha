@@ -8,6 +8,8 @@
     "discover": "tsx src/discover.ts",
     "sites:backfill": "tsx src/site-publish-backfill.ts",
     "bots:backfill": "tsx src/bot-backfill.ts",
+    "domains:backfill": "tsx src/domains-backfill.ts",
+    "train:kick": "tsx src/train-kick.ts",
     "api": "tsx src/api.ts",
     "cf:typecheck": "tsc -p cloudflare/tsconfig.json",
     "cf:check": "wrangler deploy --dry-run --containers-rollout=none",

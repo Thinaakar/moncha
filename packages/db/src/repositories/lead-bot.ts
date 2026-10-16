@@ -212,7 +212,7 @@ export class PrismaLeadBotRepository implements LeadBotRepo {
           AND ${due}
         ORDER BY EXISTS (
           SELECT 1 FROM "SiteSnapshot" s JOIN "JobRun" j ON j.id = s."jobId" WHERE s."leadId" = x."leadId" AND ${WAITING_COPY}
-        ) DESC, (x."knowledgeStatus" = 'training') DESC, x."createdBotAt" ASC NULLS LAST, x.id
+        ) DESC, x."createdBotAt" ASC NULLS LAST, x.id
         FOR UPDATE OF x SKIP LOCKED
         LIMIT 1
       )
