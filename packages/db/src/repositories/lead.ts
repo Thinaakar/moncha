@@ -31,6 +31,7 @@ const leadExportSelect = {
       name: true,
       domain: true,
       phone: true,
+      email: true,
       address: true,
       city: true,
       country: true,

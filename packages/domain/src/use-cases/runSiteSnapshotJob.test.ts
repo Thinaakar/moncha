@@ -146,6 +146,13 @@ function setup(over: Partial<SiteSnapshotJobDeps> = {}, jobOver: Partial<JobRunR
         company: { id: 'c1', tenantId: 't1', name: 'X Clinic Sdn Bhd', domain: 'x.com', phone: '+6012345678', country: 'MY' },
       }) as LeadListItem,
   } as unknown as LeadRepo;
+  const companyPatches: Array<{ id: string; email?: string | null }> = [];
+  const companies = {
+    update: async (_tenantId: string, id: string, patch: { email?: string | null }) => {
+      companyPatches.push({ id, ...patch });
+      return { id, tenantId: 't1', name: 'X Clinic Sdn Bhd', ...patch };
+    },
+  } as unknown as SiteSnapshotJobDeps['companies'];
   const store: SiteStore = {
     put: async (key, bytes, contentType) => {
       objects.set(key, { bytes, contentType });
@@ -194,6 +201,7 @@ function setup(over: Partial<SiteSnapshotJobDeps> = {}, jobOver: Partial<JobRunR
     jobs,
     snapshots,
     leads,
+    companies,
     capturer,
     brandExtractor,
     store,
@@ -213,14 +221,46 @@ function setup(over: Partial<SiteSnapshotJobDeps> = {}, jobOver: Partial<JobRunR
     runAfter: new Date(),
     ...jobOver,
   };
-  return { deps, job, snapshot, jobPatches, snapPatches, objects, usage };
+  return { deps, job, snapshot, jobPatches, snapPatches, objects, usage, companyPatches };
 }
 
 describe('runSiteSnapshotJob', () => {
+  it('saves the primary brand contact email onto the company', async () => {
+    const s = setup({
+      brandExtractor: {
+        extract: async () => ({
+          brand: {
+            businessName: 'X Clinic',
+            logo: { assetId: null },
+            colors: { primary: null, secondary: null, accent: null, background: null, text: null },
+            fonts: { heading: null, body: null },
+            contact: { phones: [], emails: ['noreply@x.com', 'hello@x.com'], address: null, whatsapp: null },
+            services: [],
+            hours: [],
+            hoursText: null,
+            socialLinks: [],
+            language: 'en',
+            tone: null,
+            chatbot: { greeting: 'Hi', faqs: [] },
+            confidence: 0.9,
+            notes: null,
+            source: 'llm',
+          },
+          model: 'google/gemini-3.5-flash',
+          usage: { promptTokens: 10, completionTokens: 5 },
+          warnings: [],
+        }),
+      },
+    });
+    await runSiteSnapshotJob(s.deps, { job: s.job });
+    expect(s.companyPatches).toEqual([{ id: 'c1', email: 'hello@x.com' }]);
+  });
+
   it('uploads every file under the snapshot prefix and marks both rows done', async () => {
     const s = setup();
     const outcome = await runSiteSnapshotJob(s.deps, { job: s.job });
     expect(outcome.status).toBe('done');
+    expect(s.companyPatches).toEqual([]);
     expect([...s.objects.keys()].sort()).toEqual(
       [
         'assets/cdn.x.com/logo.png',

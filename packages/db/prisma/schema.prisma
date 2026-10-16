@@ -186,6 +186,8 @@ model Company {
   country       String?
   city          String?
   phone         String?
+  /// Primary contact email from the company's website (filled when a website copy extracts brand.contact.emails).
+  email         String?
   address       String?
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt

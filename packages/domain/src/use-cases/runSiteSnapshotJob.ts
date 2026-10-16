@@ -3,6 +3,7 @@ import {
   SiteCaptureError,
   utcDay,
   type BrandExtractor,
+  type CompanyRepo,
   type JobRepo,
   type JobRunRecord,
   type LeadRepo,
@@ -20,6 +21,7 @@ import {
   type SiteSnapshotRepo,
   type SiteStore,
 } from '../ports';
+import { primaryContactEmail } from '../site/company-email';
 import { brandFromEvidence } from '../site/evidence-brand';
 
 export const SITE_JOB_TIMEOUT_MS = 240_000;
@@ -43,6 +45,8 @@ export type SiteSnapshotJobDeps = {
   jobs: JobRepo;
   snapshots: SiteSnapshotRepo;
   leads: LeadRepo;
+  /** Used to save the primary contact email from brand.contact.emails onto the company. */
+  companies: CompanyRepo;
   capturer: SiteCapturer;
   /** Null when no LLM is configured; the brand then comes from page evidence only. */
   brandExtractor: BrandExtractor | null;
@@ -233,6 +237,13 @@ export async function runSiteSnapshotJob(
       warnings.push('llm_skipped:not_configured');
       brand = brandFromEvidence(capture.evidence, company);
     }
+
+    const companyId = lead?.companyId ?? lead?.company.id;
+    const contactEmail = primaryContactEmail(brand.contact.emails);
+    if (companyId && contactEmail) {
+      await deps.companies.update(tenantId, companyId, { email: contactEmail });
+    }
+
     // Saved before the upload so tokens billed by an attempt that later fails still count.
     await deps.snapshots.update(tenantId, snapshotId, {
       ...llmSpend(snapshot, llmModel, usage),

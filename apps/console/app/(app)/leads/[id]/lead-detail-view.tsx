@@ -11,6 +11,7 @@ import {
   ExternalLink,
   Globe,
   Loader2,
+  Mail,
   MapPin,
   Phone,
   RefreshCw,
@@ -322,6 +323,16 @@ export function LeadDetailView({ id }: { id: string }) {
                   </a>
                 ) : (
                   <span className="text-muted-foreground">No phone</span>
+                )}
+              </div>
+              <div className="flex items-center gap-3">
+                <Mail className="size-4 shrink-0 text-muted-foreground" />
+                {company.email ? (
+                  <a href={`mailto:${company.email}`} className="text-primary hover:underline break-all">
+                    {company.email}
+                  </a>
+                ) : (
+                  <span className="text-muted-foreground">No email yet — filled when a website copy extracts contact emails</span>
                 )}
               </div>
               <Separator />

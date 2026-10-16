@@ -10,6 +10,7 @@ export type LeadExportRow = {
     name: string;
     domain: string | null;
     phone: string | null;
+    email: string | null;
     address: string | null;
     city: string | null;
     country: string | null;
@@ -25,6 +26,7 @@ export const LEAD_EXPORT_COLUMNS = [
   'Domain',
   'Website',
   'Phone',
+  'Email',
   'Address',
   'City',
   'Country',
@@ -64,6 +66,7 @@ export function leadExportValues(lead: LeadExportRow): string[] {
     company.domain ?? '',
     website,
     company.phone ?? '',
+    company.email ?? '',
     company.address ?? '',
     company.city ?? '',
     company.country ?? '',

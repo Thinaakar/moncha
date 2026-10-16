@@ -156,6 +156,8 @@ export type Company = {
   country: string | null;
   city: string | null;
   phone: string | null;
+  /** Primary contact email from the website copy brand extraction. */
+  email: string | null;
   address: string | null;
   createdAt: string;
   updatedAt: string;

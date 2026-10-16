@@ -136,6 +136,8 @@ export type CompanyRecord = {
   country?: string | null;
   city?: string | null;
   phone?: string | null;
+  /** Primary website contact email; set from a website copy's brand.contact.emails. */
+  email?: string | null;
   address?: string | null;
 };
 
@@ -483,6 +485,7 @@ export type CompanyWrite = {
   country?: string | null;
   city?: string | null;
   phone?: string | null;
+  email?: string | null;
   address?: string | null;
 };
 

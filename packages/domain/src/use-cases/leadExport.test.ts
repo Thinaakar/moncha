@@ -12,6 +12,7 @@ const lead = (overrides: Partial<LeadExportRow> = {}): LeadExportRow => ({
     name: 'AIO Motors',
     domain: 'aiomotors.sg',
     phone: '+65 6789 1234',
+    email: 'hello@aiomotors.sg',
     address: '1 Woodlands Ave, #01-02',
     city: 'Woodlands',
     country: 'Singapore',
@@ -38,7 +39,7 @@ describe('lead CSV export', () => {
     const lines = text.slice(1).trimEnd().split('\r\n');
     expect(lines).toHaveLength(3);
     expect(lines[1]).toBe(
-      'AIO Motors,aiomotors.sg,https://www.aiomotors.sg/,+65 6789 1234,"1 Woodlands Ave, #01-02",Woodlands,Singapore,' +
+      'AIO Motors,aiomotors.sg,https://www.aiomotors.sg/,+65 6789 1234,hello@aiomotors.sg,"1 Woodlands Ave, #01-02",Woodlands,Singapore,' +
         'Qualified,No assistant,,Active,Google places,No assistant high confidence,2026-10-11T09:00:00.000Z,lead_1',
     );
     expect(lines[2]).toContain(',Has assistant,Not audited,');
