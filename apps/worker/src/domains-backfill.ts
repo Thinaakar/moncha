@@ -5,7 +5,6 @@
  *   pnpm --filter @moncha/worker domains:backfill [-- --tenant <id>] [-- --limit <n>]
  */
 import './env';
-import { Prisma } from '@prisma/client';
 import { prisma, PrismaLeadBotRepository } from '@moncha/db';
 import { createConsoleLogger, setChatbotDomainsForLiveUrl } from '@moncha/domain';
 import { createMonchaInternalClientFromEnv, MonchaInternalError } from '@moncha/integrations';
@@ -31,7 +30,6 @@ async function candidates(tenantId?: string, limit?: number): Promise<Candidate[
     where: {
       status: 'created',
       chatbotId: { not: null },
-      domains: { equals: Prisma.DbNull },
       ...(tenantId ? { tenantId } : {}),
       lead: {
         siteSnapshots: {
@@ -46,6 +44,7 @@ async function candidates(tenantId?: string, limit?: number): Promise<Candidate[
       tenantId: true,
       leadId: true,
       chatbotId: true,
+      domains: true,
       lead: {
         select: {
           siteSnapshots: {
@@ -57,11 +56,12 @@ async function candidates(tenantId?: string, limit?: number): Promise<Candidate[
         },
       },
     },
-    ...(limit ? { take: limit } : {}),
     orderBy: { createdAt: 'asc' },
   });
 
-  return bots.flatMap((bot) => {
+  const missing = bots.filter((bot) => bot.domains == null);
+  const sliced = limit ? missing.slice(0, limit) : missing;
+  return sliced.flatMap((bot) => {
     const workerUrl = bot.lead.siteSnapshots[0]?.workerUrl;
     if (!bot.chatbotId || !workerUrl) return [];
     return [{ tenantId: bot.tenantId, leadId: bot.leadId, chatbotId: bot.chatbotId, workerUrl }];
