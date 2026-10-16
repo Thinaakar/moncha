@@ -111,8 +111,17 @@ export type PasswordResetEmail = {
   expiresAt: Date;
 };
 
+export type ColdEmailPayload = {
+  to: string;
+  companyName: string;
+  demoUrl: string;
+  note?: string;
+  subject?: string;
+};
+
 export interface Mailer {
   sendPasswordReset(email: PasswordResetEmail): Promise<void>;
+  sendColdEmail?(email: ColdEmailPayload, env?: Record<string, unknown>): Promise<{ id: string }>;
 }
 
 export type DiscoveredCompany = {

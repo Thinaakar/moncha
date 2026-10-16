@@ -1,8 +1,10 @@
-import type { Mailer, PasswordResetEmail } from '@moncha/domain';
+import type { ColdEmailPayload, Mailer, PasswordResetEmail } from '@moncha/domain';
+import { coldEmailContent, isColdEmailRecipientAllowed } from './cold-email';
 
 const RESEND_URL = 'https://api.resend.com/emails';
 /** Resend's shared test sender; it only delivers to the Resend account owner's address. */
 const DEFAULT_FROM = 'MonCha <onboarding@resend.dev>';
+const COLD_FROM_DEFAULT = 'MonCha <noreply@dev-moncha.com>';
 
 const escapeHtml = (text: string) =>
   text.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
@@ -29,25 +31,61 @@ export function passwordResetEmailContent(email: PasswordResetEmail) {
   return { subject: 'Reset your MonCha password', text, html };
 }
 
+export type ColdEmailSendResult = { id: string };
+
 export class ResendMailer implements Mailer {
   constructor(
     private apiKey: string,
     private from: string = DEFAULT_FROM,
     // Wrapped: Cloudflare Workers throw "Illegal invocation" when fetch is called as a method.
     private fetchImpl: typeof fetch = (input, init) => fetch(input, init),
+    private coldFrom: string = COLD_FROM_DEFAULT,
   ) {}
 
   async sendPasswordReset(email: PasswordResetEmail): Promise<void> {
     const content = passwordResetEmailContent(email);
+    await this.postEmail({ from: this.from, to: [email.to], ...content });
+  }
+
+  /**
+   * Sends a cold outreach email. Caller must already pass the allowlist / kill-switch check
+   * (`isColdEmailRecipientAllowed`); this method still refuses when the gate fails.
+   */
+  async sendColdEmail(email: ColdEmailPayload, env: Record<string, unknown> = process.env): Promise<ColdEmailSendResult> {
+    if (!isColdEmailRecipientAllowed(email.to, env)) {
+      throw new Error('cold_email_blocked: recipient is not on COLD_EMAIL_ALLOWLIST or sending is disabled');
+    }
+    const content = coldEmailContent({
+      companyName: email.companyName,
+      demoUrl: email.demoUrl,
+      note: email.note,
+    });
+    const id = await this.postEmail({
+      from: this.coldFrom,
+      to: [email.to],
+      subject: email.subject ?? content.subject,
+      text: content.text,
+      html: content.html,
+    });
+    return { id };
+  }
+
+  private async postEmail(body: Record<string, unknown>): Promise<string> {
     const response = await this.fetchImpl(RESEND_URL, {
       method: 'POST',
       headers: { authorization: `Bearer ${this.apiKey}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ from: this.from, to: [email.to], ...content }),
+      body: JSON.stringify(body),
       signal: AbortSignal.timeout(10_000),
     });
+    const raw = await response.text().catch(() => '');
     if (!response.ok) {
-      const detail = (await response.text().catch(() => '')).slice(0, 300);
-      throw new Error(`resend_${response.status}: ${detail}`);
+      throw new Error(`resend_${response.status}: ${raw.slice(0, 300)}`);
+    }
+    try {
+      const parsed = JSON.parse(raw) as { id?: string };
+      return typeof parsed.id === 'string' ? parsed.id : '';
+    } catch {
+      return '';
     }
   }
 }
@@ -57,5 +95,11 @@ export function createResendMailerFromEnv(env: Record<string, unknown>): ResendM
   const apiKey = typeof env.RESEND_API_KEY === 'string' ? env.RESEND_API_KEY.trim() : '';
   if (!apiKey) return null;
   const from = typeof env.EMAIL_FROM === 'string' && env.EMAIL_FROM.trim() ? env.EMAIL_FROM.trim() : undefined;
-  return new ResendMailer(apiKey, from);
+  const coldFrom =
+    typeof env.COLD_EMAIL_FROM === 'string' && env.COLD_EMAIL_FROM.trim()
+      ? env.COLD_EMAIL_FROM.trim()
+      : from && from.includes('noreply@dev-moncha.com')
+        ? from
+        : COLD_FROM_DEFAULT;
+  return new ResendMailer(apiKey, from, (input, init) => fetch(input, init), coldFrom);
 }

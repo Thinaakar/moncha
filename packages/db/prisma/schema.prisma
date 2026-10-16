@@ -130,6 +130,7 @@ model Tenant {
   siteAutomation     SiteAutomationSettings?
   siteAutomationCrawls SiteAutomationCrawl[]
   leadBots           LeadBot[]
+  coldEmails         ColdEmail[]
 }
 
 model User {
@@ -230,12 +231,41 @@ model Lead {
   auditLogs           AuditLog[]
   siteSnapshots       SiteSnapshot[]
   jobs                JobRun[]
+  coldEmails          ColdEmail[]
 
   @@unique([tenantId, companyId])
   @@index([tenantId, queue])
   @@index([tenantId, assistantVerdict])
   @@index([tenantId, assistantVendor])
   @@index([tenantId, createdAt])
+}
+
+/// Cold outreach email (draft / sent / suppressed). Delivery is gated by COLD_EMAIL_* env flags.
+model ColdEmail {
+  id          String    @id @default(cuid())
+  tenantId    String
+  leadId      String?
+  companyName String
+  /// Intended company contact email from the lead.
+  toEmail     String
+  /// Address Resend actually delivered to (allowlist / demo sink).
+  deliveredTo String?
+  demoUrl     String?
+  subject     String
+  /// draft | queued | sent | failed | suppressed
+  status      String    @default("draft")
+  resendId    String?
+  error       String?
+  sentAt      DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lead        Lead?     @relation(fields: [leadId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, status])
+  @@index([tenantId, leadId])
+  @@index([tenantId, toEmail])
 }
 
 model SourceRecord {

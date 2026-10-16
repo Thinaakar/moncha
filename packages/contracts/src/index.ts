@@ -1007,3 +1007,112 @@ export type SiteCostWebsiteDetail = SiteCostWebsite & {
   }>;
   pricing: SiteCostPricing;
 };
+
+export const coldEmailStatusSchema = z.enum(['draft', 'queued', 'sent', 'failed', 'suppressed']);
+
+export const coldEmailListQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).optional(),
+  pageSize: z.coerce.number().int().min(1).max(100).optional(),
+  status: coldEmailStatusSchema.optional(),
+});
+
+export const coldEmailCandidatesQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).optional(),
+  pageSize: z.coerce.number().int().min(1).max(100).optional(),
+  readyOnly: z
+    .union([z.literal('1'), z.literal('true'), z.literal('0'), z.literal('false')])
+    .optional()
+    .transform((v) => v === '1' || v === 'true'),
+});
+
+export const coldEmailPreviewSchema = z.object({
+  companyName: z.string().trim().min(1).max(200),
+  demoUrl: z.string().trim().url().max(2000),
+  note: z.string().trim().max(500).optional(),
+});
+
+export const coldEmailDraftSchema = z.object({
+  leadId: z.string().trim().min(1).optional(),
+  companyName: z.string().trim().min(1).max(200),
+  toEmail: z.string().trim().email().max(320),
+  demoUrl: z.string().trim().url().max(2000),
+  subject: z.string().trim().min(1).max(300).optional(),
+});
+
+/** Send only to an allowlisted address. During development, deliverTo must be on COLD_EMAIL_ALLOWLIST. */
+export const coldEmailSendSchema = z.object({
+  leadId: z.string().trim().min(1).optional(),
+  companyName: z.string().trim().min(1).max(200),
+  /** Intended company contact (audit only; not used as Resend recipient unless deliverTo omitted and allowlisted). */
+  toEmail: z.string().trim().email().max(320).optional(),
+  /** Resend recipient — must pass COLD_EMAIL_ALLOWLIST. */
+  deliverTo: z.string().trim().email().max(320),
+  demoUrl: z.string().trim().url().max(2000),
+  note: z.string().trim().max(500).optional(),
+  subject: z.string().trim().min(1).max(300).optional(),
+});
+
+export type ColdEmailStatus = z.infer<typeof coldEmailStatusSchema>;
+
+export type ColdEmailView = {
+  id: string;
+  tenantId: string;
+  leadId: string | null;
+  companyName: string;
+  toEmail: string;
+  deliveredTo: string | null;
+  demoUrl: string | null;
+  subject: string;
+  status: ColdEmailStatus;
+  resendId: string | null;
+  error: string | null;
+  sentAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ColdEmailCandidateView = {
+  leadId: string;
+  companyId: string;
+  companyName: string;
+  companyEmail: string | null;
+  domain: string | null;
+  demoUrl: string | null;
+  botTrained: boolean;
+  lastColdEmail: {
+    id: string;
+    status: ColdEmailStatus;
+    sentAt: string | null;
+    createdAt: string;
+  } | null;
+};
+
+export type ColdEmailGateView = {
+  sendingEnabled: boolean;
+  allowlist: string[];
+  allowlistOpen: boolean;
+  resendConfigured: boolean;
+  from: string;
+};
+
+export type ColdEmailPreviewView = {
+  subject: string;
+  text: string;
+  html: string;
+};
+
+export type ColdEmailPage = {
+  items: ColdEmailView[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+};
+
+export type ColdEmailCandidatePage = {
+  items: ColdEmailCandidateView[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+};

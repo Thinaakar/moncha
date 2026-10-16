@@ -2,6 +2,11 @@ import './env';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { neon } from '@neondatabase/serverless';
 import {
+  coldEmailCandidatesQuerySchema,
+  coldEmailDraftSchema,
+  coldEmailListQuerySchema,
+  coldEmailPreviewSchema,
+  coldEmailSendSchema,
   countryDiscoverySchema,
   jobListQuerySchema,
   leadBotListQuerySchema,
@@ -31,6 +36,12 @@ import {
   type SiteAutomationCrawl,
   type SiteAutomationState,
   type WorkerQueueState,
+  type ColdEmailCandidatePage,
+  type ColdEmailCandidateView,
+  type ColdEmailGateView,
+  type ColdEmailPage,
+  type ColdEmailPreviewView,
+  type ColdEmailView,
   type LeadBotPage,
   type LeadBotView,
   type MonchaInternalCheckResult,
@@ -51,6 +62,7 @@ import {
   prisma,
   PrismaAuditLogRepository,
   PrismaAuthUserRepository,
+  PrismaColdEmailRepository,
   PrismaCompanyRepository,
   PrismaDiscoveryScheduleRepository,
   PrismaJobRunRepository,
@@ -68,16 +80,22 @@ import {
 import {
   AuthError,
   bearerToken,
+  coldEmailGate,
+  createColdEmailDraft,
   createConsoleLogger,
   createManualLead,
   createSchedule,
+  ColdEmailError,
   currentUser,
   envAdminsFrom,
   leadCsvChunks,
   leadExportFilename,
   loginEnvAdmin,
   logoutUser,
+  previewColdEmail,
+  sendColdEmailNow,
   updateProfile,
+  type ColdEmailRecord,
   COUNTRY_PROFILES,
   DEFAULT_AUDIT_CONFIG,
   DEFAULT_INDUSTRIES,
@@ -140,7 +158,14 @@ import {
   type SiteSnapshotListItem,
   type SiteSnapshotRecord,
 } from '@moncha/domain';
-import { createPriceBookFromEnv } from '@moncha/integrations';
+import {
+  coldEmailContent,
+  coldEmailSendingEnabled,
+  createPriceBookFromEnv,
+  createResendMailerFromEnv,
+  isColdEmailRecipientAllowed,
+  parseColdEmailAllowlist,
+} from '@moncha/integrations';
 import { CsvImportError, SOURCE_IMPORT_JOB_TYPES, sourceImportView, startCsvImport, type CsvSqlClient } from './csv-import';
 import { monchaInternalClient, siteAgentConfig, siteAutoCopyEnabled, siteGithubPublisher, siteWorkerDeployer } from './site-agent';
 import { workerHealth } from './worker-health';
@@ -943,6 +968,176 @@ async function monchaStatusJson(): Promise<MonchaInternalCheckResult> {
     checkedAt: new Date().toISOString(),
   };
 }
+
+// Cold outreach: draft / preview / gated send (COLD_EMAIL_SENDING_ENABLED + COLD_EMAIL_ALLOWLIST).
+const coldEmails = new PrismaColdEmailRepository(prisma);
+const coldMailer = createResendMailerFromEnv(process.env);
+const coldEmailDeps = {
+  coldEmails,
+  mailer: coldMailer,
+  env: process.env as Record<string, unknown>,
+  isAllowed: isColdEmailRecipientAllowed,
+  sendingEnabled: coldEmailSendingEnabled,
+  parseAllowlist: parseColdEmailAllowlist,
+  buildContent: coldEmailContent,
+  coldFrom:
+    process.env.COLD_EMAIL_FROM?.trim() ||
+    (process.env.EMAIL_FROM?.includes('noreply@dev-moncha.com') ? process.env.EMAIL_FROM.trim() : undefined) ||
+    'MonCha <noreply@dev-moncha.com>',
+};
+
+function coldEmailView(row: ColdEmailRecord): ColdEmailView {
+  return {
+    id: row.id,
+    tenantId: row.tenantId,
+    leadId: row.leadId,
+    companyName: row.companyName,
+    toEmail: row.toEmail,
+    deliveredTo: row.deliveredTo,
+    demoUrl: row.demoUrl,
+    subject: row.subject,
+    status: row.status,
+    resendId: row.resendId,
+    error: row.error,
+    sentAt: row.sentAt?.toISOString() ?? null,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+function coldEmailErrorHttp(error: unknown): never {
+  if (error instanceof ColdEmailError) {
+    const status =
+      error.code === 'not_found'
+        ? 404
+        : error.code === 'blocked'
+          ? 403
+          : error.code === 'not_configured'
+            ? 503
+            : error.code === 'no_demo'
+              ? 409
+              : 400;
+    throw new HttpError(status, error.code, error.message);
+  }
+  throw error;
+}
+
+route('GET', '/api/v1/cold-emails/gate', async ({ req, tenantId }) => {
+  await requireEditor(req, tenantId, 'view cold email settings');
+  const gate = coldEmailGate(coldEmailDeps);
+  const json: ColdEmailGateView = gate;
+  return { json };
+});
+
+route('GET', '/api/v1/cold-emails', async ({ req, tenantId, url }) => {
+  await requireEditor(req, tenantId, 'list cold emails');
+  const q = coldEmailListQuerySchema.parse(query(url, 'page', 'pageSize', 'status'));
+  const result = await coldEmails.list(tenantId, q);
+  const json: ColdEmailPage = {
+    items: result.items.map(coldEmailView),
+    total: result.total,
+    page: result.page,
+    pageSize: result.pageSize,
+    totalPages: Math.max(1, Math.ceil(result.total / result.pageSize)),
+  };
+  return { json };
+});
+
+route('GET', '/api/v1/cold-emails/candidates', async ({ req, tenantId, url }) => {
+  await requireEditor(req, tenantId, 'list cold email candidates');
+  const q = coldEmailCandidatesQuerySchema.parse(query(url, 'page', 'pageSize', 'readyOnly'));
+  const result = await coldEmails.listCandidates(tenantId, {
+    page: q.page,
+    pageSize: q.pageSize,
+    readyOnly: q.readyOnly,
+  });
+  const items: ColdEmailCandidateView[] = result.items.map((c) => ({
+    leadId: c.leadId,
+    companyId: c.companyId,
+    companyName: c.companyName,
+    companyEmail: c.companyEmail,
+    domain: c.domain,
+    demoUrl: c.demoUrl,
+    botTrained: c.botTrained,
+    lastColdEmail: c.lastColdEmail
+      ? {
+          id: c.lastColdEmail.id,
+          status: c.lastColdEmail.status,
+          sentAt: c.lastColdEmail.sentAt?.toISOString() ?? null,
+          createdAt: c.lastColdEmail.createdAt.toISOString(),
+        }
+      : null,
+  }));
+  const json: ColdEmailCandidatePage = {
+    items,
+    total: result.total,
+    page: result.page,
+    pageSize: result.pageSize,
+    totalPages: Math.max(1, Math.ceil(result.total / result.pageSize)),
+  };
+  return { json };
+});
+
+route('POST', '/api/v1/cold-emails/preview', async ({ req, tenantId, body }) => {
+  await requireEditor(req, tenantId, 'preview cold emails');
+  const input = coldEmailPreviewSchema.parse(await body());
+  try {
+    const content = previewColdEmail(coldEmailDeps, input);
+    const json: ColdEmailPreviewView = content;
+    return { json };
+  } catch (error) {
+    coldEmailErrorHttp(error);
+  }
+});
+
+route('POST', '/api/v1/cold-emails/draft', async ({ req, tenantId, body }) => {
+  await requireEditor(req, tenantId, 'create cold email drafts');
+  const input = coldEmailDraftSchema.parse(await body());
+  try {
+    const content = previewColdEmail(coldEmailDeps, {
+      companyName: input.companyName,
+      demoUrl: input.demoUrl,
+    });
+    const row = await createColdEmailDraft(coldEmailDeps, {
+      tenantId,
+      leadId: input.leadId,
+      companyName: input.companyName,
+      toEmail: input.toEmail,
+      demoUrl: input.demoUrl,
+      subject: input.subject ?? content.subject,
+    });
+    return { status: 201, json: coldEmailView(row) };
+  } catch (error) {
+    coldEmailErrorHttp(error);
+  }
+});
+
+route('POST', '/api/v1/cold-emails/send', async ({ req, tenantId, body }) => {
+  await requireEditor(req, tenantId, 'send cold emails');
+  const input = coldEmailSendSchema.parse(await body());
+  try {
+    const row = await sendColdEmailNow(coldEmailDeps, {
+      tenantId,
+      leadId: input.leadId,
+      companyName: input.companyName,
+      toEmail: input.toEmail ?? input.deliverTo,
+      deliverTo: input.deliverTo,
+      demoUrl: input.demoUrl,
+      note: input.note,
+      subject: input.subject,
+    });
+    logger.info('cold_email.sent', {
+      tenantId,
+      id: row.id,
+      deliverTo: row.deliveredTo,
+      intended: row.toEmail,
+      status: row.status,
+    });
+    return { status: 201, json: coldEmailView(row) };
+  } catch (error) {
+    coldEmailErrorHttp(error);
+  }
+});
 
 // Console MonCha settings page: any signed-in user can read connection and slots.
 route('GET', '/api/v1/moncha', async ({ req, tenantId }) => {

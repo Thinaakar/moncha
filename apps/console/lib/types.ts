@@ -354,3 +354,68 @@ export type SystemHealth = {
   tenantId: string;
   countries: string[];
 };
+
+export type ColdEmailStatus = 'draft' | 'queued' | 'sent' | 'failed' | 'suppressed';
+
+export type ColdEmail = {
+  id: string;
+  tenantId: string;
+  leadId: string | null;
+  companyName: string;
+  toEmail: string;
+  deliveredTo: string | null;
+  demoUrl: string | null;
+  subject: string;
+  status: ColdEmailStatus;
+  resendId: string | null;
+  error: string | null;
+  sentAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ColdEmailCandidate = {
+  leadId: string;
+  companyId: string;
+  companyName: string;
+  companyEmail: string | null;
+  domain: string | null;
+  demoUrl: string | null;
+  botTrained: boolean;
+  lastColdEmail: {
+    id: string;
+    status: ColdEmailStatus;
+    sentAt: string | null;
+    createdAt: string;
+  } | null;
+};
+
+export type ColdEmailGate = {
+  sendingEnabled: boolean;
+  allowlist: string[];
+  allowlistOpen: boolean;
+  resendConfigured: boolean;
+  from: string;
+};
+
+export type ColdEmailPreview = {
+  subject: string;
+  text: string;
+  html: string;
+};
+
+export type ColdEmailPage = {
+  items: ColdEmail[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+};
+
+export type ColdEmailCandidatePage = {
+  items: ColdEmailCandidate[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+};

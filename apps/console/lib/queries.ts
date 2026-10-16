@@ -35,6 +35,12 @@ import type {
   SourceImport,
   SystemHealth,
   WorkerHealth,
+  ColdEmailGate,
+  ColdEmailPage,
+  ColdEmailCandidatePage,
+  ColdEmailPreview,
+  ColdEmail,
+  ColdEmailStatus,
 } from '@/lib/types';
 
 export const qk = {
@@ -64,6 +70,9 @@ export const qk = {
   costSummary: (days: number | null) => ['costs', 'summary', days] as const,
   costWebsites: (q: object) => ['costs', 'websites', q] as const,
   costWebsite: (leadId: string) => ['costs', 'website', leadId] as const,
+  coldEmailGate: ['cold-emails', 'gate'] as const,
+  coldEmails: (q: object) => ['cold-emails', 'list', q] as const,
+  coldEmailCandidates: (q: object) => ['cold-emails', 'candidates', q] as const,
 };
 
 const isTerminal = (status: JobStatus | undefined) => status === 'done' || status === 'failed';
@@ -397,6 +406,74 @@ export function useCostWebsite(leadId: string | null | undefined) {
     queryFn: () => api<SiteCostWebsiteDetail>(`costs/websites/${leadId}`),
     enabled: Boolean(leadId),
     retry: (count, error) => !(error instanceof ApiError && error.status === 404) && count < 2,
+  });
+}
+
+export function useColdEmailGate() {
+  return useQuery({
+    queryKey: qk.coldEmailGate,
+    queryFn: () => api<ColdEmailGate>('cold-emails/gate'),
+    refetchInterval: 60_000,
+  });
+}
+
+export function useColdEmails(params: { page: number; pageSize: number; status?: ColdEmailStatus }) {
+  return useQuery({
+    queryKey: qk.coldEmails(params),
+    queryFn: () => api<ColdEmailPage>('cold-emails', { query: params }),
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function useColdEmailCandidates(params: { page: number; pageSize: number; readyOnly?: boolean }) {
+  return useQuery({
+    queryKey: qk.coldEmailCandidates(params),
+    queryFn: () =>
+      api<ColdEmailCandidatePage>('cold-emails/candidates', {
+        query: { ...params, readyOnly: params.readyOnly ? 'true' : undefined },
+      }),
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function usePreviewColdEmail() {
+  return useMutation({
+    mutationFn: (input: { companyName: string; demoUrl: string; note?: string }) =>
+      api<ColdEmailPreview>('cold-emails/preview', { method: 'POST', body: input }),
+  });
+}
+
+export function useCreateColdEmailDraft() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (input: {
+      leadId?: string;
+      companyName: string;
+      toEmail: string;
+      demoUrl: string;
+      subject?: string;
+    }) => api<ColdEmail>('cold-emails/draft', { method: 'POST', body: input }),
+    onSuccess: async () => {
+      await client.invalidateQueries({ queryKey: ['cold-emails'] });
+    },
+  });
+}
+
+export function useSendColdEmail() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (input: {
+      leadId?: string;
+      companyName: string;
+      toEmail?: string;
+      deliverTo: string;
+      demoUrl: string;
+      note?: string;
+      subject?: string;
+    }) => api<ColdEmail>('cold-emails/send', { method: 'POST', body: input }),
+    onSuccess: async () => {
+      await client.invalidateQueries({ queryKey: ['cold-emails'] });
+    },
   });
 }
 

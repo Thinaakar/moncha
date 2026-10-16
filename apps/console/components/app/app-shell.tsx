@@ -14,6 +14,7 @@ import {
   LayoutDashboard,
   ListChecks,
   LogOut,
+  Mail,
   Menu,
   Monitor,
   Moon,
@@ -64,6 +65,10 @@ const NAV: Array<{ title: string; items: NavItem[] }> = [
       { href: '/reviews', label: 'Review queue', icon: ClipboardCheck, badge: 'reviews' },
       { href: '/sites', label: 'Website copies', icon: ScanEye, badge: 'copies' },
     ],
+  },
+  {
+    title: 'Outreach',
+    items: [{ href: '/outreach', label: 'Cold email', icon: Mail }],
   },
   {
     title: 'Discovery',

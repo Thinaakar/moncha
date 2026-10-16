@@ -10,6 +10,7 @@
     "bots:backfill": "tsx src/bot-backfill.ts",
     "domains:backfill": "tsx src/domains-backfill.ts",
     "train:kick": "tsx src/train-kick.ts",
+    "cold-email:demo": "tsx src/cold-email-demo.ts",
     "api": "tsx src/api.ts",
     "cf:typecheck": "tsc -p cloudflare/tsconfig.json",
     "cf:check": "wrangler deploy --dry-run --containers-rollout=none",
