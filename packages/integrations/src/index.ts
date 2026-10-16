@@ -48,6 +48,7 @@ export {
   type MonchaBotCreateInput,
   type MonchaCreatedBot,
   type MonchaDiscovered,
+  type MonchaDomains,
   type MonchaInstall,
   type MonchaKnowledgeDocument,
   type MonchaWidget,

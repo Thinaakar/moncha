@@ -420,3 +420,47 @@ export async function requestSiteChatbotInstall(
   if (result !== 'queued') throw new SiteChatbotRequestError(result);
   return { queued: true };
 }
+
+/** Bare hostname from a live Worker URL for PUT /bots/:botId/domains (6.2). */
+export function hostnameFromWorkerUrl(url: string): string | null {
+  try {
+    const host = new URL(url).hostname.trim().toLowerCase();
+    return host || null;
+  } catch {
+    return null;
+  }
+}
+
+export type ChatbotDomainsDeps = {
+  bots: LeadBotRepo;
+  api: Pick<MonchaWidgetApi, 'updateDomains'>;
+  logger: Logger;
+  now?: () => Date;
+};
+
+/**
+ * After a Worker deploy: PUT /bots/:botId/domains with the live hostname so the widget only runs on that URL.
+ * Returns null when the lead has no created bot or the URL has no hostname; throws MonCha API errors for the caller.
+ */
+export async function setChatbotDomainsForLiveUrl(
+  deps: ChatbotDomainsDeps,
+  input: { tenantId: string; leadId: string; workerUrl: string; signal?: AbortSignal },
+): Promise<{ domains: string[] } | null> {
+  const host = hostnameFromWorkerUrl(input.workerUrl);
+  if (!host) return null;
+  const bot = await deps.bots.getForLead(input.tenantId, input.leadId);
+  if (!bot?.chatbotId || bot.status !== 'created') return null;
+
+  const result = await deps.api.updateDomains({ botId: bot.chatbotId, domains: [host], signal: input.signal });
+  await deps.bots.update(input.tenantId, bot.id, {
+    domains: result.domains,
+    domainsConfiguredAt: (deps.now ?? (() => new Date()))(),
+  });
+  deps.logger.info('site_chatbot_domains_set', {
+    tenantId: input.tenantId,
+    leadId: input.leadId,
+    chatbotId: bot.chatbotId,
+    domains: result.domains,
+  });
+  return { domains: result.domains };
+}

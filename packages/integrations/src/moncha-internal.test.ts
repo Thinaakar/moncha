@@ -292,6 +292,26 @@ describe('MonchaInternalClient widget and install', () => {
     const bad = client(() => json({ chatbotId: BOT }));
     expect(await caught(bad.api.install({ botId: BOT }))).toMatchObject({ code: 'unexpected_response' });
   });
+
+  it('reads and replaces the allowed domains list', async () => {
+    const body = { domains: ['preview.example.com'] };
+    const read = client(() => json(body));
+    expect(await read.api.domains({ botId: BOT })).toEqual({ domains: body.domains, response: body });
+    expect(read.calls[0]!.url).toBe(`${MONCHA_INTERNAL_UAT_URL}/bots/${BOT}/domains`);
+    expect(read.calls[0]!.init.method).toBe('GET');
+
+    const next = { domains: ['acme.example.workers.dev'] };
+    const write = client(() => json(next));
+    expect(await write.api.updateDomains({ botId: BOT, domains: next.domains })).toEqual({
+      domains: next.domains,
+      response: next,
+    });
+    expect(write.calls[0]!.init.method).toBe('PUT');
+    expect(JSON.parse(write.calls[0]!.init.body as string)).toEqual(next);
+
+    const bad = client(() => json({}));
+    expect(await caught(bad.api.domains({ botId: BOT }))).toMatchObject({ code: 'unexpected_response' });
+  });
 });
 
 describe('MonchaInternalClient.check', () => {

@@ -79,6 +79,8 @@ function mapBot(row: RowWithCompany): LeadBotItem {
     widgetConfig: bot.widgetConfig ?? null,
     installValues: bot.installValues ?? null,
     widgetConfiguredAt: bot.widgetConfiguredAt,
+    domains: Array.isArray(bot.domains) ? (bot.domains as string[]) : null,
+    domainsConfiguredAt: bot.domainsConfiguredAt,
     createdAt: bot.createdAt,
     updatedAt: bot.updatedAt,
     company: { ...company, websiteUrl: websiteUrl(lead.company) },
@@ -222,7 +224,17 @@ export class PrismaLeadBotRepository implements LeadBotRepo {
   }
 
   async update(tenantId: string, id: string, patch: LeadBotPatch): Promise<LeadBotItem | null> {
-    const { config, discoveredUrls, trainingPayload, trainingResult, widgetConfigBefore, widgetConfig, installValues, ...rest } = patch;
+    const {
+      config,
+      discoveredUrls,
+      trainingPayload,
+      trainingResult,
+      widgetConfigBefore,
+      widgetConfig,
+      installValues,
+      domains,
+      ...rest
+    } = patch;
     const row = await this.db.$transaction(async (tx) => {
       const { count } = await tx.leadBot.updateMany({
         where: { id, tenantId },
@@ -235,6 +247,7 @@ export class PrismaLeadBotRepository implements LeadBotRepo {
           ...(widgetConfigBefore !== undefined ? { widgetConfigBefore: json(widgetConfigBefore) } : {}),
           ...(widgetConfig !== undefined ? { widgetConfig: json(widgetConfig) } : {}),
           ...(installValues !== undefined ? { installValues: json(installValues) } : {}),
+          ...(domains !== undefined ? { domains: json(domains) } : {}),
         },
       });
       if (!count) return null;

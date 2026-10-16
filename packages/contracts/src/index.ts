@@ -574,6 +574,12 @@ export type SiteWorkerDeploy = {
   /** Last Cloudflare error; kept while a retry is waiting. */
   error: string | null;
   deployedAt: string | null;
+  /**
+   * MonCha widget allowed hostnames (PUT domains 6.2) for this lead's bot, filled after deploy.
+   * Older API versions and list endpoints may omit it.
+   */
+  domains?: string[] | null;
+  domainsConfiguredAt?: string | null;
 };
 
 /**
@@ -709,7 +715,7 @@ export type LeadBotKnowledgeView = {
   trainedAt: string | null;
 };
 
-/** The widget of the lead's bot as the website chatbot step set it (GET widget, PUT widget, GET install). */
+/** The widget of the lead's bot as the website chatbot step set it (GET widget, PUT widget, GET install, PUT domains). */
 export type LeadBotWidgetView = {
   /** primaryColor picked from the website's brand colours; every other widget field is kept as it was. */
   primaryColor: string | null;
@@ -720,6 +726,9 @@ export type LeadBotWidgetView = {
   /** GET install response: tenantId, chatbotId, apiUrl, widgetUrl (public values; never the internal key). */
   install: unknown;
   configuredAt: string | null;
+  /** Hostnames from PUT /bots/:botId/domains (6.2), usually the live Worker hostname. Older API versions omit it. */
+  domains?: string[] | null;
+  domainsConfiguredAt?: string | null;
 };
 
 /** A lead's MonCha demo bot (`GET /api/v1/leads/:id/bot`). Created before the lead's website is copied. */

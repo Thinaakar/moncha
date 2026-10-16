@@ -32,6 +32,44 @@ function deployStatus(deploy: SiteWorkerDeploy) {
 
 const host = (url: string) => url.replace(/^https?:\/\//, '').replace(/\/$/, '');
 
+/** MonCha PUT domains (6.2): widget only runs on these hostnames after deploy. */
+function ChatbotDomainRow({
+  liveHost,
+  domains,
+  configuredAt,
+}: {
+  liveHost: string | null;
+  domains: string[] | null | undefined;
+  configuredAt: string | null | undefined;
+}) {
+  const list = domains?.filter(Boolean) ?? [];
+  const locked = list.length > 0;
+  const matches = locked && liveHost ? list.some((d) => d.toLowerCase() === liveHost.toLowerCase()) : false;
+  return (
+    <div className="flex flex-wrap items-start gap-2 rounded-lg border bg-muted/20 px-3 py-2.5 text-sm">
+      <Lock className={cn('mt-0.5 size-3.5 shrink-0', matches ? 'text-success' : 'text-muted-foreground')} />
+      <div className="min-w-0 flex-1">
+        <p className="text-xs font-medium text-muted-foreground">Chatbot allowed domain</p>
+        {locked ? (
+          <p className="mt-0.5 break-all font-mono text-sm font-medium">{list.join(', ')}</p>
+        ) : (
+          <p className="mt-0.5 text-sm text-muted-foreground">Not set yet — set on the next successful deploy</p>
+        )}
+        <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+          {matches ? (
+            <Badge variant="success">Locked to live URL</Badge>
+          ) : locked ? (
+            <Badge variant="warning">Does not match live URL</Badge>
+          ) : (
+            <Badge variant="muted">Pending</Badge>
+          )}
+          {configuredAt && <span title={formatDateTime(configuredAt)}>{formatRelative(configuredAt)}</span>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function DeployStatusBadge({ deploy }: { deploy: SiteWorkerDeploy }) {
   const status = deployStatus(deploy);
   return (
@@ -306,6 +344,14 @@ export function LiveWebsiteCard({ snapshot }: { snapshot: SiteSnapshotDetail }) 
             </div>
           </Tile>
         </div>
+
+        {live && (
+          <ChatbotDomainRow
+            liveHost={url ? host(url) : null}
+            domains={deploy?.domains ?? null}
+            configuredAt={deploy?.domainsConfiguredAt ?? null}
+          />
+        )}
       </CardContent>
 
       {(snapshot.deployConfigured || snapshot.githubConfigured) && (

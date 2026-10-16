@@ -7,8 +7,10 @@ import {
   chatbotEmbed,
   contrastWithWhite,
   embedValues,
+  hostnameFromWorkerUrl,
   injectChatbotEmbed,
   installSiteChatbot,
+  setChatbotDomainsForLiveUrl,
   SITE_CHATBOT_BOT_WAIT_MS,
   WIDGET_DEFAULT_COLOR,
   WIDGET_MIN_CONTRAST,
@@ -145,6 +147,14 @@ function setup(options: { bot?: Partial<LeadBotItem> | null; html?: string | nul
       const values = { ...INSTALL, ...options.install };
       return { ...values, response: values };
     },
+    domains: async () => {
+      calls.push({ method: 'GET domains' });
+      return { domains: [], response: { domains: [] } };
+    },
+    updateDomains: async ({ domains }) => {
+      calls.push({ method: 'PUT domains', config: domains });
+      return { domains, response: { domains } };
+    },
   };
   const deps = {
     snapshots: {
@@ -234,5 +244,40 @@ describe('installSiteChatbot', () => {
     };
     expect(await installSiteChatbot(t.deps, t.snapshot)).toMatchObject({ status: 'paused' });
     expect(t.snapPatches[0]).toMatchObject({ chatbotStatus: 'pending', chatbotAttempts: 0 });
+  });
+});
+
+describe('hostnameFromWorkerUrl', () => {
+  it('returns the bare hostname from a live Worker URL', () => {
+    expect(hostnameFromWorkerUrl('https://ja-edu-sg.vinothjv4-tech.workers.dev')).toBe('ja-edu-sg.vinothjv4-tech.workers.dev');
+    expect(hostnameFromWorkerUrl('https://Example.COM/path')).toBe('example.com');
+    expect(hostnameFromWorkerUrl('not-a-url')).toBeNull();
+  });
+});
+
+describe('setChatbotDomainsForLiveUrl', () => {
+  it('PUTs the Worker hostname and saves it on the lead bot', async () => {
+    const t = setup();
+    const result = await setChatbotDomainsForLiveUrl(
+      { bots: t.deps.bots, api: t.deps.api, logger, now: () => NOW },
+      { tenantId: 't1', leadId: 'lead1', workerUrl: 'https://ja-edu-sg.vinothjv4-tech.workers.dev/' },
+    );
+    expect(result).toEqual({ domains: ['ja-edu-sg.vinothjv4-tech.workers.dev'] });
+    expect(t.calls.at(-1)).toEqual({ method: 'PUT domains', config: ['ja-edu-sg.vinothjv4-tech.workers.dev'] });
+    expect(t.botPatches.at(-1)).toEqual({
+      domains: ['ja-edu-sg.vinothjv4-tech.workers.dev'],
+      domainsConfiguredAt: NOW,
+    });
+  });
+
+  it('skips when there is no created bot', async () => {
+    const t = setup({ bot: null });
+    expect(
+      await setChatbotDomainsForLiveUrl(
+        { bots: t.deps.bots, api: t.deps.api, logger },
+        { tenantId: 't1', leadId: 'lead1', workerUrl: 'https://x.workers.dev' },
+      ),
+    ).toBeNull();
+    expect(t.calls).toEqual([]);
   });
 });

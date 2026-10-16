@@ -1018,6 +1018,8 @@ function leadBotView(bot: LeadBotItem): LeadBotView {
       config: bot.widgetConfig,
       install: bot.installValues,
       configuredAt: bot.widgetConfiguredAt?.toISOString() ?? null,
+      domains: bot.domains,
+      domainsConfiguredAt: bot.domainsConfiguredAt?.toISOString() ?? null,
     },
     createdAt: bot.createdAt.toISOString(),
     updatedAt: bot.updatedAt.toISOString(),
@@ -1133,8 +1135,17 @@ route('GET', '/api/v1/site-snapshots/:id', async ({ tenantId, params }) => {
     const bytes = await store.getBytes(`${snapshot.storagePrefix}manifest.json`);
     if (bytes) manifest = JSON.parse(Buffer.from(bytes).toString('utf8')) as SiteManifest;
   }
+  const summary = siteSummary(snapshot, previewBase);
+  const bot = await leadBots.getForLead(tenantId, snapshot.leadId);
+  if (summary.deploy && bot) {
+    summary.deploy = {
+      ...summary.deploy,
+      domains: bot.domains,
+      domainsConfiguredAt: bot.domainsConfiguredAt?.toISOString() ?? null,
+    };
+  }
   const json: SiteSnapshotDetail = {
-    ...siteSummary(snapshot, previewBase),
+    ...summary,
     brand: snapshot.brand,
     previewBase,
     files: previewBase

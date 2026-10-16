@@ -298,7 +298,17 @@ async function pipelineTick() {
       : undefined,
     deploy: workerDeployer
       ? (snapshot) =>
-          deploySiteSnapshotToWorker({ snapshots: siteSnapshots, store, deployer: workerDeployer, logger }, snapshot, crawlAbort.signal)
+          deploySiteSnapshotToWorker(
+            {
+              snapshots: siteSnapshots,
+              store,
+              deployer: workerDeployer,
+              logger,
+              domains: monchaBots ? { bots: leadBots, api: monchaBots, logger } : undefined,
+            },
+            snapshot,
+            crawlAbort.signal,
+          )
       : undefined,
     queuePaused,
     logger,

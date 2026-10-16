@@ -3,6 +3,7 @@
  *   pnpm --filter @moncha/worker exec tsx src/check-moncha-internal.ts
  * Reports which keys are set and which environment the base URL points at, then calls GET /slots (read-only).
  */
+/// <reference types="node" />
 import './env';
 import { createMonchaInternalClientFromEnv } from '@moncha/integrations';
 

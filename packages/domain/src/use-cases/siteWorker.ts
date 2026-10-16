@@ -8,6 +8,7 @@ import {
   type SiteWorkerDeployer,
   type SiteWorkerFile,
 } from '../ports';
+import { type ChatbotDomainsDeps, setChatbotDomainsForLiveUrl } from './siteChatbot';
 import { readSiteFiles, readSiteManifest, retryAfterError, siteName } from './siteGithub';
 
 export const SITE_WORKER_MAX_ATTEMPTS = 3;
@@ -33,6 +34,11 @@ export type SiteWorkerDeployDeps = {
   deployer: SiteWorkerDeployer;
   logger: Logger;
   now?: () => Date;
+  /**
+   * After a successful deploy, lock the lead's MonCha widget to this Worker's hostname (PUT domains 6.2).
+   * Missing when MonCha is not configured; domain failures are logged and do not fail the deploy.
+   */
+  domains?: ChatbotDomainsDeps;
 };
 
 /** How long a deploy waits before checking again whether the Cloudflare account has room for another Worker. */
@@ -88,6 +94,27 @@ export async function deploySiteSnapshotToWorker(
       workerDeployedAt: now(),
     });
     deps.logger.info('site_worker_deployed', { snapshotId, tenantId, name: result.name, url: result.url, files: files.length });
+
+    if (deps.domains) {
+      try {
+        await setChatbotDomainsForLiveUrl(deps.domains, {
+          tenantId,
+          leadId: snapshot.leadId,
+          workerUrl: result.url,
+          signal,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        deps.logger.error('site_chatbot_domains_failed', {
+          snapshotId,
+          tenantId,
+          leadId: snapshot.leadId,
+          url: result.url,
+          error: message.slice(0, 300),
+        });
+      }
+    }
+
     return { status: 'deployed', snapshotId, name: result.name, url: result.url, files: files.length };
   } catch (error) {
     const { code, text, retryable } = errorText(error);

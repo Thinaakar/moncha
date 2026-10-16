@@ -64,6 +64,8 @@ function botFixture(over: Partial<LeadBotItem> = {}): LeadBotItem {
     widgetConfig: null,
     installValues: null,
     widgetConfiguredAt: null,
+    domains: null,
+    domainsConfiguredAt: null,
     createdAt: NOW,
     updatedAt: NOW,
     company: { id: 'c1', name: 'Acme Dental Clinic', domain: 'acme.sg', websiteUrl: 'https://www.acme.sg/' },

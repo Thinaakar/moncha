@@ -58,6 +58,9 @@ export type LeadBotRecord = {
   /** GET install response (tenantId, chatbotId, apiUrl, widgetUrl). */
   installValues: unknown;
   widgetConfiguredAt: Date | null;
+  /** Hostnames from PUT /bots/:botId/domains (6.2), usually the live Worker hostname. */
+  domains: string[] | null;
+  domainsConfiguredAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -103,6 +106,8 @@ export type LeadBotPatch = Partial<
     | 'widgetConfig'
     | 'installValues'
     | 'widgetConfiguredAt'
+    | 'domains'
+    | 'domainsConfiguredAt'
   >
 >;
 
@@ -203,9 +208,11 @@ export type WidgetConfig = Record<string, unknown>;
 /** GET install: the public values of the embed. `widgetUrl` is null until MonCha configures it. */
 export type MonchaInstallValues = { tenantId: string; chatbotId: string; apiUrl: string; widgetUrl: string | null };
 
-/** MonCha internal lead API, as the website chatbot step uses it (5.1, 5.2, 6.3). */
+/** MonCha internal lead API, as the website chatbot step uses it (5.1, 5.2, 6.1, 6.2, 6.3). */
 export interface MonchaWidgetApi {
   widget(input: { botId: string; signal?: AbortSignal }): Promise<{ config: WidgetConfig; response: unknown }>;
   updateWidget(input: { botId: string; config: WidgetConfig; signal?: AbortSignal }): Promise<{ config: WidgetConfig; response: unknown }>;
   install(input: { botId: string; signal?: AbortSignal }): Promise<MonchaInstallValues & { response: unknown }>;
+  domains(input: { botId: string; signal?: AbortSignal }): Promise<{ domains: string[]; response: unknown }>;
+  updateDomains(input: { botId: string; domains: string[]; signal?: AbortSignal }): Promise<{ domains: string[]; response: unknown }>;
 }

@@ -97,6 +97,10 @@ const installSchema = z.object({
   widgetUrl: z.string().nullish(),
 });
 
+const domainsSchema = z.object({
+  domains: z.array(z.string()),
+});
+
 /** Widget configuration as GET/PUT /bots/:botId/widget return it (saved values merged with defaults). */
 export type MonchaWidgetConfig = Record<string, unknown>;
 
@@ -104,6 +108,9 @@ export type MonchaWidget = { config: MonchaWidgetConfig; response: unknown };
 
 /** GET /bots/:botId/install: the public values the embed needs. `widgetUrl` is null until MonCha configures it. */
 export type MonchaInstall = { tenantId: string; chatbotId: string; apiUrl: string; widgetUrl: string | null; response: unknown };
+
+/** GET/PUT /bots/:botId/domains: hostnames where the widget is allowed to run. */
+export type MonchaDomains = { domains: string[]; response: unknown };
 
 export type MonchaKnowledgeDocument = { title: string; url: string; source_type: 'url' };
 
@@ -405,6 +412,28 @@ export class MonchaInternalClient {
     if (!parsed.success) throw new MonchaInternalError('unexpected_response', 'GET install returned no tenantId, chatbotId or apiUrl', 200);
     const { tenantId, chatbotId, apiUrl, widgetUrl } = parsed.data;
     return { tenantId, chatbotId, apiUrl, widgetUrl: widgetUrl?.trim() || null, response };
+  }
+
+  /** `GET /bots/:botId/domains`: hostnames where the widget is allowed to run (6.1). */
+  async domains(input: { botId: string; signal?: AbortSignal }): Promise<MonchaDomains> {
+    const response = await this.request<unknown>('GET', `/bots/${encodeURIComponent(input.botId)}/domains`, { signal: input.signal });
+    const parsed = domainsSchema.safeParse(unwrap(response));
+    if (!parsed.success) throw new MonchaInternalError('unexpected_response', 'GET domains returned no domains list', 200);
+    return { domains: parsed.data.domains, response };
+  }
+
+  /**
+   * `PUT /bots/:botId/domains`: replaces the allowed hostnames (6.2). Prefer bare hostnames; a nonempty list enables
+   * the restriction (subdomains of listed hosts are also allowed). `[]` disables the restriction.
+   */
+  async updateDomains(input: { botId: string; domains: string[]; signal?: AbortSignal }): Promise<MonchaDomains> {
+    const response = await this.request<unknown>('PUT', `/bots/${encodeURIComponent(input.botId)}/domains`, {
+      body: { domains: input.domains },
+      signal: input.signal,
+    });
+    const parsed = domainsSchema.safeParse(unwrap(response));
+    if (!parsed.success) throw new MonchaInternalError('unexpected_response', 'PUT domains returned no domains list', 200);
+    return { domains: parsed.data.domains, response };
   }
 
   /** Read-only: proves the key, environment and enterprise prerequisites with `GET /slots`. */
