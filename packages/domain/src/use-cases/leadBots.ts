@@ -38,6 +38,11 @@ export const LEAD_BOT_TITLE_MAX = 300;
 export const LEAD_BOT_POLL_MIN_MS = 5_000;
 /** A failed poll (network, 5xx) is tried again after this long, without using up a try. */
 export const LEAD_BOT_POLL_RETRY_MS = 60_000;
+/**
+ * A training MonCha still reports as `processing` this long after submission, with some pages ready, counts as trained:
+ * the bot can answer from those pages, and a few stuck documents must not hold the chatbot back forever.
+ */
+export const LEAD_BOT_TRAINING_MAX_WAIT_MS = 6 * 60 * 60_000;
 /** Written to `error` when the bot is trained. */
 export const LEAD_BOT_TRAINED = 'success';
 
@@ -347,9 +352,19 @@ export async function trainLeadBot(deps: LeadBotDeps, bot: LeadBotItem, signal?:
     try {
       const t = await deps.api.training({ botId: chatbotId, trainingId: bot.trainingId, signal });
       const ready = t.ready ?? 0;
-      if (t.status === 'completed' || (t.status === 'partial_failure' && ready > 0)) {
+      const waitedTooLong =
+        t.status === 'processing' &&
+        ready > 0 &&
+        bot.trainingSubmittedAt !== null &&
+        now().getTime() - bot.trainingSubmittedAt.getTime() >= LEAD_BOT_TRAINING_MAX_WAIT_MS;
+      if (t.status === 'completed' || (t.status === 'partial_failure' && ready > 0) || waitedTooLong) {
         const failed = t.failed ?? 0;
-        const error = failed > 0 ? `${LEAD_BOT_TRAINED}: ${failed} of ${t.total ?? ready + failed} pages failed to train` : LEAD_BOT_TRAINED;
+        const total = t.total ?? ready + failed;
+        const error = waitedTooLong
+          ? `${LEAD_BOT_TRAINED}: ${ready} of ${total} pages trained; MonCha was still processing the rest after ${LEAD_BOT_TRAINING_MAX_WAIT_MS / 3_600_000}h`
+          : failed > 0
+            ? `${LEAD_BOT_TRAINED}: ${failed} of ${total} pages failed to train`
+            : LEAD_BOT_TRAINED;
         await deps.bots.update(tenantId, botId, {
           knowledgeStatus: 'trained',
           knowledgeNextAt: null,
@@ -428,7 +443,9 @@ export async function trainLeadBot(deps: LeadBotDeps, bot: LeadBotItem, signal?:
     if (e.code === 'aborted' || signal?.aborted) return giveBack(text, now());
     if (isAccountError(e)) return giveBack(text, at(LEAD_BOT_ACCOUNT_PAUSE_MS));
     if (e.status === 429) return giveBack(text, e.retryAt ?? at(LEAD_BOT_BACKOFF_MS[0]!));
-    if (e.code === 'discovery_unavailable') return giveBack(text, at(LEAD_BOT_ACCOUNT_PAUSE_MS));
+    // MonCha also answers this for one website it cannot crawl, so it is this bot's try. Discovery being down for
+    // everyone shows as several bots in a row; the worker then holds new discoveries (DISCOVERY_OUTAGE_STREAK).
+    if (e.code === 'discovery_unavailable') return failTry(text);
     if (KNOWLEDGE_FINAL_CODES.has(e.code)) return failTry(text, { final: true });
     // The saved key no longer matches its body: start a new request (new discovery and key).
     return failTry(text, { newRequest: e.code === 'idempotency_conflict' });

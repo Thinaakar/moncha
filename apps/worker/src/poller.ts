@@ -107,8 +107,16 @@ const monchaBots = monchaInternalClient();
 const leadBots = new PrismaLeadBotRepository(prisma);
 /** Account problems, rate limits and full tiers pause every bot until this time. */
 let botsPausedUntil = 0;
-/** Same for bot training (also while MonCha's discovery is down). */
+/** Same for bot training. */
 let trainingPausedUntil = 0;
+/**
+ * MonCha answers `discovery_unavailable` both for one website it cannot crawl and when discovery is down. This many
+ * bots in a row means it is down: new discoveries wait, while submitted trainings keep being polled.
+ */
+const DISCOVERY_OUTAGE_STREAK = 3;
+const DISCOVERY_OUTAGE_WAIT_MS = 15 * 60_000;
+let discoveryRefusals = 0;
+let discoveryPausedUntil = 0;
 /** Cached operator drain pause; refreshed at most once per second. */
 let queuePausedCache: { at: number; paused: boolean } = { at: 0, paused: false };
 
@@ -351,13 +359,28 @@ async function leadBotTick() {
  */
 async function leadBotTrainTick() {
   if (!monchaBots || crawlAbort.signal.aborted || Date.now() < trainingPausedUntil) return;
-  const queuePaused = await isQueuePaused();
+  // Draining the queue and a discovery outage both mean: no new discoveries, only in-flight training.
+  const queuePaused = (await isQueuePaused()) || Date.now() < discoveryPausedUntil;
   const tick = await withDbRetry(() =>
     runLeadBotTrainTick({ bots: leadBots, api: monchaBots, logger }, { signal: crawlAbort.signal, queuePaused }),
   );
   if (tick.action === 'ran') {
-    if (tick.outcome.status === 'paused') trainingPausedUntil = tick.outcome.until.getTime();
-    if (tick.outcome.status !== 'training') logger.info('lead_bot_train_tick', { ...tick.outcome });
+    const outcome = tick.outcome;
+    if (outcome.status === 'paused') trainingPausedUntil = outcome.until.getTime();
+    if (outcome.status !== 'training') logger.info('lead_bot_train_tick', { ...outcome });
+    if ((outcome.status === 'retry' || outcome.status === 'failed') && outcome.error.startsWith('discovery_unavailable')) {
+      discoveryRefusals += 1;
+      if (discoveryRefusals >= DISCOVERY_OUTAGE_STREAK) {
+        discoveryPausedUntil = Date.now() + DISCOVERY_OUTAGE_WAIT_MS;
+        discoveryRefusals = 0;
+        logger.error('lead_bot_discovery_outage', {
+          refusals: DISCOVERY_OUTAGE_STREAK,
+          until: new Date(discoveryPausedUntil).toISOString(),
+        });
+      }
+    } else if (outcome.status === 'submitted') {
+      discoveryRefusals = 0;
+    }
   }
 }
 

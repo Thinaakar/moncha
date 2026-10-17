@@ -6,6 +6,7 @@ import {
   createLeadBot,
   LEAD_BOT_ACCOUNT_PAUSE_MS,
   LEAD_BOT_NO_SLOTS_WAIT_MS,
+  LEAD_BOT_TRAINING_MAX_WAIT_MS,
   pageTitle,
   pickBotTier,
   runLeadBotTick,
@@ -96,6 +97,7 @@ function fakeRepo(initial: LeadBotItem, takenNames: string[] = []) {
       return bot;
     },
     getForLead: async () => bot,
+    linksByChatbotIds: async () => [],
     list: async () => ({
       items: [bot],
       total: 1,
@@ -402,7 +404,7 @@ describe('trainLeadBot', () => {
     expect(none.current().error).toMatch(/^no_website/);
   });
 
-  it('pauses without using a try on account errors and when discovery is down', async () => {
+  it('pauses without using a try on account errors', async () => {
     const account = fakeRepo(trainFixture());
     const out1 = await trainLeadBot(
       deps(account.repo, fakeApi({ discover: () => Promise.reject(apiError('vendor_subscription_required', 402)) }).api),
@@ -411,9 +413,40 @@ describe('trainLeadBot', () => {
     expect(out1.status).toBe('paused');
     expect(account.current()).toMatchObject({ knowledgeStatus: 'pending', knowledgeAttempts: 0 });
     expect(account.current().knowledgeNextAt!.getTime()).toBe(NOW.getTime() + LEAD_BOT_ACCOUNT_PAUSE_MS);
+  });
 
-    const down = fakeRepo(trainFixture());
-    const out2 = await trainLeadBot(deps(down.repo, fakeApi({ discover: () => Promise.reject(apiError('discovery_unavailable', 503)) }).api), trainFixture());
-    expect(out2.status).toBe('paused');
+  it("uses one of the bot's tries when MonCha cannot discover its website, so other bots keep training", async () => {
+    const refused = () => Promise.reject(apiError('discovery_unavailable', 503));
+    const first = fakeRepo(trainFixture());
+    const out1 = await trainLeadBot(deps(first.repo, fakeApi({ discover: refused }).api), trainFixture());
+    expect(out1).toMatchObject({ status: 'retry', error: expect.stringMatching(/^discovery_unavailable/) });
+    expect(first.current()).toMatchObject({ knowledgeStatus: 'pending', knowledgeAttempts: 1 });
+
+    const last = trainFixture({ knowledgeAttempts: 3 });
+    const third = fakeRepo(last);
+    expect((await trainLeadBot(deps(third.repo, fakeApi({ discover: refused }).api), last)).status).toBe('failed');
+    expect(third.current().knowledgeStatus).toBe('failed');
+  });
+
+  it('counts a training MonCha leaves processing for 6 hours as trained when pages are ready', async () => {
+    const stuck = fakeRepo(trainFixture());
+    const old = trainFixture({
+      knowledgeStatus: 'training',
+      trainingId: 'tr-1',
+      trainingSubmittedAt: new Date(NOW.getTime() - LEAD_BOT_TRAINING_MAX_WAIT_MS),
+    });
+    const processing = () => ({ status: 'processing', total: 100, ready: 98, failed: 0 });
+    expect((await trainLeadBot(deps(stuck.repo, fakeApi({ training: processing }).api), old)).status).toBe('trained');
+    expect(stuck.current()).toMatchObject({
+      knowledgeStatus: 'trained',
+      error: 'success: 98 of 100 pages trained; MonCha was still processing the rest after 6h',
+    });
+
+    const recent = trainFixture({ knowledgeStatus: 'training', trainingId: 'tr-1', trainingSubmittedAt: NOW });
+    const fresh = fakeRepo(recent);
+    expect((await trainLeadBot(deps(fresh.repo, fakeApi({ training: processing }).api), recent)).status).toBe('training');
+    const nothingReady = fakeRepo(old);
+    const none = () => ({ status: 'processing', total: 100, ready: 0, failed: 0 });
+    expect((await trainLeadBot(deps(nothingReady.repo, fakeApi({ training: none }).api), old)).status).toBe('training');
   });
 });
