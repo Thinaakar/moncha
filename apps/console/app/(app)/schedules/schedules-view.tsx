@@ -149,7 +149,7 @@ export function SchedulesView() {
   return (
     <div className="space-y-8">
       <PageHeader
-        title="Schedules"
+        title="Lead schedule"
         description="Daily country crawls at a fixed local time. Each run spends a capped number of API calls and picks up where the last one stopped."
         actions={
           canEdit && (

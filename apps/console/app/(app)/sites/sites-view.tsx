@@ -225,10 +225,17 @@ function CopiesPanel() {
                         >
                           {s.company?.name ?? 'Unknown company'}
                         </Link>
-                        <span className="mt-0.5 flex items-center gap-1 truncate text-xs text-muted-foreground">
+                        <a
+                          href={s.finalUrl ?? s.sourceUrl}
+                          target="_blank"
+                          rel="noreferrer noopener"
+                          onClick={(e) => e.stopPropagation()}
+                          className="mt-0.5 inline-flex max-w-full items-center gap-1 truncate text-xs text-muted-foreground hover:text-primary"
+                        >
                           <Globe className="size-3 shrink-0" />
-                          <span className="truncate">{(s.finalUrl ?? s.sourceUrl).replace(/^https?:\/\//, '')}</span>
-                        </span>
+                          <span className="truncate">{(s.finalUrl ?? s.sourceUrl).replace(/^https?:\/\//, '').replace(/\/$/, '')}</span>
+                          <ExternalLink className="size-3 shrink-0 opacity-60" />
+                        </a>
                       </TableCell>
                       <TableCell>
                         <OriginBadge origin={s.origin} />
