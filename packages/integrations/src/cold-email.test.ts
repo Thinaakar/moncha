@@ -5,6 +5,7 @@ import {
   coldEmailSendingEnabled,
   isColdEmailRecipientAllowed,
   parseColdEmailAllowlist,
+  shortCompanyName,
 } from './cold-email';
 
 describe('coldEmailContent', () => {
@@ -14,10 +15,32 @@ describe('coldEmailContent', () => {
       demoUrl: 'https://acme.example.workers.dev/?x=1&y=2',
     });
     expect(subject).toContain('Acme <b>Co</b>');
-    expect(html).toContain('Hi Acme &lt;b&gt;Co&lt;/b&gt;,');
+    expect(html).toContain('Hi Acme &lt;b&gt;Co&lt;/b&gt; team,');
     expect(html).toContain('https://acme.example.workers.dev/?x=1&amp;y=2');
     expect(html).toContain('Open demo');
-    expect(text).toContain('Grounded answers');
+    expect(text).toContain('Accurate answers');
+  });
+
+  it('shows "Click to view demo:" with the live demo URL as a link before the button', () => {
+    const url = 'https://earthinterior-sg.vinothjv4-tech.workers.dev';
+    const { html, text } = coldEmailContent({ companyName: 'Earth Interior Design', demoUrl: url });
+    const label = html.indexOf('Click to view demo:');
+    const link = html.indexOf(`<a href="${url}" style="color:#2563eb;text-decoration:underline">${url}</a>`);
+    const button = html.indexOf('>Open demo</a>');
+    expect(label).toBeGreaterThan(0);
+    expect(link).toBeGreaterThan(label);
+    expect(button).toBeGreaterThan(link);
+    expect(text).toContain(`Click to view demo:\n${url}`);
+    expect(html).not.toContain('Fair quotas');
+  });
+
+  it('greets the business by its short name', () => {
+    expect(shortCompanyName('Earth Interior Design Pte Ltd')).toBe('Earth Interior Design');
+    expect(shortCompanyName('Pepper Kitchen - Causeway Point')).toBe('Pepper Kitchen');
+    expect(shortCompanyName('Homus Singapore @ T-Space (Showroom)')).toBe('Homus Singapore');
+    const { html, subject } = coldEmailContent({ companyName: 'Earth Interior Design Pte Ltd', demoUrl: 'https://x.example' });
+    expect(html).toContain('Hi Earth Interior Design team,');
+    expect(subject).toBe('Your AI support assistant demo for Earth Interior Design');
   });
 
   it('shows the MonCha favicon PNG in the header instead of a letter', () => {

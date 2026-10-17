@@ -15,44 +15,60 @@ export const COLD_EMAIL_LOGO_URL = 'https://moncha-console.vinothjv4-tech.worker
 const escapeHtml = (text: string) =>
   text.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
-const FEATURES: Array<{ label: string; value: string }> = [
-  { label: 'Grounded answers', value: 'Only from your knowledge base, with sources' },
-  { label: 'Fair quotas', value: 'One message = one answer — questions are free' },
-  { label: 'Independent bots', value: 'Own knowledge, design, and embed per bot' },
+/** What the visitor-facing assistant does, in the business owner's terms. */
+const BENEFITS: Array<{ title: string; text: string }> = [
+  { title: 'Accurate answers', text: 'Replies only from your own website content and shows where each answer comes from.' },
+  { title: 'Available 24/7', text: 'Answers common questions instantly, day or night, in 24 languages.' },
+  { title: 'Leads and bookings', text: 'Captures enquiries and appointment requests and passes them to your team.' },
 ];
 
-const SERVICES =
-  'Website widget · Voice · WhatsApp · Email inbox · Leads · Tickets · Bookings · Analytics';
+const NAME_BREAKS = [' - ', ' – ', ' — ', ' | ', ' @ ', '(', ','];
+const LEGAL_SUFFIX = /\s+(pte\.?\s*ltd\.?|sdn\.?\s*bhd\.?|private\s+limited|ltd\.?|llc|inc\.?)$/i;
+
+/** "Earth Interior Design Pte Ltd" -> "Earth Interior Design"; "Pepper Kitchen - Causeway Point" -> "Pepper Kitchen". */
+export function shortCompanyName(name: string): string {
+  let short = name.trim();
+  for (const sep of NAME_BREAKS) {
+    const at = short.indexOf(sep);
+    if (at > 0) short = short.slice(0, at);
+  }
+  return short.trim().replace(LEGAL_SUFFIX, '').trim() || name.trim();
+}
 
 export function coldEmailContent(input: ColdEmailContentInput) {
-  const name = input.companyName.trim() || 'there';
-  const greeting = `Hi ${name},`;
-  const subject = `We built a MonCha support demo for ${name}`;
-  const note =
-    input.note?.trim() ||
-    'Open the live demo to see how MonCha would answer visitors from your own site content.';
+  const name = shortCompanyName(input.companyName) || 'there';
+  const greeting = name === 'there' ? 'Hi there,' : `Hi ${name} team,`;
+  const subject = `Your AI support assistant demo for ${name}`;
+  const intro = `We have built an AI support assistant for ${name}, trained on the content of your website. It answers your visitors' questions around the clock and hands over to your team whenever it cannot help.`;
+  const note = input.note?.trim();
+  const demoUrl = input.demoUrl;
   const text = [
     greeting,
     '',
-    `We trained a MonCha AI support agent on your website and published a live demo.`,
-    note,
+    intro,
+    ...(note ? ['', note] : []),
     '',
-    'Highlights:',
-    ...FEATURES.map((f) => `- ${f.label}: ${f.value}`),
+    'What your assistant can do:',
+    ...BENEFITS.map((b) => `- ${b.title}: ${b.text}`),
     '',
-    `Services: ${SERVICES}`,
+    'Click to view demo:',
+    demoUrl,
     '',
-    `Open demo: ${input.demoUrl}`,
-    '',
-    '— MonCha',
+    'Best regards,',
+    'The MonCha team',
     'https://moncha.co/',
   ].join('\n');
 
-  const rows = FEATURES.map(
-    (f, i) => `
+  const benefits = BENEFITS.map(
+    (b, i) => `
 <tr>
-  <td style="padding:12px 0;${i < FEATURES.length - 1 ? 'border-bottom:1px solid #e5e7eb;' : ''}font-size:14px;color:#4b5563">${escapeHtml(f.label)}</td>
-  <td style="padding:12px 0;${i < FEATURES.length - 1 ? 'border-bottom:1px solid #e5e7eb;' : ''}font-size:14px;color:#111827;font-weight:600;text-align:right">${escapeHtml(f.value)}</td>
+  <td width="28" style="width:28px;padding:${i ? '14px' : '0'} 0 0;vertical-align:top">
+    <div style="width:20px;height:20px;border-radius:10px;background:#e8f0fe;color:#2563eb;font-size:12px;font-weight:700;line-height:20px;text-align:center">&#10003;</div>
+  </td>
+  <td style="padding:${i ? '14px' : '0'} 0 0;vertical-align:top">
+    <p style="margin:0;font-size:15px;line-height:20px;font-weight:600;color:#0f172a">${escapeHtml(b.title)}</p>
+    <p style="margin:2px 0 0;font-size:14px;line-height:1.5;color:#475569">${escapeHtml(b.text)}</p>
+  </td>
 </tr>`,
   ).join('');
 
@@ -72,22 +88,31 @@ export function coldEmailContent(input: ColdEmailContentInput) {
           </td>
         </tr>
         <tr>
-          <td style="padding:32px 28px 8px">
-            <h1 style="margin:0 0 20px;font-size:24px;line-height:1.3;color:#0f172a;font-weight:700">Boost your support with MonCha AI</h1>
-            <p style="margin:0 0 12px;font-size:15px;line-height:1.5;color:#111827">${escapeHtml(greeting)}</p>
-            <p style="margin:0 0 8px;font-size:15px;line-height:1.5;color:#374151">We trained a MonCha AI support agent on your website and published a live demo for you.</p>
-            <p style="margin:0 0 24px;font-size:13px;line-height:1.5;color:#9ca3af">${escapeHtml(note)}</p>
-            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e5e7eb;border-radius:10px;padding:4px 16px;margin:0 0 16px">
-              ${rows}
+          <td style="padding:36px 32px 8px">
+            <h1 style="margin:0 0 24px;font-size:22px;line-height:1.35;color:#0f172a;font-weight:700">Your AI support assistant is ready</h1>
+            <p style="margin:0 0 14px;font-size:15px;line-height:1.6;color:#0f172a">${escapeHtml(greeting)}</p>
+            <p style="margin:0 0 ${note ? '10px' : '28px'};font-size:15px;line-height:1.6;color:#334155">${escapeHtml(intro)}</p>
+            ${note ? `<p style="margin:0 0 28px;font-size:13px;line-height:1.5;color:#94a3b8">${escapeHtml(note)}</p>` : ''}
+            <p style="margin:0 0 16px;font-size:13px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#64748b">What your assistant can do</p>
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 32px">
+              ${benefits}
             </table>
-            <p style="margin:0 0 28px;font-size:13px;line-height:1.5;color:#6b7280">${escapeHtml(SERVICES)}</p>
-            <a href="${escapeHtml(input.demoUrl)}" style="display:inline-block;padding:12px 22px;background:#2563eb;color:#ffffff;text-decoration:none;border-radius:8px;font-size:14px;font-weight:600">Open demo</a>
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px">
+              <tr><td style="padding:20px 22px">
+                <p style="margin:0 0 6px;font-size:14px;font-weight:600;color:#0f172a">Click to view demo:</p>
+                <p style="margin:0 0 18px;font-size:14px;line-height:1.5;word-break:break-all"><a href="${escapeHtml(demoUrl)}" style="color:#2563eb;text-decoration:underline">${escapeHtml(demoUrl)}</a></p>
+                <a href="${escapeHtml(demoUrl)}" style="display:inline-block;padding:12px 24px;background:#2563eb;color:#ffffff;text-decoration:none;border-radius:8px;font-size:14px;font-weight:600">Open demo</a>
+              </td></tr>
+            </table>
+            <p style="margin:32px 0 0;font-size:15px;line-height:1.6;color:#334155">Best regards,<br><span style="color:#0f172a;font-weight:600">The MonCha team</span></p>
           </td>
         </tr>
         <tr>
-          <td style="padding:24px 28px 32px;font-size:12px;color:#9ca3af">
-            <a href="https://moncha.co/" style="color:#2563eb;text-decoration:none">moncha.co</a>
-            · Docs: <a href="https://moncha.co/docs/" style="color:#2563eb;text-decoration:none">moncha.co/docs</a>
+          <td style="padding:28px 32px 32px">
+            <p style="margin:0;padding-top:20px;border-top:1px solid #e2e8f0;font-size:12px;line-height:1.6;color:#94a3b8">
+              MonCha · AI customer support for your website ·
+              <a href="https://moncha.co/" style="color:#64748b;text-decoration:underline">moncha.co</a>
+            </p>
           </td>
         </tr>
       </table>
