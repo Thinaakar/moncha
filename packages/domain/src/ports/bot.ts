@@ -164,6 +164,11 @@ export interface LeadBotRepo {
   getForLead(tenantId: string, leadId: string): Promise<LeadBotItem | null>;
   /** Our lead bots for these MonCha bot ids (`chatbotId`); ids we never created are simply absent. */
   linksByChatbotIds(tenantId: string, chatbotIds: string[]): Promise<LeadBotLink[]>;
+  /** Saved widget domains of these leads' created bots; leads without a created bot are absent. */
+  domainsForLeads(
+    tenantId: string,
+    leadIds: string[],
+  ): Promise<Array<{ leadId: string; domains: string[] | null; domainsConfiguredAt: Date | null }>>;
   list(
     tenantId: string,
     query: LeadBotListQuery,

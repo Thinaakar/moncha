@@ -10,6 +10,8 @@ import {
   ExternalLink,
   Github,
   Loader2,
+  Lock,
+  MessageCircle,
   RotateCcw,
   Wrench,
   X,
@@ -26,7 +28,7 @@ import { formatDateTime, formatRelative } from '@/lib/format';
 import type { SiteSnapshotDetail, SiteSnapshotSummary } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
-export type StageKey = 'copy' | 'github' | 'deploy';
+export type StageKey = 'copy' | 'chatbot' | 'github' | 'deploy' | 'domain';
 export type StageState = 'done' | 'active' | 'waiting' | 'retrying' | 'failed' | 'not_started';
 
 export type StageError = { code: string; title: string; hint: string | null; detail: string | null; selfHealing: boolean };
@@ -42,6 +44,8 @@ export type Stage = {
   attempts: number | null;
   maxAttempts: number | null;
   error: StageError | null;
+  /** Why a waiting stage waits, when it is not just its turn. */
+  waitingFor?: string;
 };
 
 const host = (url: string) => url.replace(/^https?:\/\//, '').replace(/\/$/, '');
@@ -99,9 +103,71 @@ function deployStage(site: SiteSnapshotSummary): Stage {
   return { ...base, state, at: d.deployedAt, nextAt: state === 'waiting' || state === 'retrying' ? d.nextAt : null, attempts: d.attempts, maxAttempts: d.maxAttempts, error };
 }
 
-export function siteStages(site: SiteSnapshotSummary): Stage[] {
-  return [copyStage(site), githubStage(site), deployStage(site)];
+const WAITING_FOR_BOT = 'waiting_for_bot';
+
+/** MonCha chatbot embed, added to index.html before the GitHub push (once the lead's bot is trained). */
+function chatbotStage(site: SiteSnapshotSummary): Stage {
+  const c = site.chatbot;
+  const base = { key: 'chatbot' as const, label: 'Chatbot', icon: MessageCircle };
+  if (!c) return { ...base, state: 'not_started', at: null, nextAt: null, attempts: null, maxAttempts: null, error: null };
+  const waitingForBot = c.status === 'pending' && Boolean(c.error?.startsWith(WAITING_FOR_BOT));
+  const error = c.status === 'installed' || waitingForBot ? null : publishError(c.error);
+  const state: StageState =
+    c.status === 'installed' ? 'done' : c.status === 'installing' ? 'active' : c.status === 'failed' ? 'failed' : error ? 'retrying' : 'waiting';
+  return {
+    ...base,
+    state,
+    at: c.installedAt,
+    nextAt: state === 'waiting' || state === 'retrying' ? c.nextAt : null,
+    attempts: c.attempts,
+    maxAttempts: c.maxAttempts,
+    error,
+    ...(waitingForBot ? { waitingFor: 'Waiting for the bot to finish training' } : {}),
+  };
 }
+
+const hostname = (url: string) => {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Widget allowed domain, set right after the deploy: done when the bot is locked to this copy's live host. Null when the
+ * API sent no domain information (the lead has no MonCha bot, or an older API).
+ */
+function domainStage(site: SiteSnapshotSummary): Stage | null {
+  const d = site.deploy;
+  if (!d || d.domains === undefined) return null;
+  const base = { key: 'domain' as const, label: 'Domain', icon: Lock, nextAt: null, attempts: null, maxAttempts: null };
+  const live = d.status === 'deployed' && d.url ? hostname(d.url) : null;
+  const list = (d.domains ?? []).map((h) => h.toLowerCase());
+  if (!live) return { ...base, state: 'not_started', at: null, error: null };
+  if (!list.length) return { ...base, state: 'waiting', at: null, error: null };
+  if (list.includes(live)) return { ...base, state: 'done', at: d.domainsConfiguredAt ?? null, error: null };
+  return {
+    ...base,
+    state: 'failed',
+    at: d.domainsConfiguredAt ?? null,
+    error: {
+      code: 'domain_mismatch',
+      title: 'Locked to another domain',
+      hint: `Redeploy to lock the chatbot to ${live}.`,
+      detail: list.join(', '),
+      selfHealing: false,
+    },
+  };
+}
+
+/** Copy → Chatbot → GitHub → Deploy → Domain (the domain step only when the lead has a MonCha bot). */
+export function siteStages(site: SiteSnapshotSummary): Stage[] {
+  const domain = domainStage(site);
+  return [copyStage(site), chatbotStage(site), githubStage(site), deployStage(site), ...(domain ? [domain] : [])];
+}
+
+const stageOf = (stages: Stage[], key: StageKey) => stages.find((s) => s.key === key) ?? null;
 
 export function liveUrlOf(site: SiteSnapshotSummary | null | undefined): string | null {
   return site?.deploy?.status === 'deployed' && site.deploy.url ? site.deploy.url : null;
@@ -111,12 +177,27 @@ type Overall = { label: string; variant: BadgeVariant; icon: LucideIcon | 'live'
 
 /** One label for the whole way from copy to live URL. */
 export function overallStatus(site: SiteSnapshotSummary): Overall {
-  const [copy, github, deploy] = siteStages(site) as [Stage, Stage, Stage];
+  const stages = siteStages(site);
+  const copy = stageOf(stages, 'copy')!;
+  const chatbot = stageOf(stages, 'chatbot')!;
+  const github = stageOf(stages, 'github')!;
+  const deploy = stageOf(stages, 'deploy')!;
+  const domain = stageOf(stages, 'domain');
   if (copy.state === 'failed') return { label: 'Copy failed', variant: 'destructive', icon: X };
   if (copy.state === 'active') return { label: 'Copying', variant: 'info', icon: 'spin' };
   if (copy.state === 'retrying') return { label: 'Copy retrying', variant: 'warning', icon: RotateCcw };
   if (copy.state === 'waiting') return { label: 'Queued', variant: 'muted', icon: Clock };
-  if (deploy.state === 'done') return { label: 'Live', variant: 'success', icon: 'live' };
+  if (deploy.state === 'done') {
+    if (chatbot.state !== 'done') return { label: 'Live · no chatbot yet', variant: 'warning', icon: 'live' };
+    if (domain && domain.state !== 'done') {
+      return { label: domain.state === 'failed' ? 'Live · wrong domain' : 'Live · domain not set', variant: 'warning', icon: 'live' };
+    }
+    return { label: 'Live', variant: 'success', icon: 'live' };
+  }
+  if (chatbot.state === 'failed') return { label: 'Chatbot failed', variant: 'destructive', icon: X };
+  if (chatbot.state === 'active') return { label: 'Adding chatbot', variant: 'info', icon: 'spin' };
+  if (chatbot.state === 'retrying') return { label: 'Chatbot retrying', variant: 'warning', icon: RotateCcw };
+  if (chatbot.state === 'waiting' && chatbot.waitingFor) return { label: 'Waiting for bot training', variant: 'info', icon: Clock };
   for (const stage of [github, deploy]) {
     const name = stage.key === 'github' ? 'GitHub push' : 'Deploy';
     if (stage.state === 'failed') return { label: `${name} failed`, variant: 'destructive', icon: X };
@@ -201,7 +282,7 @@ function nextStep(stage: Stage): string | null {
   return null;
 }
 
-/** Status column of a website copy job: Copy → GitHub → Deploy dots, one overall label and the blocking error. */
+/** Status column of a website copy job: Copy → Chatbot → GitHub → Deploy → Domain dots, one overall label and the blocking error. */
 export function SitePipelineCell({ site }: { site: SiteSnapshotSummary }) {
   const stages = siteStages(site);
   const blocking = blockingStage(stages);
@@ -283,15 +364,28 @@ function stageNote(stage: Stage): string | null {
     case 'active':
       return 'In progress now';
     case 'waiting':
+      if (stage.key === 'domain') return 'Set right after the deploy; redeploy if it stays empty';
+      if (stage.waitingFor) return stage.nextAt ? `${stage.waitingFor} · checks ${formatEta(stage.nextAt)}` : stage.waitingFor;
       return stage.nextAt ? `Starts ${formatEta(stage.nextAt)}` : stage.key === 'deploy' ? 'Deploys after the GitHub push' : 'Waiting for its turn';
     case 'retrying':
       return [stage.nextAt ? `Next try ${formatEta(stage.nextAt)}` : 'Retrying soon', tries].filter(Boolean).join(' · ');
     case 'failed':
       return ['Stopped', tries].filter(Boolean).join(' · ');
     default:
-      return stage.key === 'copy' ? null : 'Not queued';
+      if (stage.key === 'copy') return null;
+      if (stage.key === 'domain') return 'After the deploy';
+      if (stage.key === 'chatbot') return 'Not added';
+      return 'Not queued';
   }
 }
+
+const STAGE_TITLE: Record<StageKey, string> = {
+  copy: 'Website copy',
+  chatbot: 'MonCha chatbot',
+  github: 'GitHub repository',
+  deploy: 'Cloudflare Worker',
+  domain: 'Chatbot allowed domain',
+};
 
 /** Website section of the job panel: each step to the live URL with its links, errors and retry buttons. */
 export function SitePipelinePanel({ site, detail }: { site: SiteSnapshotSummary; detail?: SiteSnapshotDetail | null }) {
@@ -339,9 +433,7 @@ export function SitePipelinePanel({ site, detail }: { site: SiteSnapshotSummary;
             <StageDot stage={stage} size="md" />
             <div className="min-w-0 flex-1 pb-1">
               <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-                <p className="text-sm font-semibold">
-                  {stage.key === 'copy' ? 'Website copy' : stage.key === 'github' ? 'GitHub repository' : 'Cloudflare Worker'}
-                </p>
+                <p className="text-sm font-semibold">{STAGE_TITLE[stage.key]}</p>
                 <span className="text-xs text-muted-foreground" title={stage.at ? formatDateTime(stage.at) : undefined}>
                   {stageNote(stage)}
                 </span>
@@ -361,6 +453,7 @@ export function SitePipelinePanel({ site, detail }: { site: SiteSnapshotSummary;
                     <span className="font-mono">{github?.repo ?? (stage.state === 'not_started' ? 'Not pushed' : '—')}</span>
                   ))}
                 {stage.key === 'deploy' && <span className="font-mono">{deploy?.name ?? site.siteName ?? '—'}</span>}
+                {stage.key === 'domain' && <span className="font-mono">{deploy?.domains?.length ? deploy.domains.join(', ') : 'Not set'}</span>}
               </div>
               <StageError stage={stage} />
               {stage.key === 'github' && canPush && (

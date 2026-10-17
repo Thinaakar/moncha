@@ -323,16 +323,32 @@ route('GET', '/api/v1/discovery/options', async () => ({
   },
 }));
 
+/**
+ * Fills `deploy.domains` (the lead's MonCha widget allowed hosts, set right after a deploy) on deployed copies, with one
+ * lookup for the whole page. Copies whose lead has no created bot keep `domains` undefined.
+ */
+async function withDeployDomains(tenantId: string, summaries: SiteSnapshotSummary[]): Promise<SiteSnapshotSummary[]> {
+  const leadIds = summaries.filter((s) => s.deploy).map((s) => s.leadId);
+  if (!leadIds.length) return summaries;
+  const byLead = new Map((await leadBots.domainsForLeads(tenantId, leadIds)).map((b) => [b.leadId, b]));
+  return summaries.map((s) => {
+    const bot = s.deploy ? byLead.get(s.leadId) : undefined;
+    if (!s.deploy || !bot) return s;
+    return {
+      ...s,
+      deploy: { ...s.deploy, domains: bot.domains, domainsConfiguredAt: bot.domainsConfiguredAt?.toISOString() ?? null },
+    };
+  });
+}
+
 /** Adds `site` (the copy's summary: GitHub push, Worker deploy, live URL, progress) to website copy jobs. */
 async function withSiteCopies<T extends { id: string; type: string }>(tenantId: string, items: T[]) {
   const ids = items.filter((j) => j.type === 'site_snapshot').map((j) => j.id);
   if (!ids.length) return items;
-  const byJob = new Map((await siteSnapshots.listByJobIds(tenantId, ids)).map((s) => [s.jobId, s]));
-  return items.map((j) => {
-    if (j.type !== 'site_snapshot') return j;
-    const snapshot = byJob.get(j.id);
-    return { ...j, site: snapshot ? siteSummary(snapshot, null) : null };
-  });
+  const snapshots = await siteSnapshots.listByJobIds(tenantId, ids);
+  const summaries = await withDeployDomains(tenantId, snapshots.map((s) => siteSummary(s, null)));
+  const byJob = new Map(summaries.map((s) => [s.jobId, s]));
+  return items.map((j) => (j.type === 'site_snapshot' ? { ...j, site: byJob.get(j.id) ?? null } : j));
 }
 
 route('GET', '/api/v1/jobs', async ({ tenantId, url }) => {
@@ -667,13 +683,13 @@ route('POST', '/api/v1/leads/:id/site-snapshots', async ({ req, tenantId, params
 
 route('GET', '/api/v1/leads/:id/site-snapshots', async ({ tenantId, params }) => {
   const items = await siteSnapshots.listForLead(tenantId, params.id!, 20);
-  return { json: { items: await Promise.all(items.map(summarize)) } };
+  return { json: { items: await withDeployDomains(tenantId, await Promise.all(items.map(summarize))) } };
 });
 
 route('GET', '/api/v1/site-snapshots', async ({ tenantId, url }) => {
   const q = siteSnapshotListQuerySchema.parse(query(url, 'page', 'pageSize', 'status', 'search', 'origin'));
   const page = await siteSnapshots.list(tenantId, q);
-  return { json: { ...page, items: await Promise.all(page.items.map(summarize)) } };
+  return { json: { ...page, items: await withDeployDomains(tenantId, await Promise.all(page.items.map(summarize))) } };
 });
 
 // Registered before /site-snapshots/:id so "queue" is not read as an id.

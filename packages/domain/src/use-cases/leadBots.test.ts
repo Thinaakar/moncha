@@ -98,6 +98,7 @@ function fakeRepo(initial: LeadBotItem, takenNames: string[] = []) {
     },
     getForLead: async () => bot,
     linksByChatbotIds: async () => [],
+    domainsForLeads: async () => [],
     list: async () => ({
       items: [bot],
       total: 1,

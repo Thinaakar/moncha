@@ -272,6 +272,19 @@ export class PrismaLeadBotRepository implements LeadBotRepo {
     return row ? mapBot(row) : null;
   }
 
+  async domainsForLeads(tenantId: string, leadIds: string[]) {
+    if (!leadIds.length) return [];
+    const rows = await this.db.leadBot.findMany({
+      where: { tenantId, leadId: { in: [...new Set(leadIds)] }, status: 'created' },
+      select: { leadId: true, domains: true, domainsConfiguredAt: true },
+    });
+    return rows.map((r) => ({
+      leadId: r.leadId,
+      domains: Array.isArray(r.domains) ? (r.domains as unknown[]).map(String) : null,
+      domainsConfiguredAt: r.domainsConfiguredAt,
+    }));
+  }
+
   async linksByChatbotIds(tenantId: string, chatbotIds: string[]): Promise<LeadBotLink[]> {
     if (!chatbotIds.length) return [];
     const rows = await this.db.leadBot.findMany({
