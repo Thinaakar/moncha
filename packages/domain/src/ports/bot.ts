@@ -111,6 +111,19 @@ export type LeadBotPatch = Partial<
   >
 >;
 
+/** Our side of a MonCha bot: the lead it was made for and that lead's latest live website copy. */
+export type LeadBotLink = {
+  chatbotId: string;
+  leadId: string;
+  company: { id: string; name: string; domain: string | null };
+  status: LeadBotStatus;
+  knowledgeStatus: LeadBotKnowledgeStatus;
+  /** Latest deployed Worker URL of the lead's website copy. */
+  liveUrl: string | null;
+  /** That copy has the chatbot embed. */
+  chatbotInstalled: boolean;
+};
+
 export type LeadBotListQuery = {
   status?: LeadBotStatus;
   knowledgeStatus?: LeadBotKnowledgeStatus;
@@ -149,6 +162,8 @@ export interface LeadBotRepo {
   /** Also keeps Lead.botStatus (and botCreatedAt) in step with the bot. */
   update(tenantId: string, id: string, patch: LeadBotPatch): Promise<LeadBotItem | null>;
   getForLead(tenantId: string, leadId: string): Promise<LeadBotItem | null>;
+  /** Our lead bots for these MonCha bot ids (`chatbotId`); ids we never created are simply absent. */
+  linksByChatbotIds(tenantId: string, chatbotIds: string[]): Promise<LeadBotLink[]>;
   list(
     tenantId: string,
     query: LeadBotListQuery,

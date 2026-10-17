@@ -342,6 +342,12 @@ export const leadBotListQuerySchema = z.object({
   knowledgeStatus: leadBotKnowledgeStatusSchema.optional(),
 });
 
+/** `GET /api/v1/moncha/bots`: one page of MonCha's GET /bots, after `cursor` (a MonCha bot id). */
+export const monchaBotListQuerySchema = z.object({
+  cursor: z.string().trim().min(1).max(100).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+});
+
 export const siteAutomationUpdateSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -691,6 +697,42 @@ export type MonchaInternalCheckResult = {
 
 export type LeadBotStatus = z.infer<typeof leadBotStatusSchema>;
 export type LeadBotKnowledgeStatus = z.infer<typeof leadBotKnowledgeStatusSchema>;
+
+/** One MonCha demo bot (GET /bots) with the lead we made it for, when it is ours. */
+export type MonchaBotView = {
+  botId: string;
+  name: string;
+  planTier: string | null;
+  isActive: boolean;
+  /** Set by POST /bots/:botId/deactivate (paused); null when not paused. */
+  deactivatedAt: string | null;
+  /** Holds a plan slot and is not paused (POST /bots/:botId/deactivate makes it false). */
+  live: boolean;
+  createdAt: string | null;
+  /** Plan-tier quotas; -1 means unlimited. */
+  limits: { messages: number | null; pages: number | null; voiceMinutes: number | null };
+  /** Messages and voice minutes in the current monthly window; pages = total trained pages. */
+  usage: { messages: number; pages: number; voiceMinutes: number };
+  /** Knowledge documents queued or processing / failed in MonCha. */
+  training: { pending: number; failed: number };
+  /** Null when no lead bot of ours has this MonCha bot id. */
+  lead: {
+    leadId: string;
+    company: { id: string; name: string; domain: string | null };
+    status: LeadBotStatus;
+    knowledgeStatus: LeadBotKnowledgeStatus;
+    liveUrl: string | null;
+    chatbotInstalled: boolean;
+  } | null;
+};
+
+/** `GET /api/v1/moncha/bots`. Pass `nextCursor` back as `cursor`; null on the last page. */
+export type MonchaBotPage = {
+  items: MonchaBotView[];
+  total: number | null;
+  nextCursor: string | null;
+  limit: number;
+};
 
 /** Training of the bot on the lead's website: knowledge/discover, knowledge/ingest-bulk, training status. */
 export type LeadBotKnowledgeView = {

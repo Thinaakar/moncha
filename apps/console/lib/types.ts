@@ -15,6 +15,8 @@ import type {
   JobStatus,
   JobType,
   LeadQueue,
+  MonchaBotPage,
+  MonchaBotView,
   MonchaInternalCheckResult,
   MonchaSlotTier,
   SiteAssetKind,
@@ -52,7 +54,7 @@ import type {
 } from '@moncha/contracts';
 
 export type { AssistantKind, AssistantVerdict, AuditMethod, JobStatus, JobType, LeadQueue, WebsiteStatus };
-export type { MonchaInternalCheckResult, MonchaSlotTier };
+export type { MonchaBotPage, MonchaBotView, MonchaInternalCheckResult, MonchaSlotTier };
 export type {
   SiteAssetKind,
   SiteAutomationCrawl,

@@ -43,6 +43,7 @@ export {
   type GitHubSitesConfig,
 } from './github';
 export {
+  MONCHA_BOT_LIST_MAX,
   MONCHA_INTERNAL_MAX_BODY_BYTES,
   MONCHA_INTERNAL_PRODUCTION_URL,
   MONCHA_INTERNAL_UAT_URL,
@@ -53,6 +54,8 @@ export {
   monchaInternalConfigFromEnv,
   monchaInternalEnvironment,
   type MonchaBotCreateInput,
+  type MonchaBotList,
+  type MonchaBotSummary,
   type MonchaCreatedBot,
   type MonchaDiscovered,
   type MonchaDomains,

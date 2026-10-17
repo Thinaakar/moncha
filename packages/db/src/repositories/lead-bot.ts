@@ -4,6 +4,7 @@ import type {
   KnowledgeDocument,
   LeadBotItem,
   LeadBotKnowledgeStatus,
+  LeadBotLink,
   LeadBotListQuery,
   LeadBotPatch,
   LeadBotRepo,
@@ -269,6 +270,45 @@ export class PrismaLeadBotRepository implements LeadBotRepo {
   async getForLead(tenantId: string, leadId: string): Promise<LeadBotItem | null> {
     const row = await this.db.leadBot.findFirst({ where: { tenantId, leadId }, include: companySelect });
     return row ? mapBot(row) : null;
+  }
+
+  async linksByChatbotIds(tenantId: string, chatbotIds: string[]): Promise<LeadBotLink[]> {
+    if (!chatbotIds.length) return [];
+    const rows = await this.db.leadBot.findMany({
+      where: { tenantId, chatbotId: { in: chatbotIds } },
+      select: {
+        chatbotId: true,
+        leadId: true,
+        status: true,
+        knowledgeStatus: true,
+        lead: {
+          select: {
+            company: { select: { id: true, name: true, domain: true } },
+            siteSnapshots: {
+              where: { workerStatus: 'deployed', workerUrl: { not: null } },
+              orderBy: [{ workerDeployedAt: 'desc' }, { createdAt: 'desc' }],
+              take: 1,
+              select: { workerUrl: true, chatbotStatus: true },
+            },
+          },
+        },
+      },
+    });
+    return rows.flatMap((row) => {
+      if (!row.chatbotId) return [];
+      const live = row.lead.siteSnapshots[0];
+      return [
+        {
+          chatbotId: row.chatbotId,
+          leadId: row.leadId,
+          company: row.lead.company,
+          status: row.status as LeadBotStatus,
+          knowledgeStatus: row.knowledgeStatus as LeadBotKnowledgeStatus,
+          liveUrl: live?.workerUrl ?? null,
+          chatbotInstalled: live?.chatbotStatus === 'installed',
+        },
+      ];
+    });
   }
 
   async list(tenantId: string, query: LeadBotListQuery) {

@@ -1,22 +1,28 @@
 'use client';
 
+import { useState } from 'react';
+import Link from 'next/link';
 import {
   Bot,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   CircleDashed,
+  ExternalLink,
   KeyRound,
   ListTodo,
   RefreshCw,
   Sparkles,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { Badge } from '@/components/ui/badge';
+import { Badge, type BadgeVariant } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
-import { EmptyState, ErrorState, InlineAlert } from '@/components/app/states';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { EmptyState, ErrorState, InlineAlert, TableSkeleton } from '@/components/app/states';
 import { PageHeader } from '@/components/app/page-header';
-import { useMonchaStatus } from '@/lib/queries';
+import { useMonchaBots, useMonchaStatus } from '@/lib/queries';
 
 /** Label + value without the shared DetailRow 140px cap (env key names overflow there). */
 function ConnectionRow({
@@ -40,7 +46,7 @@ function ConnectionRow({
 }
 import { errorMessage } from '@/lib/api';
 import { formatDateTime, formatNumber, formatRelative } from '@/lib/format';
-import type { MonchaInternalCheckResult, MonchaSlotTier } from '@/lib/types';
+import type { MonchaBotView, MonchaInternalCheckResult, MonchaSlotTier } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
 const TIERS: Array<{ id: MonchaSlotTier; label: string; hint: string }> = [
@@ -248,22 +254,194 @@ function SlotsCard({ data }: { data: MonchaInternalCheckResult }) {
   );
 }
 
-function BotsPlaceholderCard() {
+const BOTS_PAGE_SIZE = 25;
+
+const KNOWLEDGE_LABEL: Record<NonNullable<MonchaBotView['lead']>['knowledgeStatus'], { label: string; variant: BadgeVariant }> = {
+  pending: { label: 'Not trained', variant: 'muted' },
+  discovering: { label: 'Discovering', variant: 'info' },
+  training: { label: 'Training', variant: 'info' },
+  trained: { label: 'Trained', variant: 'success' },
+  failed: { label: 'Training failed', variant: 'destructive' },
+};
+
+function botStatus(bot: MonchaBotView): { label: string; variant: BadgeVariant } {
+  if (bot.live) return { label: 'Live', variant: 'success' };
+  if (bot.deactivatedAt) return { label: 'Paused', variant: 'muted' };
+  if (!bot.isActive) return { label: 'Inactive', variant: 'muted' };
+  return { label: 'No slot', variant: 'warning' };
+}
+
+function limitText(value: number | null) {
+  return value === null ? '—' : value < 0 ? 'unlimited' : formatNumber(value);
+}
+
+function BotsCard({ enabled }: { enabled: boolean }) {
+  // Cursor of each page visited so far; the first page has none.
+  const [cursors, setCursors] = useState<Array<string | null>>([null]);
+  const cursor = cursors[cursors.length - 1] ?? null;
+  const bots = useMonchaBots(cursor, { limit: BOTS_PAGE_SIZE, enabled });
+  const page = bots.data;
+  const pageNumber = cursors.length;
+  const from = (pageNumber - 1) * BOTS_PAGE_SIZE + 1;
+  const unlinked = page?.items.filter((b) => !b.lead).length ?? 0;
+
   return (
     <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <ListTodo className="size-4 text-primary" /> Bots
-        </CardTitle>
-        <CardDescription>A full list of MonCha demo bots for this account will appear here.</CardDescription>
+      <CardHeader className="flex-row items-start gap-4 space-y-0">
+        <div className="min-w-0 flex-1 space-y-1">
+          <CardTitle className="flex flex-wrap items-center gap-2">
+            <ListTodo className="size-4 text-primary" /> Bots
+            {page?.total != null && <Badge variant="muted">{formatNumber(page.total)} total</Badge>}
+          </CardTitle>
+          <CardDescription>
+            Demo bots this key manages, from MonCha <span className="font-mono text-[11px]">GET /bots</span>, each linked to the
+            lead it was made for.
+          </CardDescription>
+        </div>
+        {enabled && (
+          <Button type="button" size="sm" variant="outline" loading={bots.isFetching} onClick={() => void bots.refetch()}>
+            <RefreshCw /> Refresh
+          </Button>
+        )}
       </CardHeader>
-      <CardContent>
-        <EmptyState
-          icon={Bot}
-          title="Bot list coming soon"
-          description="When MonCha exposes a bot list API, this section will show every demo bot, its tier and training status."
-          className="py-12"
-        />
+      <CardContent className="space-y-4">
+        {!enabled ? (
+          <EmptyState
+            icon={Bot}
+            title="Bots unavailable"
+            description="The bot list loads once the MonCha internal key authenticates."
+            className="py-10"
+          />
+        ) : bots.isLoading && !page ? (
+          <TableSkeleton rows={6} columns={6} />
+        ) : bots.error && !page ? (
+          <ErrorState error={bots.error} onRetry={() => void bots.refetch()} title="Could not load MonCha bots" />
+        ) : !page?.items.length ? (
+          <EmptyState icon={Bot} title="No demo bots yet" description="Bots appear here as leads get their demo bot." className="py-10" />
+        ) : (
+          <>
+            {unlinked > 0 && (
+              <InlineAlert variant="info" title={`${formatNumber(unlinked)} bot${unlinked === 1 ? '' : 's'} on this page not linked to a lead`}>
+                MonCha has them, but no lead in this console has that bot id. They still use a slot.
+              </InlineAlert>
+            )}
+            <div className="overflow-x-auto rounded-lg border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Bot</TableHead>
+                    <TableHead>Lead</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Training</TableHead>
+                    <TableHead className="text-right">Usage</TableHead>
+                    <TableHead>Demo</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {page.items.map((bot) => {
+                    const status = botStatus(bot);
+                    const knowledge = bot.lead ? KNOWLEDGE_LABEL[bot.lead.knowledgeStatus] : null;
+                    return (
+                      <TableRow key={bot.botId}>
+                        <TableCell className="max-w-[16rem]">
+                          <p className="truncate font-medium" title={bot.name}>
+                            {bot.name}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            <span className="capitalize">{bot.planTier ?? '—'}</span>
+                            {bot.createdAt && (
+                              <span title={formatDateTime(bot.createdAt)}> · {formatRelative(bot.createdAt)}</span>
+                            )}
+                          </p>
+                        </TableCell>
+                        <TableCell className="max-w-[16rem]">
+                          {bot.lead ? (
+                            <Link href={`/leads/${bot.lead.leadId}`} className="block truncate text-sm hover:underline">
+                              {bot.lead.company.name}
+                            </Link>
+                          ) : (
+                            <Badge variant="muted">Not linked</Badge>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={status.variant} dot>
+                            {status.label}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex flex-wrap items-center gap-1">
+                            {knowledge && <Badge variant={knowledge.variant}>{knowledge.label}</Badge>}
+                            {bot.training.pending > 0 && <Badge variant="info">{formatNumber(bot.training.pending)} processing</Badge>}
+                            {bot.training.failed > 0 && <Badge variant="destructive">{formatNumber(bot.training.failed)} failed</Badge>}
+                            {!knowledge && !bot.training.pending && !bot.training.failed && '—'}
+                          </div>
+                        </TableCell>
+                        <TableCell
+                          className="text-right text-xs whitespace-nowrap tabular-nums"
+                          title={`Messages this month ${formatNumber(bot.usage.messages)} of ${limitText(bot.limits.messages)} · pages trained ${formatNumber(bot.usage.pages)} of ${limitText(bot.limits.pages)}`}
+                        >
+                          <p>{formatNumber(bot.usage.messages)} msgs</p>
+                          <p className="text-muted-foreground">{formatNumber(bot.usage.pages)} pages</p>
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap">
+                          {bot.lead?.liveUrl ? (
+                            <div className="flex items-center gap-2">
+                              <a
+                                href={bot.lead.liveUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+                              >
+                                Open <ExternalLink className="size-3" />
+                              </a>
+                              {!bot.lead.chatbotInstalled && <Badge variant="warning">No chatbot</Badge>}
+                            </div>
+                          ) : (
+                            '—'
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+            <div className="flex flex-col items-center justify-between gap-3 text-sm sm:flex-row">
+              <p className="text-muted-foreground">
+                Showing <span className="font-medium text-foreground">{formatNumber(from)}</span>–
+                <span className="font-medium text-foreground">{formatNumber(from + page.items.length - 1)}</span>
+                {page.total != null && (
+                  <>
+                    {' '}
+                    of <span className="font-medium text-foreground">{formatNumber(page.total)}</span>
+                  </>
+                )}
+                {bots.isFetching && <span className="ml-2 text-xs text-muted-foreground/70">Updating…</span>}
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={pageNumber === 1 || bots.isFetching}
+                  onClick={() => setCursors((c) => c.slice(0, -1))}
+                >
+                  <ChevronLeft /> Previous
+                </Button>
+                <span className="text-xs text-muted-foreground tabular-nums">Page {pageNumber}</span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={!page.nextCursor || bots.isFetching}
+                  onClick={() => page.nextCursor && setCursors((c) => [...c, page.nextCursor])}
+                >
+                  Next <ChevronRight />
+                </Button>
+              </div>
+            </div>
+          </>
+        )}
       </CardContent>
     </Card>
   );
@@ -285,7 +463,7 @@ export function MonchaSettingsView() {
     <div className="mx-auto max-w-5xl space-y-6">
       <PageHeader
         title="MonCha settings"
-        description="Connection and slot capacity for the internal lead API used to create and train demo bots."
+        description="Connection, slot capacity and demo bots of the internal lead API used to create and train demo bots."
         actions={
           <Button type="button" variant="outline" size="sm" loading={status.isFetching} onClick={() => void refresh()}>
             <RefreshCw /> Refresh
@@ -313,7 +491,7 @@ export function MonchaSettingsView() {
           )}
           <ConnectionCard data={status.data} refreshing={status.isFetching} onRefresh={() => void refresh()} />
           <SlotsCard data={status.data} />
-          <BotsPlaceholderCard />
+          <BotsCard enabled={status.data.canAuthenticate} />
         </>
       ) : null}
     </div>

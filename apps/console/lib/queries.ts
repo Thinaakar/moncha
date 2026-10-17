@@ -21,6 +21,7 @@ import type {
   SiteAutomationCrawl,
   SiteAutomationState,
   SiteAutomationUpdate,
+  MonchaBotPage,
   MonchaInternalCheckResult,
   WorkerQueueState,
   WorkerQueueUpdate,
@@ -65,6 +66,7 @@ export const qk = {
   sitePipeline: ['site-pipeline'] as const,
   queue: ['queue'] as const,
   moncha: ['moncha'] as const,
+  monchaBots: (cursor: string | null, limit: number) => ['moncha', 'bots', cursor, limit] as const,
   automation: ['site-automation'] as const,
   automationCrawls: (limit: number) => ['site-automation', 'crawls', limit] as const,
   costSummary: (days: number | null) => ['costs', 'summary', days] as const,
@@ -326,6 +328,18 @@ export function useMonchaStatus() {
     queryKey: qk.moncha,
     queryFn: () => api<MonchaInternalCheckResult>('moncha'),
     refetchInterval: 60_000,
+  });
+}
+
+/** One page of MonCha's bot list (cursor = last bot id of the previous page), linked to our leads. */
+export function useMonchaBots(cursor: string | null, options: { limit?: number; enabled?: boolean } = {}) {
+  const limit = options.limit ?? 50;
+  return useQuery({
+    queryKey: qk.monchaBots(cursor, limit),
+    queryFn: () => api<MonchaBotPage>('moncha/bots', { query: { cursor: cursor ?? undefined, limit } }),
+    enabled: options.enabled ?? true,
+    placeholderData: keepPreviousData,
+    refetchInterval: 2 * 60_000,
   });
 }
 

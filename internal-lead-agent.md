@@ -178,7 +178,7 @@ Success: **201**.
 
 `bot_id` and `install.chatbotId` identify the same bot. `customer_tenant_id` and `install.tenantId` identify the **MonCha enterprise workspace**, despite the inherited response field name. This operation does not create a separate tenant/account for each prospect. `connection_id` is an internal ownership grant; you do not need to pass it on subsequent calls.
 
-Persist the result against your lead ID. There is no internal `GET /bots` endpoint to reconstruct your lead-to-bot mapping.
+Persist the result against your lead ID. `GET /bots` (3.8) lists the bots this key manages, but it carries no lead reference: your stored `bot_id` is what links a bot to its lead.
 
 ### 3.3 Read — `GET /bots/:botId`
 
@@ -238,6 +238,52 @@ No body. Success: **200**.
 ```
 
 Use for intentional demo cleanup. Bot deletion is destructive; associated resource cleanup is dispatched asynchronously. Remove the preview widget and update your lead record. Deletion does not itself cancel the enterprise subscription. There is no restore endpoint in this API.
+
+### 3.8 List — `GET /bots`
+
+```http
+GET /bots?limit=50
+GET /bots?limit=50&cursor=<next_cursor from the previous page>
+```
+
+| Query | Rules |
+| --- | --- |
+| `limit` | 1–100, default 50 |
+| `cursor` | Optional bot UUID returned as `next_cursor` |
+
+Returns only the demo bots this key can manage, which are the same bots accepted by every `/bots/:botId` route. External customers' bots and ordinary enterprise bots are never listed. Results are ordered by `bot_id`. Repeat with `cursor=next_cursor` until `next_cursor` is `null`. Deleting a bot between pages does not break paging. No migration is required; the same Bearer key, rate limit and paid-enterprise requirement apply.
+
+Success: **200**.
+
+```json
+{
+  "data": [
+    {
+      "bot_id": "<bot UUID>",
+      "name": "Acme demo",
+      "plan_tier": "growth",
+      "is_active": true,
+      "vendor_deactivated_at": null,
+      "live": true,
+      "created_at": "2026-10-17T03:00:00.000Z",
+      "limits": { "message_limit": 6000, "pages_limit": 25000, "voice_minutes_limit": 180 },
+      "usage": { "messages": 12, "voice_minutes": 0, "pages": 40 },
+      "training": { "pending": 1, "failed": 0 }
+    }
+  ],
+  "total": 7,
+  "next_cursor": "<bot UUID, or null on the last page>"
+}
+```
+
+- `limits` are the plan-tier quotas: Starter 2,500 messages / 5,000 pages / 60 voice minutes; Growth 6,000 / 25,000 / 180; Scale 25,000 / 100,000 / 600.
+- `usage.messages` and `usage.voice_minutes` cover the current monthly window. They return `0` once the window has reset, matching `GET /bots/:botId/usage`. `usage.pages` is the total trained pages.
+- `live` is `true` when the bot holds a plan slot and has not been deactivated. A paused bot (`POST /bots/:botId/deactivate`) shows `live: false`.
+- `training.pending` counts queued or processing documents. `training.failed` counts failed documents.
+- `total` is the number of manageable demo bots across all pages.
+- Remaining slot capacity per tier is still returned by `GET /slots`.
+
+In this lead service, the console's MonCha settings → Bots table reads this list through `GET /api/v1/moncha/bots?cursor=&limit=` and links each bot to its lead by the stored `bot_id` (`LeadBot.chatbotId`).
 
 ## 4. Bot settings
 
@@ -803,7 +849,7 @@ This credential can manage bots provisioned through this internal service within
 Not exposed by this internal endpoint group:
 
 - Customer connect, prospect account creation, customer claiming or bot ownership transfer.
-- Listing every bot or changing a bot's tier through `/bots/:botId/plan`.
+- Listing ordinary enterprise bots or external customers' bots (`GET /bots` lists only this key's demo bots), or changing a bot's tier through `/bots/:botId/plan`.
 - File uploads, document text-edit endpoints, Notion/Google Drive source connections.
 - WhatsApp/email channel provisioning, functions, webhooks or API & Agents token/MCP management.
 - Billing mutations, invoice management, unlimited allowances, or quota resets.

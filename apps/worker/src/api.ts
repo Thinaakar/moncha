@@ -11,6 +11,7 @@ import {
   jobListQuerySchema,
   leadBotListQuerySchema,
   leadExportQuerySchema,
+  monchaBotListQuerySchema,
   leadListQuerySchema,
   manualLeadSchema,
   passwordLoginSchema,
@@ -44,6 +45,8 @@ import {
   type ColdEmailView,
   type LeadBotPage,
   type LeadBotView,
+  type MonchaBotPage,
+  type MonchaBotView,
   type MonchaInternalCheckResult,
   type SiteDeployCheckResult,
   type SiteGithubCheckResult,
@@ -164,7 +167,9 @@ import {
   createPriceBookFromEnv,
   createResendMailerFromEnv,
   isColdEmailRecipientAllowed,
+  MonchaInternalError,
   parseColdEmailAllowlist,
+  type MonchaBotList,
 } from '@moncha/integrations';
 import { CsvImportError, SOURCE_IMPORT_JOB_TYPES, sourceImportView, startCsvImport, type CsvSqlClient } from './csv-import';
 import { monchaInternalClient, siteAgentConfig, siteAutoCopyEnabled, siteGithubPublisher, siteWorkerDeployer } from './site-agent';
@@ -1226,6 +1231,56 @@ function requireMonchaInternal() {
   if (!client) throw new HttpError(503, 'moncha_not_configured', 'Lead bots need MONCHA_INTERNAL_KEY in apps/worker/.env');
   return client;
 }
+
+// MonCha settings "Bots": one page of MonCha's GET /bots, each linked to the lead we made it for. Any signed-in user.
+route('GET', '/api/v1/moncha/bots', async ({ req, tenantId, url }) => {
+  const token = tokenOf(req);
+  if (!token) throw new HttpError(401, 'unauthorized', 'Sign in to view MonCha bots');
+  const user = await currentUser(auth, { token });
+  if (user.tenantId !== tenantId) throw new HttpError(403, 'forbidden', 'Signed-in user belongs to another tenant');
+  const q = monchaBotListQuerySchema.parse(query(url, 'cursor', 'limit'));
+  const client = requireMonchaInternal();
+  let page: MonchaBotList;
+  try {
+    page = await client.listBots({ cursor: q.cursor, limit: q.limit });
+  } catch (error) {
+    if (!(error instanceof MonchaInternalError)) throw error;
+    // MonCha's own 401/403 must not look like the console session ending.
+    throw new HttpError(error.status === 429 ? 503 : 502, error.code, `MonCha GET /bots: ${error.message}`);
+  }
+  const links = new Map((await leadBots.linksByChatbotIds(tenantId, page.bots.map((b) => b.botId))).map((l) => [l.chatbotId, l]));
+  const json: MonchaBotPage = {
+    items: page.bots.map((bot): MonchaBotView => {
+      const link = links.get(bot.botId);
+      return {
+        botId: bot.botId,
+        name: bot.name,
+        planTier: bot.planTier,
+        isActive: bot.isActive,
+        deactivatedAt: bot.vendorDeactivatedAt,
+        live: bot.live,
+        createdAt: bot.createdAt,
+        limits: bot.limits,
+        usage: bot.usage,
+        training: bot.training,
+        lead: link
+          ? {
+              leadId: link.leadId,
+              company: link.company,
+              status: link.status,
+              knowledgeStatus: link.knowledgeStatus,
+              liveUrl: link.liveUrl,
+              chatbotInstalled: link.chatbotInstalled,
+            }
+          : null,
+      };
+    }),
+    total: page.total,
+    nextCursor: page.nextCursor,
+    limit: q.limit,
+  };
+  return { json };
+});
 
 route('GET', '/api/v1/lead-bots', async ({ tenantId, url }) => {
   const q = leadBotListQuerySchema.parse(query(url, 'page', 'pageSize', 'status', 'knowledgeStatus'));

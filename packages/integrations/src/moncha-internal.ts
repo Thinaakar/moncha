@@ -101,6 +101,52 @@ const domainsSchema = z.object({
   domains: z.array(z.string()),
 });
 
+const botSummarySchema = z.object({
+  bot_id: z.string().min(1),
+  name: z.string(),
+  plan_tier: z.string().nullish(),
+  is_active: z.boolean().nullish(),
+  vendor_deactivated_at: z.string().nullish(),
+  live: z.boolean().nullish(),
+  created_at: z.string().nullish(),
+  limits: z
+    .object({ message_limit: z.number().nullish(), pages_limit: z.number().nullish(), voice_minutes_limit: z.number().nullish() })
+    .nullish(),
+  usage: z.object({ messages: z.number().nullish(), voice_minutes: z.number().nullish(), pages: z.number().nullish() }).nullish(),
+  training: z.object({ pending: z.number().nullish(), failed: z.number().nullish() }).nullish(),
+});
+
+const botListSchema = z.object({
+  data: z.array(botSummarySchema),
+  total: z.number().nullish(),
+  next_cursor: z.string().nullish(),
+});
+
+/** Largest `limit` GET /bots accepts (default 50). */
+export const MONCHA_BOT_LIST_MAX = 100;
+
+/**
+ * One bot of GET /bots. `limits` are the plan-tier quotas (-1 = unlimited); `usage` messages and voice minutes cover
+ * the current monthly window, pages are all trained pages.
+ */
+export type MonchaBotSummary = {
+  botId: string;
+  name: string;
+  planTier: string | null;
+  isActive: boolean;
+  vendorDeactivatedAt: string | null;
+  /** Holds a plan slot and is not paused (deactivate makes it false). */
+  live: boolean;
+  createdAt: string | null;
+  limits: { messages: number | null; pages: number | null; voiceMinutes: number | null };
+  usage: { messages: number; pages: number; voiceMinutes: number };
+  /** Knowledge documents queued or processing / failed. */
+  training: { pending: number; failed: number };
+};
+
+/** GET /bots: one page, ordered by bot id; pass `nextCursor` back as `cursor` for the next page. */
+export type MonchaBotList = { bots: MonchaBotSummary[]; total: number | null; nextCursor: string | null };
+
 /** Widget configuration as GET/PUT /bots/:botId/widget return it (saved values merged with defaults). */
 export type MonchaWidgetConfig = Record<string, unknown>;
 
@@ -313,6 +359,37 @@ export class MonchaInternalClient {
     const parsed = slotsSchema.safeParse(data);
     if (!parsed.success) throw new MonchaInternalError('unexpected_response', 'GET /slots returned an unexpected shape', 200);
     return parsed.data.data;
+  }
+
+  /** `GET /bots`: the enterprise's demo bots, `limit` (1-100, default 50) per page after `cursor` (a bot id). */
+  async listBots(input: { cursor?: string; limit?: number; signal?: AbortSignal } = {}): Promise<MonchaBotList> {
+    const params = new URLSearchParams();
+    if (input.cursor) params.set('cursor', input.cursor);
+    if (input.limit !== undefined) params.set('limit', String(Math.min(MONCHA_BOT_LIST_MAX, Math.max(1, Math.trunc(input.limit)))));
+    const query = params.toString();
+    const data = await this.request<unknown>('GET', `/bots${query ? `?${query}` : ''}`, { signal: input.signal });
+    const parsed = botListSchema.safeParse(data);
+    if (!parsed.success) throw new MonchaInternalError('unexpected_response', 'GET /bots returned an unexpected shape', 200);
+    return {
+      bots: parsed.data.data.map((b) => ({
+        botId: b.bot_id,
+        name: b.name,
+        planTier: b.plan_tier ?? null,
+        isActive: b.is_active ?? true,
+        vendorDeactivatedAt: b.vendor_deactivated_at ?? null,
+        live: b.live ?? false,
+        createdAt: b.created_at ?? null,
+        limits: {
+          messages: b.limits?.message_limit ?? null,
+          pages: b.limits?.pages_limit ?? null,
+          voiceMinutes: b.limits?.voice_minutes_limit ?? null,
+        },
+        usage: { messages: b.usage?.messages ?? 0, pages: b.usage?.pages ?? 0, voiceMinutes: b.usage?.voice_minutes ?? 0 },
+        training: { pending: b.training?.pending ?? 0, failed: b.training?.failed ?? 0 },
+      })),
+      total: parsed.data.total ?? null,
+      nextCursor: parsed.data.next_cursor ?? null,
+    };
   }
 
   /** `POST /bots`: one demo bot in the chosen tier; uses one available slot. */

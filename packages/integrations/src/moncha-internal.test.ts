@@ -176,6 +176,54 @@ describe('MonchaInternalClient errors', () => {
   });
 });
 
+describe('MonchaInternalClient.listBots', () => {
+  const row = {
+    bot_id: 'b-1',
+    name: 'Tumble Laundromat',
+    plan_tier: 'starter',
+    is_active: true,
+    vendor_deactivated_at: null,
+    live: true,
+    created_at: '2026-10-15T11:44:30.473Z',
+    limits: { message_limit: 2500, pages_limit: 5000, voice_minutes_limit: 60 },
+    usage: { messages: 3, voice_minutes: 0, pages: 12 },
+    training: { pending: 1, failed: 0 },
+  };
+
+  it('GETs one page after the cursor and maps it', async () => {
+    const { api, calls } = client(() => json({ data: [row], total: 435, next_cursor: 'b-1' }));
+    const page = await api.listBots({ cursor: 'b-0', limit: 500 });
+    expect(calls[0]!.url).toBe(`${MONCHA_INTERNAL_UAT_URL}/bots?cursor=b-0&limit=100`);
+    expect(calls[0]!.init.method).toBe('GET');
+    expect(page).toEqual({
+      total: 435,
+      nextCursor: 'b-1',
+      bots: [
+        {
+          botId: 'b-1',
+          name: 'Tumble Laundromat',
+          planTier: 'starter',
+          isActive: true,
+          vendorDeactivatedAt: null,
+          live: true,
+          createdAt: '2026-10-15T11:44:30.473Z',
+          limits: { messages: 2500, pages: 5000, voiceMinutes: 60 },
+          usage: { messages: 3, pages: 12, voiceMinutes: 0 },
+          training: { pending: 1, failed: 0 },
+        },
+      ],
+    });
+  });
+
+  it('sends no query by default and flags an unexpected shape', async () => {
+    const ok = client(() => json({ data: [], total: 0, next_cursor: null }));
+    expect(await ok.api.listBots()).toEqual({ bots: [], total: 0, nextCursor: null });
+    expect(ok.calls[0]!.url).toBe(`${MONCHA_INTERNAL_UAT_URL}/bots`);
+    const bad = client(() => json({ bots: [] }));
+    expect((await caught(bad.api.listBots())).code).toBe('unexpected_response');
+  });
+});
+
 describe('MonchaInternalClient.createBot', () => {
   const created = {
     data: {
