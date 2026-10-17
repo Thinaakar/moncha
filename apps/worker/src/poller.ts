@@ -305,6 +305,7 @@ async function pipelineTick() {
               deployer: workerDeployer,
               logger,
               domains: monchaBots ? { bots: leadBots, api: monchaBots, logger } : undefined,
+              avatar: monchaBots ? { bots: leadBots, api: monchaBots, logger } : undefined,
             },
             snapshot,
             crawlAbort.signal,

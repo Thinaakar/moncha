@@ -8,7 +8,12 @@ import {
   type SiteWorkerDeployer,
   type SiteWorkerFile,
 } from '../ports';
-import { type ChatbotDomainsDeps, setChatbotDomainsForLiveUrl } from './siteChatbot';
+import {
+  type ChatbotAvatarDeps,
+  type ChatbotDomainsDeps,
+  setChatbotAvatarForLiveUrl,
+  setChatbotDomainsForLiveUrl,
+} from './siteChatbot';
 import { readSiteFiles, readSiteManifest, retryAfterError, siteName } from './siteGithub';
 
 export const SITE_WORKER_MAX_ATTEMPTS = 3;
@@ -39,6 +44,8 @@ export type SiteWorkerDeployDeps = {
    * Missing when MonCha is not configured; domain failures are logged and do not fail the deploy.
    */
   domains?: ChatbotDomainsDeps;
+  /** After a successful deploy, the bot's profile picture becomes the website's icon or logo on this Worker. Same rules. */
+  avatar?: ChatbotAvatarDeps;
 };
 
 /** How long a deploy waits before checking again whether the Cloudflare account has room for another Worker. */
@@ -106,6 +113,30 @@ export async function deploySiteSnapshotToWorker(
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         deps.logger.error('site_chatbot_domains_failed', {
+          snapshotId,
+          tenantId,
+          leadId: snapshot.leadId,
+          url: result.url,
+          error: message.slice(0, 300),
+        });
+      }
+    }
+
+    if (deps.avatar) {
+      try {
+        const bytesByPath = new Map(stored.map((f) => [f.key, f.bytes]));
+        await setChatbotAvatarForLiveUrl(deps.avatar, {
+          tenantId,
+          leadId: snapshot.leadId,
+          workerUrl: result.url,
+          manifest,
+          brand: snapshot.brand,
+          readAsset: async (asset) => bytesByPath.get(asset.storedPath) ?? null,
+          signal,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        deps.logger.error('site_chatbot_avatar_failed', {
           snapshotId,
           tenantId,
           leadId: snapshot.leadId,

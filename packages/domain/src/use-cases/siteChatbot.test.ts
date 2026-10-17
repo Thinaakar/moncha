@@ -1,15 +1,29 @@
 import { describe, expect, it } from 'vitest';
-import type { LeadBotItem, LeadBotPatch, LeadBotRepo, Logger, MonchaWidgetApi, SiteSnapshotPatch, SiteSnapshotRepo, SiteStore } from '../ports';
+import type {
+  LeadBotItem,
+  LeadBotPatch,
+  LeadBotRepo,
+  Logger,
+  MonchaWidgetApi,
+  SiteManifestAsset,
+  SiteSnapshotPatch,
+  SiteSnapshotRepo,
+  SiteStore,
+} from '../ports';
 import { FIXTURE_NOW, siteSnapshotFixture } from './__fixtures__/site-snapshot';
 import {
+  CHATBOT_AVATAR_BG,
   CHATBOT_EMBED_END,
   CHATBOT_EMBED_START,
+  chatbotAvatarAsset,
   chatbotEmbed,
   contrastWithWhite,
   embedValues,
   hostnameFromWorkerUrl,
   injectChatbotEmbed,
   installSiteChatbot,
+  liveAssetUrl,
+  setChatbotAvatarForLiveUrl,
   setChatbotDomainsForLiveUrl,
   SITE_CHATBOT_BOT_WAIT_MS,
   WIDGET_DEFAULT_COLOR,
@@ -114,7 +128,15 @@ describe('chatbot embed', () => {
   });
 });
 
-function setup(options: { bot?: Partial<LeadBotItem> | null; html?: string | null; savedColor?: string; install?: Partial<typeof INSTALL> & { widgetUrl?: string | null } } = {}) {
+function setup(
+  options: {
+    bot?: Partial<LeadBotItem> | null;
+    html?: string | null;
+    savedColor?: string;
+    install?: Partial<typeof INSTALL> & { widgetUrl?: string | null };
+    widget?: Record<string, unknown>;
+  } = {},
+) {
   const snapshot = siteSnapshotFixture({
     githubStatus: 'pending',
     chatbotStatus: 'installing',
@@ -130,7 +152,7 @@ function setup(options: { bot?: Partial<LeadBotItem> | null; html?: string | nul
   const objects = new Map<string, Uint8Array>();
   if (options.html !== null) objects.set('sites/t1/snap1/index.html', enc.encode(options.html ?? '<html><body>Hi</body></html>'));
   const calls: Array<{ method: string; config?: unknown }> = [];
-  const current = { botName: 'Jurong Academy', primaryColor: '#1877F2', hideBranding: false };
+  const current = { botName: 'Jurong Academy', primaryColor: '#1877F2', hideBranding: false, ...options.widget };
 
   const api: MonchaWidgetApi = {
     widget: async () => {
@@ -279,5 +301,106 @@ describe('setChatbotDomainsForLiveUrl', () => {
       ),
     ).toBeNull();
     expect(t.calls).toEqual([]);
+  });
+});
+
+const asset = (id: string, storedPath: string, kind: SiteManifestAsset['kind'], contentType: string, bytes = 5_000, url = `https://acclaim.sg/${storedPath}`) =>
+  ({ id, url, storedPath, contentType, bytes, sha256: id, kind, discoveredBy: ['html'] }) as SiteManifestAsset;
+
+describe('chatbotAvatarAsset', () => {
+  const logo = asset('logo', 'assets/acclaim.sg/logo-wide.png', 'image', 'image/png', 20_000);
+  const touch = asset('touch', 'assets/acclaim.sg/apple-touch-icon.png', 'icon', 'image/png', 9_000);
+  const favicon32 = asset('fav32', 'assets/acclaim.sg/favicon-32.png', 'icon', 'image/png', 900);
+  const ico = asset('ico', 'assets/acclaim.sg/favicon.ico', 'icon', 'image/x-icon', 4_000);
+
+  it('prefers the largest square site icon over the wide header logo', () => {
+    expect(chatbotAvatarAsset({ assets: [logo, favicon32, touch, ico] }, { logo: { assetId: 'logo' } })?.id).toBe('touch');
+  });
+
+  it('falls back to the brand logo, then a .ico, skipping tiny favicons and builder defaults', () => {
+    const wix = asset('wix', 'assets/wix.com/favicon.png', 'icon', 'image/png', 9_000, 'https://www.wix.com/favicon.png');
+    expect(chatbotAvatarAsset({ assets: [favicon32, wix, logo, ico] }, { logo: { assetId: 'logo' } })?.id).toBe('logo');
+    expect(chatbotAvatarAsset({ assets: [favicon32, ico] }, null)?.id).toBe('ico');
+    const wixDefault = asset('pf', 'assets/x/pfavico.ico', 'icon', 'image/x-icon', 4_000, 'https://static.parastorage.com/client/pfavico.ico');
+    expect(chatbotAvatarAsset({ assets: [wixDefault] }, null)).toBeNull();
+    expect(chatbotAvatarAsset({ assets: [favicon32] }, null)).toBeNull();
+    const avifLogo = asset('avif', 'assets/framerusercontent.com/logo.png', 'image', 'image/avif');
+    expect(chatbotAvatarAsset({ assets: [favicon32, avifLogo] }, { logo: { assetId: 'avif' } })?.id).toBe('avif');
+  });
+
+  it('judges favicons by pixel size when it is known', () => {
+    const small64 = asset('fav64', 'assets/acclaim.sg/fav64.png', 'icon', 'image/png', 769);
+    const big32 = asset('fav32big', 'assets/acclaim.sg/fav32.png', 'icon', 'image/png', 9_000);
+    const ico48 = asset('ico48', 'assets/acclaim.sg/favicon.ico', 'icon', 'image/x-icon', 4_000);
+    const sizes = new Map([
+      ['fav64', { width: 64, height: 64 }],
+      ['fav32big', { width: 32, height: 32 }],
+      ['ico48', { width: 48, height: 48 }],
+    ]);
+    expect(chatbotAvatarAsset({ assets: [logo, big32, small64] }, { logo: { assetId: 'logo' } }, sizes)?.id).toBe('fav64');
+    expect(chatbotAvatarAsset({ assets: [logo, big32, ico48] }, { logo: { assetId: 'logo' } }, sizes)?.id).toBe('ico48');
+    expect(chatbotAvatarAsset({ assets: [logo, big32] }, { logo: { assetId: 'logo' } }, sizes)?.id).toBe('logo');
+  });
+
+  it("never uses another company's mark that the brand step mistook for the logo", () => {
+    const google = asset('g', 'assets/x/google-logo.png', 'image', 'image/png', 9_000, 'https://assets.entanglecommerce.com/google-reviews-plus/media/google-logo.png');
+    expect(chatbotAvatarAsset({ assets: [google] }, { logo: { assetId: 'g' } })).toBeNull();
+  });
+});
+
+describe('liveAssetUrl', () => {
+  it('joins the Worker origin and the stored path, encoding each segment', () => {
+    expect(liveAssetUrl('https://acclaim-sg.x.workers.dev/', 'assets/acclaim.sg/my logo.png')).toBe(
+      'https://acclaim-sg.x.workers.dev/assets/acclaim.sg/my%20logo.png',
+    );
+    expect(liveAssetUrl('http://acclaim-sg.x.workers.dev', 'a.png')).toBeNull();
+    expect(liveAssetUrl('not-a-url', 'a.png')).toBeNull();
+  });
+});
+
+describe('setChatbotAvatarForLiveUrl', () => {
+  const manifest = { assets: [asset('touch', 'assets/acclaim.sg/apple-touch-icon.png', 'icon', 'image/png')] };
+  const iconUrl = 'https://acclaim-sg.x.workers.dev/assets/acclaim.sg/apple-touch-icon.png';
+  const input = { tenantId: 't1', leadId: 'lead1', workerUrl: 'https://acclaim-sg.x.workers.dev', manifest, brand: null };
+
+  it('sets botIconUrl and a white avatar background, keeping every other widget field', async () => {
+    const t = setup();
+    const result = await setChatbotAvatarForLiveUrl({ bots: t.deps.bots, api: t.deps.api, logger, now: () => NOW }, input);
+    expect(result).toEqual({ botIconUrl: iconUrl, changed: true });
+    expect(t.calls.at(-1)).toEqual({
+      method: 'PUT widget',
+      config: { botName: 'Jurong Academy', primaryColor: '#1877F2', hideBranding: false, botIconUrl: iconUrl, botAvatarBgColor: CHATBOT_AVATAR_BG },
+    });
+    expect(t.calls.at(-1)?.config).not.toHaveProperty('launcherIconUrl');
+    expect(t.botPatches.at(-1)).toMatchObject({ widgetConfiguredAt: NOW });
+  });
+
+  it('does not PUT when the widget already shows it', async () => {
+    const t = setup({ widget: { botIconUrl: iconUrl, botAvatarBgColor: '#ffffff' } });
+    expect(await setChatbotAvatarForLiveUrl({ bots: t.deps.bots, api: t.deps.api, logger }, input)).toEqual({ botIconUrl: iconUrl, changed: false });
+    expect(t.calls.map((c) => c.method)).toEqual(['GET widget']);
+  });
+
+  it('skips without a created bot', async () => {
+    const t = setup({ bot: null });
+    expect(await setChatbotAvatarForLiveUrl({ bots: t.deps.bots, api: t.deps.api, logger }, input)).toBeNull();
+    expect(t.calls).toEqual([]);
+  });
+
+  it('without a usable image, removes a picture taken from this Worker and leaves any other picture alone', async () => {
+    const noImage = { ...input, manifest: { assets: [] } };
+    const ours = setup({ widget: { botIconUrl: 'https://acclaim-sg.x.workers.dev/assets/x/pfavico.ico', botAvatarBgColor: '#FFFFFF' } });
+    expect(await setChatbotAvatarForLiveUrl({ bots: ours.deps.bots, api: ours.deps.api, logger }, noImage)).toEqual({
+      botIconUrl: null,
+      changed: true,
+    });
+    expect(ours.calls.at(-1)).toEqual({ method: 'PUT widget', config: { botName: 'Jurong Academy', primaryColor: '#1877F2', hideBranding: false } });
+
+    const theirs = setup({ widget: { botIconUrl: 'https://cdn.example.com/custom.png' } });
+    expect(await setChatbotAvatarForLiveUrl({ bots: theirs.deps.bots, api: theirs.deps.api, logger }, noImage)).toEqual({
+      botIconUrl: null,
+      changed: false,
+    });
+    expect(theirs.calls.map((c) => c.method)).toEqual(['GET widget']);
   });
 });

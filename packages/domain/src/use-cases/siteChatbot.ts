@@ -4,11 +4,14 @@ import type {
   MonchaInstallValues,
   MonchaWidgetApi,
   SiteBrand,
+  SiteManifest,
+  SiteManifestAsset,
   SiteSnapshotListItem,
   SiteSnapshotRepo,
   SiteStore,
   WidgetConfig,
 } from '../ports';
+import { imageSize, type ImageSize } from '../site/image-size';
 import { MONCHA_ACCOUNT_CODES } from './leadBots';
 import { retryAfterError } from './siteGithub';
 
@@ -166,19 +169,23 @@ export function widgetPrimaryColor(brand: Pick<SiteBrand, 'colors'> | null): str
 }
 
 /**
- * The PUT widget body: the current configuration (GET widget) with only primaryColor changed. Fields the endpoint does
+ * The PUT widget body: the current configuration (GET widget) with only `changes` applied. Fields the endpoint does
  * not accept are left out, nulls only where allowed, and hideBranding is always false (true is rejected).
  */
-export function widgetConfigWithColor(config: WidgetConfig, primaryColor: string): WidgetConfig {
+export function widgetConfigWith(config: WidgetConfig, changes: WidgetConfig): WidgetConfig {
   const next: WidgetConfig = {};
   for (const [key, value] of Object.entries(config)) {
     if (!WIDGET_FIELDS.has(key) || value === undefined) continue;
     if (value === null && !NULLABLE_WIDGET_FIELDS.has(key)) continue;
     next[key] = value;
   }
-  next.primaryColor = primaryColor;
+  Object.assign(next, changes);
   if ('hideBranding' in next) next.hideBranding = false;
   return next;
+}
+
+export function widgetConfigWithColor(config: WidgetConfig, primaryColor: string): WidgetConfig {
+  return widgetConfigWith(config, { primaryColor });
 }
 
 /** Checks GET install values: widgetUrl must be set (never guessed) and https; apiUrl becomes its origin. */
@@ -463,4 +470,160 @@ export async function setChatbotDomainsForLiveUrl(
     domains: result.domains,
   });
   return { domains: result.domains };
+}
+
+/** Background behind the bot's profile picture, so dark and transparent logos stay visible. */
+export const CHATBOT_AVATAR_BG = '#FFFFFF';
+/** Site icons smaller than this (16/32 px favicons) turn blurry in the avatar. */
+export const AVATAR_MIN_ICON_PX = 48;
+/** Size stand-in for icons whose pixel size could not be read (AVIF, or no bytes given). */
+const AVATAR_MIN_ICON_BYTES = 1_500;
+/** At most this many site icons are opened to read their pixel size. */
+const AVATAR_MAX_ICONS_READ = 10;
+const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
+const AVATAR_TYPES = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/avif', 'image/gif', 'image/svg+xml']);
+const ICO_TYPES = new Set(['image/x-icon', 'image/vnd.microsoft.icon']);
+/** Default favicons of site builders and CMSs: they show the builder's mark, not the business. */
+const GENERIC_ICON =
+  /wix\.com\/favicon|parastorage\.com\/client\/pfavico|s\.w\.org\/|wordpress\.com\/i\/(webclip|favicon)|squarespace\.com\/universal\/default-favicon/i;
+/** Marks of other companies that sites embed (review widgets, social links, payment badges). */
+const THIRD_PARTY_MARK =
+  /google[-_]?(logo|review)|google-reviews|facebook|whatsapp|instagram|linkedin|twitter|tiktok|youtube|trustpilot|tripadvisor|yelp|paypal|visa|mastercard|stripe|apple-pay|badge/i;
+
+const baseType = (asset: SiteManifestAsset) => asset.contentType.split(';')[0]!.trim().toLowerCase();
+
+/** Pixel sizes of the copy's site icons (`kind: icon`), read from their file headers. */
+export async function chatbotIconSizes(
+  manifest: Pick<SiteManifest, 'assets'>,
+  readAsset: (asset: SiteManifestAsset) => Promise<Uint8Array | null>,
+): Promise<Map<string, ImageSize>> {
+  const sizes = new Map<string, ImageSize>();
+  const icons = manifest.assets.filter((a) => a.kind === 'icon' && a.bytes > 0 && a.bytes <= AVATAR_MAX_BYTES);
+  for (const asset of icons.slice(0, AVATAR_MAX_ICONS_READ)) {
+    const bytes = await readAsset(asset).catch(() => null);
+    const size = bytes ? imageSize(bytes) : null;
+    if (size) sizes.set(asset.id, size);
+  }
+  return sizes;
+}
+
+/**
+ * The image for the bot's profile picture: the website's favicon (`<link rel="icon">` / apple-touch-icon) when it is at
+ * least AVATAR_MIN_ICON_PX square-ish, largest first; else the header logo; else any `.ico`. `sizes` are the icons'
+ * pixel sizes (chatbotIconSizes); without one, a raster icon is judged by file size and a `.ico` waits for the last step.
+ * Null when the copy has no usable image.
+ */
+export function chatbotAvatarAsset(
+  manifest: Pick<SiteManifest, 'assets'>,
+  brand: Pick<SiteBrand, 'logo'> | null,
+  sizes?: ReadonlyMap<string, ImageSize>,
+): SiteManifestAsset | null {
+  const usable = manifest.assets.filter(
+    (a) => a.bytes > 0 && a.bytes <= AVATAR_MAX_BYTES && !GENERIC_ICON.test(a.url) && !THIRD_PARTY_MARK.test(a.url),
+  );
+  const bigEnough = (a: SiteManifestAsset) => {
+    if (baseType(a) === 'image/svg+xml') return true;
+    const size = sizes?.get(a.id);
+    if (size) return Math.min(size.width, size.height) >= AVATAR_MIN_ICON_PX;
+    return !ICO_TYPES.has(baseType(a)) && a.bytes >= AVATAR_MIN_ICON_BYTES;
+  };
+  const rank = (a: SiteManifestAsset) => {
+    if (baseType(a) === 'image/svg+xml') return Number.MAX_SAFE_INTEGER;
+    const size = sizes?.get(a.id);
+    return size ? size.width * size.height : 0;
+  };
+  const icon = usable
+    .filter((a) => a.kind === 'icon' && (AVATAR_TYPES.has(baseType(a)) || ICO_TYPES.has(baseType(a))) && bigEnough(a))
+    .sort((a, b) => rank(b) - rank(a) || b.bytes - a.bytes)[0];
+  if (icon) return icon;
+  const logoId = brand?.logo?.assetId;
+  const logo = logoId ? usable.find((a) => a.id === logoId && AVATAR_TYPES.has(baseType(a))) : undefined;
+  if (logo) return logo;
+  return usable.find((a) => a.kind === 'icon' && ICO_TYPES.has(baseType(a))) ?? null;
+}
+
+/** https URL of a copied file on the live Worker, which serves every asset at `/<storedPath>`. */
+export function liveAssetUrl(workerUrl: string, storedPath: string): string | null {
+  try {
+    const base = new URL(workerUrl);
+    if (base.protocol !== 'https:') return null;
+    const path = storedPath.replace(/^\/+/, '').split('/').map(encodeURIComponent).join('/');
+    return path ? new URL(`/${path}`, base.origin).href : null;
+  } catch {
+    return null;
+  }
+}
+
+function urlOrigin(url: string): string | null {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}
+
+export type ChatbotAvatarDeps = {
+  bots: LeadBotRepo;
+  api: Pick<MonchaWidgetApi, 'widget' | 'updateWidget'>;
+  logger: Logger;
+  now?: () => Date;
+};
+
+/**
+ * After a Worker deploy: the bot's profile picture (botIconUrl) becomes the website's icon or logo as the live copy
+ * serves it, on a white background. The launcher bubble keeps MonCha's chat icon. When the copy has no usable image,
+ * a picture taken earlier from this same Worker is removed (initials again); one set by someone else is left alone.
+ * Null when the lead has no created bot; `changed: false` when the widget already matches. Throws MonCha API errors.
+ */
+export async function setChatbotAvatarForLiveUrl(
+  deps: ChatbotAvatarDeps,
+  input: {
+    tenantId: string;
+    leadId: string;
+    workerUrl: string;
+    manifest: Pick<SiteManifest, 'assets'>;
+    brand: Pick<SiteBrand, 'logo'> | null;
+    /** The copy's file bytes, used to read the site icons' pixel sizes. */
+    readAsset?: (asset: SiteManifestAsset) => Promise<Uint8Array | null>;
+    signal?: AbortSignal;
+  },
+): Promise<{ botIconUrl: string | null; changed: boolean } | null> {
+  const bot = await deps.bots.getForLead(input.tenantId, input.leadId);
+  if (!bot?.chatbotId || bot.status !== 'created') return null;
+  const sizes = input.readAsset ? await chatbotIconSizes(input.manifest, input.readAsset) : undefined;
+  const asset = chatbotAvatarAsset(input.manifest, input.brand, sizes);
+  const botIconUrl = asset ? liveAssetUrl(input.workerUrl, asset.storedPath) : null;
+
+  const before = await deps.api.widget({ botId: bot.chatbotId, signal: input.signal });
+  const current = typeof before.config.botIconUrl === 'string' ? before.config.botIconUrl : null;
+  const bg = typeof before.config.botAvatarBgColor === 'string' ? before.config.botAvatarBgColor.toUpperCase() : null;
+  let config: WidgetConfig;
+  if (botIconUrl) {
+    if (current === botIconUrl && bg === CHATBOT_AVATAR_BG) return { botIconUrl, changed: false };
+    config = widgetConfigWith(before.config, { botIconUrl, botAvatarBgColor: CHATBOT_AVATAR_BG });
+  } else {
+    const origin = urlOrigin(input.workerUrl);
+    if (!origin || !current?.startsWith(`${origin}/`)) return { botIconUrl: null, changed: false };
+    config = widgetConfigWith(before.config, {});
+    delete config.botIconUrl;
+    delete config.botAvatarBgColor;
+  }
+
+  const after = await deps.api.updateWidget({ botId: bot.chatbotId, config, signal: input.signal });
+  await deps.bots.update(input.tenantId, bot.id, {
+    widgetConfig: after.response,
+    widgetConfiguredAt: (deps.now ?? (() => new Date()))(),
+  });
+  const saved = typeof after.config.botIconUrl === 'string' && after.config.botIconUrl ? after.config.botIconUrl : null;
+  if (saved !== botIconUrl) {
+    throw new SiteChatbotError('widget_icon_not_saved', `PUT widget answered botIconUrl ${saved ?? 'missing'} instead of ${botIconUrl ?? 'none'}`);
+  }
+  deps.logger.info(botIconUrl ? 'site_chatbot_avatar_set' : 'site_chatbot_avatar_cleared', {
+    tenantId: input.tenantId,
+    leadId: input.leadId,
+    chatbotId: bot.chatbotId,
+    botIconUrl,
+    ...(asset ? { source: asset.kind === 'icon' ? 'site_icon' : 'logo' } : { removed: current }),
+  });
+  return { botIconUrl, changed: true };
 }

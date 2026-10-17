@@ -9,6 +9,7 @@
     "sites:backfill": "tsx src/site-publish-backfill.ts",
     "bots:backfill": "tsx src/bot-backfill.ts",
     "domains:backfill": "tsx src/domains-backfill.ts",
+    "avatars:backfill": "tsx src/avatars-backfill.ts",
     "train:kick": "tsx src/train-kick.ts",
     "cold-email:demo": "tsx src/cold-email-demo.ts",
     "api": "tsx src/api.ts",
