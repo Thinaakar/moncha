@@ -231,7 +231,6 @@ export function SchedulesView() {
                     <span>Copies</span>
                   </Tooltip>
                 </TableHead>
-                <TableHead>Result</TableHead>
                 <TableHead>Duration</TableHead>
               </TableRow>
             </TableHeader>
@@ -248,23 +247,19 @@ export function SchedulesView() {
                   <TableCell>
                     <Badge variant={run.trigger === 'schedule' ? 'default' : 'secondary'}>{humanize(run.trigger)}</Badge>
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="max-w-[220px]">
                     <JobStatusBadge status={run.status} />
+                    {run.error && (
+                      <Tooltip content={run.error}>
+                        <span className="mt-1 block truncate text-xs text-destructive">{run.error}</span>
+                      </Tooltip>
+                    )}
                   </TableCell>
                   <TableCell className="text-right tabular-nums">{formatNumber(run.found)}</TableCell>
                   <TableCell className="text-right font-medium tabular-nums">{formatNumber(run.saved)}</TableCell>
                   <TableCell className="text-right tabular-nums text-muted-foreground">{formatNumber(run.skipped)}</TableCell>
                   <TableCell>
                     <CrawlCopiesCell crawl={copiesByRun.get(run.id)} finished={run.status === 'done' || run.status === 'failed'} />
-                  </TableCell>
-                  <TableCell className="max-w-[220px]">
-                    {run.error ? (
-                      <Tooltip content={run.error}>
-                        <span className="block truncate text-xs text-destructive">{run.error}</span>
-                      </Tooltip>
-                    ) : (
-                      <span className="text-xs text-muted-foreground">{humanize(run.stoppedReason)}</span>
-                    )}
                   </TableCell>
                   <TableCell className="text-muted-foreground">
                     <Tooltip content={`Started ${formatDateTime(run.startedAt)}`}>
