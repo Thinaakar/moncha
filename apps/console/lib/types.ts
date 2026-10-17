@@ -372,8 +372,21 @@ export type ColdEmail = {
   resendId: string | null;
   error: string | null;
   sentAt: string | null;
+  /** manual, auto (automation) or test (an allowlisted test inbox, not the lead). Older API versions omit it. */
+  origin?: 'manual' | 'auto' | 'test';
   createdAt: string;
   updatedAt: string;
+};
+
+export type ColdEmailAutomation = {
+  enabled: boolean;
+  mode: 'draft' | 'send';
+  dailyCap: number;
+  enabledAt: string | null;
+  updatedBy: string | null;
+  updatedAt: string | null;
+  usedToday: number;
+  readyNow: number;
 };
 
 export type ColdEmailCandidate = {

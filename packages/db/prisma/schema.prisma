@@ -131,6 +131,7 @@ model Tenant {
   siteAutomationCrawls SiteAutomationCrawl[]
   leadBots           LeadBot[]
   coldEmails         ColdEmail[]
+  coldEmailAutomation ColdEmailAutomationSettings?
 }
 
 model User {
@@ -257,6 +258,9 @@ model ColdEmail {
   resendId    String?
   error       String?
   sentAt      DateTime?
+  /// manual (console/API), auto (cold email automation) or test (sent to an allowlisted test inbox, not the lead).
+  /// Test rows never count as the lead having been emailed.
+  origin      String    @default("manual")
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -266,6 +270,22 @@ model ColdEmail {
   @@index([tenantId, status])
   @@index([tenantId, leadId])
   @@index([tenantId, toEmail])
+  @@index([tenantId, origin, createdAt])
+}
+
+/// Per-tenant cold email automation. Off by default. `draft` only queues drafts for approval; `send` also sends them,
+/// but only to addresses COLD_EMAIL_SENDING_ENABLED + COLD_EMAIL_ALLOWLIST allow (anything else stays a draft).
+model ColdEmailAutomationSettings {
+  tenantId  String    @id
+  enabled   Boolean   @default(false)
+  /// draft | send
+  mode      String    @default("draft")
+  /// Automated emails (drafts included) per UTC day.
+  dailyCap  Int       @default(20)
+  enabledAt DateTime?
+  updatedBy String?
+  updatedAt DateTime  @updatedAt
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }
 
 model SourceRecord {

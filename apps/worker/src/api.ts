@@ -2,6 +2,7 @@ import './env';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { neon } from '@neondatabase/serverless';
 import {
+  coldEmailAutomationUpdateSchema,
   coldEmailCandidatesQuerySchema,
   coldEmailDraftSchema,
   coldEmailListQuerySchema,
@@ -37,6 +38,7 @@ import {
   type SiteAutomationCrawl,
   type SiteAutomationState,
   type WorkerQueueState,
+  type ColdEmailAutomationView,
   type ColdEmailCandidatePage,
   type ColdEmailCandidateView,
   type ColdEmailGateView,
@@ -65,6 +67,7 @@ import {
   prisma,
   PrismaAuditLogRepository,
   PrismaAuthUserRepository,
+  PrismaColdEmailAutomationRepository,
   PrismaColdEmailRepository,
   PrismaCompanyRepository,
   PrismaDiscoveryScheduleRepository,
@@ -96,7 +99,9 @@ import {
   loginEnvAdmin,
   logoutUser,
   previewColdEmail,
+  sendColdEmailDraft,
   sendColdEmailNow,
+  COLD_EMAIL_AUTOMATION_MAX_DAILY_CAP,
   updateProfile,
   type ColdEmailRecord,
   COUNTRY_PROFILES,
@@ -1005,8 +1010,31 @@ function coldEmailView(row: ColdEmailRecord): ColdEmailView {
     resendId: row.resendId,
     error: row.error,
     sentAt: row.sentAt?.toISOString() ?? null,
+    origin: row.origin,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+const coldEmailAutomation = new PrismaColdEmailAutomationRepository(prisma);
+
+async function coldEmailAutomationView(tenantId: string): Promise<ColdEmailAutomationView> {
+  const now = new Date();
+  const dayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const [settings, usedToday, ready] = await Promise.all([
+    coldEmailAutomation.get(tenantId),
+    coldEmails.countOriginSince(tenantId, 'auto', dayStart),
+    coldEmails.listAutoReady(tenantId, COLD_EMAIL_AUTOMATION_MAX_DAILY_CAP),
+  ]);
+  return {
+    enabled: settings.enabled,
+    mode: settings.mode,
+    dailyCap: settings.dailyCap,
+    enabledAt: settings.enabledAt?.toISOString() ?? null,
+    updatedBy: settings.updatedBy,
+    updatedAt: settings.updatedAt?.toISOString() ?? null,
+    usedToday,
+    readyNow: ready.length,
   };
 }
 
@@ -1026,6 +1054,31 @@ function coldEmailErrorHttp(error: unknown): never {
   }
   throw error;
 }
+
+route('GET', '/api/v1/cold-emails/automation', async ({ req, tenantId }) => {
+  await requireEditor(req, tenantId, 'view cold email automation');
+  return { json: await coldEmailAutomationView(tenantId) };
+});
+
+route('PUT', '/api/v1/cold-emails/automation', async ({ req, tenantId, body }) => {
+  const user = await requireEditor(req, tenantId, 'change cold email automation');
+  const input = coldEmailAutomationUpdateSchema.parse(await body());
+  await coldEmailAutomation.update(tenantId, input, user.email, new Date());
+  logger.info('cold_email.automation_updated', { tenantId, by: user.email, ...input });
+  return { json: await coldEmailAutomationView(tenantId) };
+});
+
+// Approve a draft: sends it to its own company address, but only when the gate allows that address.
+route('POST', '/api/v1/cold-emails/:id/send', async ({ req, tenantId, params }) => {
+  await requireEditor(req, tenantId, 'send cold emails');
+  try {
+    const row = await sendColdEmailDraft(coldEmailDeps, { tenantId, id: params.id! });
+    logger.info('cold_email.draft_sent', { tenantId, id: row.id, to: row.deliveredTo });
+    return { json: coldEmailView(row) };
+  } catch (error) {
+    coldEmailErrorHttp(error);
+  }
+});
 
 route('GET', '/api/v1/cold-emails/gate', async ({ req, tenantId }) => {
   await requireEditor(req, tenantId, 'view cold email settings');

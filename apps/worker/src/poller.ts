@@ -9,6 +9,8 @@ import { WORKER_HEARTBEAT_MS } from './worker-health';
 import {
   prisma,
   PrismaAuditLogRepository,
+  PrismaColdEmailAutomationRepository,
+  PrismaColdEmailRepository,
   PrismaDiscoveryScheduleRepository,
   PrismaHostAuditCacheRepository,
   PrismaJobRunRepository,
@@ -33,6 +35,7 @@ import {
   installSiteChatbot,
   pushSiteSnapshotToGithub,
   resolveCountry,
+  runColdEmailAutomation,
   runCountryDiscoveryJob,
   runLeadBotTick,
   runLeadBotTrainTick,
@@ -52,7 +55,15 @@ import {
   MonchaSiteCapturer,
   MonchaWebsiteAuditor,
 } from '@moncha/crawling';
-import { createOpenRouterFromEnv, GeminiBrandExtractor } from '@moncha/integrations';
+import {
+  coldEmailContent,
+  coldEmailSendingEnabled,
+  createOpenRouterFromEnv,
+  createResendMailerFromEnv,
+  GeminiBrandExtractor,
+  isColdEmailRecipientAllowed,
+  parseColdEmailAllowlist,
+} from '@moncha/integrations';
 import { countryCrawlDeps, discoveryBudget, liveCountryCrawls } from './country-crawls';
 import { monchaInternalClient, siteAgentConfig, siteAutoCopyEnabled, siteGithubPublisher, siteWorkerDeployer } from './site-agent';
 
@@ -409,6 +420,32 @@ function copySite(job: JobRunRecord, store: SiteStore) {
     );
 }
 
+/**
+ * Cold email automation, per tenant with it switched on: drafts for fully ready demos within the daily cap. `send` mode
+ * also sends, but only to addresses COLD_EMAIL_SENDING_ENABLED + COLD_EMAIL_ALLOWLIST allow; the rest stay drafts.
+ */
+const COLD_EMAIL_TICK_MS = 5 * 60_000;
+const coldEmailRepo = new PrismaColdEmailRepository(prisma);
+const coldEmailAutomationRepo = new PrismaColdEmailAutomationRepository(prisma);
+const coldEmailAutomationDeps = {
+  coldEmails: coldEmailRepo,
+  mailer: createResendMailerFromEnv(process.env),
+  env: process.env as Record<string, unknown>,
+  isAllowed: isColdEmailRecipientAllowed,
+  sendingEnabled: coldEmailSendingEnabled,
+  parseAllowlist: parseColdEmailAllowlist,
+  buildContent: coldEmailContent,
+  logger,
+};
+
+async function coldEmailTick() {
+  if (crawlAbort.signal.aborted || (await isQueuePaused())) return;
+  const tenants = await withDbRetry(() => coldEmailAutomationRepo.listEnabled());
+  for (const settings of tenants) {
+    await runColdEmailAutomation(coldEmailAutomationDeps, settings);
+  }
+}
+
 async function every(errorEvent: string, ms: number, fn: () => Promise<void>) {
   for (;;) {
     try {
@@ -505,6 +542,7 @@ async function main() {
     every('site_pipeline_tick_error', POLL_MS, pipelineTick),
     every('lead_bot_tick_error', POLL_MS, leadBotTick),
     every('lead_bot_train_tick_error', POLL_MS, leadBotTrainTick),
+    every('cold_email_tick_error', COLD_EMAIL_TICK_MS, coldEmailTick),
   ]);
 }
 

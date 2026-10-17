@@ -1094,7 +1094,18 @@ export const coldEmailSendSchema = z.object({
   subject: z.string().trim().min(1).max(300).optional(),
 });
 
+/** `PUT /api/v1/cold-emails/automation`. `send` still only sends to addresses the gate allows; others stay drafts. */
+export const coldEmailAutomationUpdateSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    mode: z.enum(['draft', 'send']).optional(),
+    dailyCap: z.number().int().min(0).max(500).optional(),
+  })
+  .refine((v) => v.enabled !== undefined || v.mode !== undefined || v.dailyCap !== undefined, { message: 'Nothing to update' });
+
 export type ColdEmailStatus = z.infer<typeof coldEmailStatusSchema>;
+/** manual (console/API), auto (automation) or test (sent to an allowlisted test inbox, not the lead). */
+export type ColdEmailOrigin = 'manual' | 'auto' | 'test';
 
 export type ColdEmailView = {
   id: string;
@@ -1109,8 +1120,23 @@ export type ColdEmailView = {
   resendId: string | null;
   error: string | null;
   sentAt: string | null;
+  origin: ColdEmailOrigin;
   createdAt: string;
   updatedAt: string;
+};
+
+/** `GET/PUT /api/v1/cold-emails/automation`. */
+export type ColdEmailAutomationView = {
+  enabled: boolean;
+  mode: 'draft' | 'send';
+  dailyCap: number;
+  enabledAt: string | null;
+  updatedBy: string | null;
+  updatedAt: string | null;
+  /** Automated emails (drafts included) created today, UTC. */
+  usedToday: number;
+  /** Leads ready right now: trained bot, chatbot on the live demo, domain locked, company email, never emailed. */
+  readyNow: number;
 };
 
 export type ColdEmailCandidateView = {

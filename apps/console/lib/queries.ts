@@ -41,6 +41,7 @@ import type {
   ColdEmailCandidatePage,
   ColdEmailPreview,
   ColdEmail,
+  ColdEmailAutomation,
   ColdEmailStatus,
 } from '@/lib/types';
 
@@ -73,6 +74,7 @@ export const qk = {
   costWebsites: (q: object) => ['costs', 'websites', q] as const,
   costWebsite: (leadId: string) => ['costs', 'website', leadId] as const,
   coldEmailGate: ['cold-emails', 'gate'] as const,
+  coldEmailAutomation: ['cold-emails', 'automation'] as const,
   coldEmails: (q: object) => ['cold-emails', 'list', q] as const,
   coldEmailCandidates: (q: object) => ['cold-emails', 'candidates', q] as const,
 };
@@ -428,6 +430,34 @@ export function useColdEmailGate() {
     queryKey: qk.coldEmailGate,
     queryFn: () => api<ColdEmailGate>('cold-emails/gate'),
     refetchInterval: 60_000,
+  });
+}
+
+export function useColdEmailAutomation() {
+  return useQuery({
+    queryKey: qk.coldEmailAutomation,
+    queryFn: () => api<ColdEmailAutomation>('cold-emails/automation'),
+    refetchInterval: 60_000,
+  });
+}
+
+export function useUpdateColdEmailAutomation() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (input: Partial<Pick<ColdEmailAutomation, 'enabled' | 'mode' | 'dailyCap'>>) =>
+      api<ColdEmailAutomation>('cold-emails/automation', { method: 'PUT', body: input }),
+    onSuccess: (state) => client.setQueryData(qk.coldEmailAutomation, state),
+  });
+}
+
+/** Approve a draft: sends it to its company address, refused unless the send gate allows that address. */
+export function useSendColdEmailDraft() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api<ColdEmail>(`cold-emails/${encodeURIComponent(id)}/send`, { method: 'POST' }),
+    onSuccess: async () => {
+      await client.invalidateQueries({ queryKey: ['cold-emails'] });
+    },
   });
 }
 
