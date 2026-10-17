@@ -5,7 +5,12 @@ export type ColdEmailContentInput = {
   demoUrl: string;
   /** Optional secondary line under the intro. */
   note?: string;
+  /** Header logo; must be a public https PNG (Gmail and Outlook do not show SVG). Defaults to COLD_EMAIL_LOGO_URL. */
+  logoUrl?: string;
 };
+
+/** The console's favicon as a 112 px PNG (apps/console/public/brand/mark-email.png), public without login. */
+export const COLD_EMAIL_LOGO_URL = 'https://moncha-console.vinothjv4-tech.workers.dev/brand/mark-email.png';
 
 const escapeHtml = (text: string) =>
   text.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
@@ -61,7 +66,7 @@ export function coldEmailContent(input: ColdEmailContentInput) {
         <tr>
           <td style="background:#2563eb;padding:20px 28px">
             <table role="presentation" cellpadding="0" cellspacing="0"><tr>
-              <td style="width:28px;height:28px;background:#ffffff;border-radius:6px;text-align:center;vertical-align:middle;font-size:14px;font-weight:700;color:#2563eb;line-height:28px">M</td>
+              <td style="width:28px;height:28px;vertical-align:middle"><img src="${escapeHtml(input.logoUrl?.trim() || COLD_EMAIL_LOGO_URL)}" width="28" height="28" alt="MonCha" style="display:block;width:28px;height:28px;border:0;border-radius:6px"></td>
               <td style="padding-left:10px;font-size:18px;font-weight:700;color:#ffffff;letter-spacing:-0.02em">MonCha</td>
             </tr></table>
           </td>

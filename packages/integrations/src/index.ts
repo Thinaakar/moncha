@@ -28,6 +28,7 @@ export { GeminiBrandExtractor, groundBrand, DEFAULT_SITE_AGENT_MODEL } from './s
 export type { GeminiBrandExtractorOptions } from './site-brand';
 export { ResendMailer, createResendMailerFromEnv, passwordResetEmailContent } from './resend';
 export {
+  COLD_EMAIL_LOGO_URL,
   coldEmailContent,
   coldEmailSendingEnabled,
   isColdEmailRecipientAllowed,

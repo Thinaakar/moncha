@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  COLD_EMAIL_LOGO_URL,
   coldEmailContent,
   coldEmailSendingEnabled,
   isColdEmailRecipientAllowed,
@@ -17,6 +18,14 @@ describe('coldEmailContent', () => {
     expect(html).toContain('https://acme.example.workers.dev/?x=1&amp;y=2');
     expect(html).toContain('Open demo');
     expect(text).toContain('Grounded answers');
+  });
+
+  it('shows the MonCha favicon PNG in the header instead of a letter', () => {
+    const { html } = coldEmailContent({ companyName: 'Acme', demoUrl: 'https://acme.example' });
+    expect(html).toContain(`<img src="${COLD_EMAIL_LOGO_URL}" width="28" height="28" alt="MonCha"`);
+    expect(html).not.toContain('line-height:28px">M</td>');
+    const custom = coldEmailContent({ companyName: 'Acme', demoUrl: 'https://acme.example', logoUrl: 'https://cdn.example/logo.png?a=1&b=2' });
+    expect(custom.html).toContain('src="https://cdn.example/logo.png?a=1&amp;b=2"');
   });
 });
 
