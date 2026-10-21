@@ -411,6 +411,8 @@ export type ColdEmailGate = {
   allowlistOpen: boolean;
   resendConfigured: boolean;
   from: string;
+  isDevMode: boolean;
+  devInboxes: string[];
 };
 
 export type ColdEmailPreview = {

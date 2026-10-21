@@ -112,7 +112,7 @@ export type PasswordResetEmail = {
 };
 
 export type ColdEmailPayload = {
-  to: string;
+  to: string | string[];
   companyName: string;
   demoUrl: string;
   note?: string;

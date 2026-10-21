@@ -33,6 +33,9 @@ export {
   coldEmailSendingEnabled,
   isColdEmailRecipientAllowed,
   parseColdEmailAllowlist,
+  APPROVED_DEV_INBOXES,
+  isColdEmailDevMode,
+  getColdEmailDevInboxes,
   type ColdEmailContentInput,
 } from './cold-email';
 export { R2SiteStore, createR2SiteStoreFromEnv, r2ConfigFromEnv, type R2Config } from './r2';

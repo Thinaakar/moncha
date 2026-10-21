@@ -149,3 +149,45 @@ export function isColdEmailRecipientAllowed(to: string, env: Record<string, unkn
   if (allow.open) return true;
   return allow.emails.has(to.trim().toLowerCase());
 }
+
+/** The two approved development inboxes for testing without emailing real customers. */
+export const APPROVED_DEV_INBOXES = ['vinothjv4.tech@gmail.com', 'thinaakark2004@gmail.com'] as const;
+
+/**
+ * Returns whether cold email is running in development mode (fails closed to true by default).
+ * Only returns false if explicitly disabled with COLD_EMAIL_DEV_MODE=false AND NODE_ENV=production.
+ */
+export function isColdEmailDevMode(env: Record<string, unknown>): boolean {
+  const devMode = env.COLD_EMAIL_DEV_MODE;
+  if (devMode === 'false' || devMode === false) {
+    if (env.NODE_ENV === 'production' && env.COLD_EMAIL_PRODUCTION_CONFIRMED === 'true') {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Returns the approved development inboxes from env or defaults to APPROVED_DEV_INBOXES.
+ * Validates each email; fails closed if any email is invalid.
+ */
+export function getColdEmailDevInboxes(env: Record<string, unknown>): string[] {
+  const raw = typeof env.COLD_EMAIL_DEV_INBOXES === 'string' ? env.COLD_EMAIL_DEV_INBOXES.trim() : '';
+  if (!raw) {
+    return [...APPROVED_DEV_INBOXES];
+  }
+  const parts = raw
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  if (!parts.length) {
+    return [...APPROVED_DEV_INBOXES];
+  }
+  for (const email of parts) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      throw new Error(`invalid_dev_inbox: "${email}" is not a valid email address`);
+    }
+  }
+  return parts;
+}
+

@@ -1081,17 +1081,30 @@ export const coldEmailDraftSchema = z.object({
   subject: z.string().trim().min(1).max(300).optional(),
 });
 
-/** Send only to an allowlisted address. During development, deliverTo must be on COLD_EMAIL_ALLOWLIST. */
+/** Send cold email. In dev mode, deliverTo must be approved dev inboxes; otherwise must pass COLD_EMAIL_ALLOWLIST. */
 export const coldEmailSendSchema = z.object({
   leadId: z.string().trim().min(1).optional(),
   companyName: z.string().trim().min(1).max(200),
   /** Intended company contact (audit only; not used as Resend recipient unless deliverTo omitted and allowlisted). */
   toEmail: z.string().trim().email().max(320).optional(),
-  /** Resend recipient — must pass COLD_EMAIL_ALLOWLIST. */
-  deliverTo: z.string().trim().email().max(320),
+  /** Resend recipient(s) — string (single or comma-separated) or array of emails. */
+  deliverTo: z.union([
+    z.string().trim().min(1).max(1000),
+    z.array(z.string().trim().email().max(320)).min(1),
+  ]),
   demoUrl: z.string().trim().url().max(2000),
   note: z.string().trim().max(500).optional(),
   subject: z.string().trim().min(1).max(300).optional(),
+});
+
+/** `POST /api/v1/cold-emails/:id/send` optional body to override delivery recipients without altering lead data. */
+export const coldEmailDraftSendSchema = z.object({
+  deliverToOverride: z
+    .union([
+      z.string().trim().min(1).max(1000),
+      z.array(z.string().trim().email().max(320)).min(1),
+    ])
+    .optional(),
 });
 
 /** `PUT /api/v1/cold-emails/automation`. `send` still only sends to addresses the gate allows; others stay drafts. */
@@ -1161,6 +1174,8 @@ export type ColdEmailGateView = {
   allowlistOpen: boolean;
   resendConfigured: boolean;
   from: string;
+  isDevMode: boolean;
+  devInboxes: string[];
 };
 
 export type ColdEmailPreviewView = {

@@ -13,7 +13,15 @@ import {
 } from './coldEmails';
 
 const NOW = new Date('2026-10-17T08:00:00.000Z');
-const TEST_INBOX = 'thinaakark2004@gmail.com';
+const DEV_INBOX_1 = 'thinaakark2004@gmail.com';
+const DEV_INBOX_2 = 'vinothjv4.tech@gmail.com';
+const DEV_INBOXES = [DEV_INBOX_1, DEV_INBOX_2];
+
+const PROD_ENV = {
+  COLD_EMAIL_DEV_MODE: 'false',
+  NODE_ENV: 'production',
+  COLD_EMAIL_PRODUCTION_CONFIRMED: 'true',
+};
 
 function fakeRepo(ready: ColdEmailAutoCandidate[] = [], usedToday = 0) {
   const rows: ColdEmailRecord[] = [];
@@ -49,11 +57,14 @@ function fakeRepo(ready: ColdEmailAutoCandidate[] = [], usedToday = 0) {
   return { repo, rows };
 }
 
-function fakeMailer() {
+function fakeMailer(shouldFail = false) {
   const sent: ColdEmailPayload[] = [];
   const mailer: Mailer = {
     sendPasswordReset: async () => undefined,
     sendColdEmail: async (email) => {
+      if (shouldFail) {
+        throw new Error('resend_403: domain not verified');
+      }
       sent.push(email);
       return { id: `re_${sent.length}` };
     },
@@ -61,16 +72,28 @@ function fakeMailer() {
   return { mailer, sent };
 }
 
-/** Only the test inbox is allowed, as in development. */
-function deps(repo: ColdEmailRepo, mailer: Mailer | null, allow: string[] = [TEST_INBOX]) {
+function deps(
+  repo: ColdEmailRepo,
+  mailer: Mailer | null,
+  allow: string[] = DEV_INBOXES,
+  env: Record<string, unknown> = {},
+) {
   return {
     coldEmails: repo,
     mailer,
-    env: {},
-    isAllowed: (to: string) => allow.includes(to.toLowerCase()),
+    env: {
+      COLD_EMAIL_DEV_MODE: 'true',
+      COLD_EMAIL_DEV_INBOXES: DEV_INBOXES.join(','),
+      ...env,
+    },
+    isAllowed: (to: string) => allow.includes('*') || allow.includes(to.toLowerCase()),
     sendingEnabled: () => true,
-    parseAllowlist: () => ({ open: false, emails: new Set(allow) }),
-    buildContent: (i: { companyName: string; demoUrl: string }) => ({ subject: `Demo for ${i.companyName}`, text: 't', html: 'h' }),
+    parseAllowlist: () => ({ open: allow.includes('*'), emails: new Set(allow) }),
+    buildContent: (i: { companyName: string; demoUrl: string }) => ({
+      subject: `Demo for ${i.companyName}`,
+      text: 't',
+      html: 'h',
+    }),
   };
 }
 
@@ -113,20 +136,28 @@ describe('runColdEmailAutomation', () => {
     expect(sent).toEqual([]);
   });
 
-  it('send mode keeps addresses the gate does not allow as drafts', async () => {
-    const { repo, rows } = fakeRepo([lead(1), lead(2, TEST_INBOX)]);
+  it('in development mode, automated sending is blocked and all candidates stay drafts', async () => {
+    const { repo, rows } = fakeRepo([lead(1), lead(2, DEV_INBOX_1)]);
     const { mailer, sent } = fakeMailer();
+    // In dev mode, even with mode: 'send', automated customer sends are blocked
     const out = await runColdEmailAutomation(deps(repo, mailer), settings({ mode: 'send' }), NOW);
-    expect(out).toMatchObject({ drafted: 2, sent: 1, heldAsDraft: 1 });
-    expect(sent.map((s) => s.to)).toEqual([TEST_INBOX]);
-    expect(rows.find((r) => r.toEmail === 'owner1@business1.sg')?.status).toBe('draft');
+    expect(out).toMatchObject({ drafted: 2, sent: 0, heldAsDraft: 2 });
+    expect(sent).toEqual([]);
+    expect(rows[0]!.status).toBe('draft');
+    expect(rows[1]!.status).toBe('draft');
   });
 
-  it('send mode without a mailer only drafts', async () => {
-    const { repo, rows } = fakeRepo([lead(1, TEST_INBOX)]);
-    const out = await runColdEmailAutomation(deps(repo, null), settings({ mode: 'send' }), NOW);
-    expect(out).toMatchObject({ drafted: 1, sent: 0, heldAsDraft: 1 });
-    expect(rows[0]!.status).toBe('draft');
+  it('in production mode, send mode sends to allowed addresses and keeps others as drafts', async () => {
+    const { repo, rows } = fakeRepo([lead(1), lead(2, 'allowed@business.sg')]);
+    const { mailer, sent } = fakeMailer();
+    const out = await runColdEmailAutomation(
+      deps(repo, mailer, ['allowed@business.sg'], PROD_ENV),
+      settings({ mode: 'send' }),
+      NOW,
+    );
+    expect(out).toMatchObject({ drafted: 2, sent: 1, heldAsDraft: 1 });
+    expect(sent.map((s) => s.to)).toEqual([['allowed@business.sg']]);
+    expect(rows.find((r) => r.toEmail === 'owner1@business1.sg')?.status).toBe('draft');
   });
 
   it("stops at today's cap", async () => {
@@ -138,56 +169,180 @@ describe('runColdEmailAutomation', () => {
 });
 
 describe('sendColdEmailDraft', () => {
-  it('refuses a company address the gate does not allow and leaves the draft untouched', async () => {
+  it('rejects sending directly to customer email in development mode', async () => {
     const { repo, rows } = fakeRepo();
     const { mailer, sent } = fakeMailer();
     const draft = await repo.create({
       tenantId: 't1',
       leadId: 'lead1',
-      companyName: 'Business 1',
-      toEmail: 'owner1@business1.sg',
-      demoUrl: 'https://business1.workers.dev',
-      subject: 'Demo',
+      companyName: 'Real Customer Co',
+      toEmail: 'customer@realclient.com',
+      demoUrl: 'https://realclient.workers.dev',
+      subject: 'Demo for Real Customer Co',
       status: 'draft',
       origin: 'auto',
     });
-    await expect(sendColdEmailDraft(deps(repo, mailer), { tenantId: 't1', id: draft.id })).rejects.toMatchObject({
+
+    await expect(
+      sendColdEmailDraft(deps(repo, mailer), { tenantId: 't1', id: draft.id }),
+    ).rejects.toMatchObject({
       code: 'blocked',
     });
     expect(sent).toEqual([]);
-    expect(rows[0]).toMatchObject({ status: 'draft', deliveredTo: null });
+    // Customer address and draft state untouched
+    expect(rows[0]).toMatchObject({ status: 'draft', toEmail: 'customer@realclient.com', deliveredTo: null });
   });
 
-  it('sends an allowed draft and records it', async () => {
+  it('allows deliverToOverride to send draft test to dev inboxes while preserving customer email', async () => {
     const { repo, rows } = fakeRepo();
     const { mailer, sent } = fakeMailer();
     const draft = await repo.create({
       tenantId: 't1',
-      leadId: null,
-      companyName: 'Business 1',
-      toEmail: TEST_INBOX,
-      demoUrl: 'https://business1.workers.dev',
+      leadId: 'lead1',
+      companyName: 'Real Customer Co',
+      toEmail: 'customer@realclient.com',
+      demoUrl: 'https://realclient.workers.dev',
+      subject: 'Demo for Real Customer Co',
+      status: 'draft',
+      origin: 'auto',
+    });
+
+    const result = await sendColdEmailDraft(deps(repo, mailer), {
+      tenantId: 't1',
+      id: draft.id,
+      deliverToOverride: [DEV_INBOX_1, DEV_INBOX_2],
+    });
+
+    expect(result.status).toBe('sent');
+    expect(result.toEmail).toBe('customer@realclient.com'); // Preserved!
+    expect(result.deliveredTo).toBe(`${DEV_INBOX_1}, ${DEV_INBOX_2}`);
+    expect(sent[0]!.to).toEqual([DEV_INBOX_1, DEV_INBOX_2]);
+    expect(rows[0]!.toEmail).toBe('customer@realclient.com');
+  });
+
+  it('rejects unapproved override address in development mode', async () => {
+    const { repo } = fakeRepo();
+    const { mailer } = fakeMailer();
+    const draft = await repo.create({
+      tenantId: 't1',
+      leadId: 'lead1',
+      companyName: 'Acme',
+      toEmail: DEV_INBOX_1,
+      demoUrl: 'https://acme.workers.dev',
       subject: 'Demo',
       status: 'draft',
     });
-    await sendColdEmailDraft(deps(repo, mailer), { tenantId: 't1', id: draft.id });
-    expect(sent.map((s) => s.to)).toEqual([TEST_INBOX]);
-    expect(rows[0]).toMatchObject({ status: 'sent', deliveredTo: TEST_INBOX, resendId: 're_1' });
-    await expect(sendColdEmailDraft(deps(repo, mailer), { tenantId: 't1', id: draft.id })).rejects.toBeInstanceOf(ColdEmailError);
+
+    await expect(
+      sendColdEmailDraft(deps(repo, mailer), {
+        tenantId: 't1',
+        id: draft.id,
+        deliverToOverride: 'malicious@outside.com',
+      }),
+    ).rejects.toMatchObject({ code: 'blocked' });
+  });
+
+  it('does not create false success state when Resend returns an error', async () => {
+    const { repo, rows } = fakeRepo();
+    const { mailer } = fakeMailer(true); // Fails
+    const draft = await repo.create({
+      tenantId: 't1',
+      leadId: 'lead1',
+      companyName: 'Acme',
+      toEmail: 'customer@realclient.com',
+      demoUrl: 'https://acme.workers.dev',
+      subject: 'Demo',
+      status: 'draft',
+    });
+
+    await expect(
+      sendColdEmailDraft(deps(repo, mailer), {
+        tenantId: 't1',
+        id: draft.id,
+        deliverToOverride: DEV_INBOX_1,
+      }),
+    ).rejects.toThrow();
+
+    expect(rows[0]!.status).toBe('failed');
+    expect(rows[0]!.error).toContain('resend_403');
   });
 });
 
 describe('sendColdEmailNow', () => {
-  it('marks a send to a test inbox instead of the company as a test', async () => {
+  it('sends to single dev inbox, preserving intended customer email and marking origin as test', async () => {
     const { repo, rows } = fakeRepo();
-    await sendColdEmailNow(deps(repo, fakeMailer().mailer), {
+    const { mailer, sent } = fakeMailer();
+    await sendColdEmailNow(deps(repo, mailer), {
       tenantId: 't1',
       leadId: 'lead1',
       companyName: 'Business 1',
       toEmail: 'owner1@business1.sg',
-      deliverTo: TEST_INBOX,
+      deliverTo: DEV_INBOX_1,
       demoUrl: 'https://business1.workers.dev',
     });
-    expect(rows[0]).toMatchObject({ origin: 'test', toEmail: 'owner1@business1.sg', deliveredTo: TEST_INBOX, status: 'sent' });
+
+    expect(rows[0]).toMatchObject({
+      origin: 'test',
+      toEmail: 'owner1@business1.sg',
+      deliveredTo: DEV_INBOX_1,
+      status: 'sent',
+    });
+    expect(sent[0]!.to).toEqual([DEV_INBOX_1]);
+  });
+
+  it('sends to multiple developer inboxes simultaneously', async () => {
+    const { repo, rows } = fakeRepo();
+    const { mailer, sent } = fakeMailer();
+    await sendColdEmailNow(deps(repo, mailer), {
+      tenantId: 't1',
+      leadId: 'lead1',
+      companyName: 'Business 1',
+      toEmail: 'owner1@business1.sg',
+      deliverTo: [DEV_INBOX_1, DEV_INBOX_2],
+      demoUrl: 'https://business1.workers.dev',
+    });
+
+    expect(rows[0]).toMatchObject({
+      origin: 'test',
+      toEmail: 'owner1@business1.sg',
+      deliveredTo: `${DEV_INBOX_1}, ${DEV_INBOX_2}`,
+      status: 'sent',
+    });
+    expect(sent[0]!.to).toEqual([DEV_INBOX_1, DEV_INBOX_2]);
+  });
+
+  it('rejects sending to customer email directly in development mode', async () => {
+    const { repo } = fakeRepo();
+    const { mailer } = fakeMailer();
+    await expect(
+      sendColdEmailNow(deps(repo, mailer), {
+        tenantId: 't1',
+        leadId: 'lead1',
+        companyName: 'Business 1',
+        toEmail: 'owner1@business1.sg',
+        deliverTo: 'owner1@business1.sg', // Direct customer send attempt
+        demoUrl: 'https://business1.workers.dev',
+      }),
+    ).rejects.toMatchObject({ code: 'blocked' });
+  });
+
+  it('fails closed when dev inbox configuration is invalid', async () => {
+    const { repo } = fakeRepo();
+    const { mailer } = fakeMailer();
+    await expect(
+      sendColdEmailNow(
+        deps(repo, mailer, DEV_INBOXES, {
+          COLD_EMAIL_DEV_MODE: 'true',
+          COLD_EMAIL_DEV_INBOXES: 'not-a-valid-email',
+        }),
+        {
+          tenantId: 't1',
+          companyName: 'Business 1',
+          toEmail: 'owner1@business1.sg',
+          deliverTo: DEV_INBOX_1,
+          demoUrl: 'https://business1.workers.dev',
+        },
+      ),
+    ).rejects.toMatchObject({ code: 'validation' });
   });
 });

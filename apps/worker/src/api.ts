@@ -5,6 +5,7 @@ import {
   coldEmailAutomationUpdateSchema,
   coldEmailCandidatesQuerySchema,
   coldEmailDraftSchema,
+  coldEmailDraftSendSchema,
   coldEmailListQuerySchema,
   coldEmailPreviewSchema,
   coldEmailSendSchema,
@@ -1008,8 +1009,8 @@ const coldEmailDeps = {
   buildContent: coldEmailContent,
   coldFrom:
     process.env.COLD_EMAIL_FROM?.trim() ||
-    (process.env.EMAIL_FROM?.includes('noreply@dev-moncha.com') ? process.env.EMAIL_FROM.trim() : undefined) ||
-    'MonCha <noreply@dev-moncha.com>',
+    (process.env.EMAIL_FROM?.includes('support@jobteacher.pro') ? process.env.EMAIL_FROM.trim() : undefined) ||
+    'Moncha <support@jobteacher.pro>',
 };
 
 function coldEmailView(row: ColdEmailRecord): ColdEmailView {
@@ -1084,11 +1085,27 @@ route('PUT', '/api/v1/cold-emails/automation', async ({ req, tenantId, body }) =
   return { json: await coldEmailAutomationView(tenantId) };
 });
 
-// Approve a draft: sends it to its own company address, but only when the gate allows that address.
-route('POST', '/api/v1/cold-emails/:id/send', async ({ req, tenantId, params }) => {
+// Approve a draft: sends it to its own company address, or deliverToOverride if provided.
+route('POST', '/api/v1/cold-emails/:id/send', async ({ req, tenantId, params, body }) => {
   await requireEditor(req, tenantId, 'send cold emails');
+  let deliverToOverride: string | string[] | undefined;
   try {
-    const row = await sendColdEmailDraft(coldEmailDeps, { tenantId, id: params.id! });
+    const rawBody = await body();
+    if (rawBody && typeof rawBody === 'object') {
+      const parsed = coldEmailDraftSendSchema.safeParse(rawBody);
+      if (parsed.success && parsed.data.deliverToOverride) {
+        deliverToOverride = parsed.data.deliverToOverride;
+      }
+    }
+  } catch {
+    // Empty body is valid when approving draft to its own address
+  }
+  try {
+    const row = await sendColdEmailDraft(coldEmailDeps, {
+      tenantId,
+      id: params.id!,
+      deliverToOverride,
+    });
     logger.info('cold_email.draft_sent', { tenantId, id: row.id, to: row.deliveredTo });
     return { json: coldEmailView(row) };
   } catch (error) {
@@ -1194,7 +1211,7 @@ route('POST', '/api/v1/cold-emails/send', async ({ req, tenantId, body }) => {
       tenantId,
       leadId: input.leadId,
       companyName: input.companyName,
-      toEmail: input.toEmail ?? input.deliverTo,
+      toEmail: input.toEmail ?? (Array.isArray(input.deliverTo) ? input.deliverTo[0]! : input.deliverTo),
       deliverTo: input.deliverTo,
       demoUrl: input.demoUrl,
       note: input.note,

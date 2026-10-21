@@ -206,10 +206,12 @@ export function OutreachView() {
   const [previewHtml, setPreviewHtml] = useState<string | null>(null);
   const [previewSubject, setPreviewSubject] = useState<string | null>(null);
   const [busyLeadId, setBusyLeadId] = useState<string | null>(null);
+  const [busyAction, setBusyAction] = useState<string | null>(null);
 
   const allowlistHint = useMemo(() => {
     if (!gate.data) return null;
     if (!gate.data.sendingEnabled) return 'Sending is off (COLD_EMAIL_SENDING_ENABLED). Drafts and previews still work.';
+    if (gate.data.isDevMode) return `Development mode: customer sending blocked. All test sends go to ${gate.data.devInboxes.join(' & ')}.`;
     if (gate.data.allowlistOpen) return 'Allowlist is open (*) — any address can receive mail.';
     if (!gate.data.allowlist.length) return 'Allowlist is empty — nobody can receive mail.';
     return `Only allowlisted addresses can receive mail: ${gate.data.allowlist.join(', ')}`;
@@ -221,6 +223,7 @@ export function OutreachView() {
       return;
     }
     setBusyLeadId(c.leadId);
+    setBusyAction('preview');
     try {
       const result = await preview.mutateAsync({ companyName: c.companyName, demoUrl: c.demoUrl });
       setPreviewHtml(result.html);
@@ -229,6 +232,7 @@ export function OutreachView() {
       toast.error(errorMessage(e));
     } finally {
       setBusyLeadId(null);
+      setBusyAction(null);
     }
   }
 
@@ -238,6 +242,7 @@ export function OutreachView() {
       return;
     }
     setBusyLeadId(c.leadId);
+    setBusyAction('draft');
     try {
       await draft.mutateAsync({
         leadId: c.leadId,
@@ -250,6 +255,7 @@ export function OutreachView() {
       toast.error(errorMessage(e));
     } finally {
       setBusyLeadId(null);
+      setBusyAction(null);
     }
   }
 
@@ -263,6 +269,7 @@ export function OutreachView() {
       return;
     }
     setBusyLeadId(c.leadId);
+    setBusyAction('send');
     try {
       const row = await send.mutateAsync({
         leadId: c.leadId,
@@ -277,6 +284,38 @@ export function OutreachView() {
       toast.error(errorMessage(e));
     } finally {
       setBusyLeadId(null);
+      setBusyAction(null);
+    }
+  }
+
+  /** Send personalized cold email for this lead directly to the approved developer inboxes. */
+  async function onSendToDevs(c: ColdEmailCandidate) {
+    if (!c.demoUrl) {
+      toast.error('This lead has no live demo URL yet');
+      return;
+    }
+    const devRecipients = gate.data?.devInboxes?.length
+      ? gate.data.devInboxes
+      : ['vinothjv4.tech@gmail.com', 'thinaakark2004@gmail.com'];
+
+    setBusyLeadId(c.leadId);
+    setBusyAction('send-dev');
+    try {
+      const row = await send.mutateAsync({
+        leadId: c.leadId,
+        companyName: c.companyName,
+        toEmail: c.companyEmail ?? devRecipients[0],
+        deliverTo: devRecipients,
+        demoUrl: c.demoUrl,
+        note: 'Internal developer test preview',
+      });
+      toast.success(`Demo sent to ${row.deliveredTo || devRecipients.join(' & ')}`);
+      url.set({ tab: 'sent', page: null });
+    } catch (e) {
+      toast.error(errorMessage(e));
+    } finally {
+      setBusyLeadId(null);
+      setBusyAction(null);
     }
   }
 
@@ -291,6 +330,7 @@ export function OutreachView() {
       return;
     }
     setBusyLeadId(c.leadId);
+    setBusyAction('test');
     try {
       const row = await send.mutateAsync({
         leadId: c.leadId,
@@ -304,6 +344,7 @@ export function OutreachView() {
       toast.error(errorMessage(e));
     } finally {
       setBusyLeadId(null);
+      setBusyAction(null);
     }
   }
 
@@ -319,12 +360,63 @@ export function OutreachView() {
     }
   }
 
+  /** Send test copy of existing draft to the approved developer inboxes without modifying the lead's email. */
+  async function onSendDraftToDevs(row: ColdEmail) {
+    const devRecipients = gate.data?.devInboxes?.length
+      ? gate.data.devInboxes
+      : ['vinothjv4.tech@gmail.com', 'thinaakark2004@gmail.com'];
+
+    setBusyEmailId(row.id);
+    try {
+      const sentResult = await sendDraft.mutateAsync({
+        id: row.id,
+        deliverToOverride: devRecipients,
+      });
+      toast.success(`Test sent to ${sentResult.deliveredTo || devRecipients.join(' & ')}`);
+    } catch (e) {
+      toast.error(errorMessage(e));
+    } finally {
+      setBusyEmailId(null);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader
         title="Cold email"
         description="Digest-style outreach for live MonCha demos. Delivery is blocked unless the address is on COLD_EMAIL_ALLOWLIST."
       />
+
+      {gate.data?.isDevMode ? (
+        <Card className="border-2 border-amber-500/50 bg-amber-500/10 shadow-sm">
+          <CardHeader className="flex-row items-start gap-4 space-y-0 pb-3">
+            <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-amber-500/20 text-amber-700 dark:text-amber-400">
+              <ShieldAlert className="size-5" />
+            </span>
+            <div className="min-w-0 flex-1 space-y-1">
+              <CardTitle className="text-base font-bold tracking-tight text-amber-900 dark:text-amber-200">
+                DEVELOPMENT MODE — CUSTOMER EMAIL DELIVERY DISABLED
+              </CardTitle>
+              <CardDescription className="text-amber-800/90 dark:text-amber-300/90">
+                All manual test sends are redirected to the developer inboxes. Automated customer email delivery is disabled.
+              </CardDescription>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-2 pt-0 text-sm text-amber-950 dark:text-amber-100">
+            <p>
+              <span className="font-semibold">Sender:</span> <span className="font-mono">{gate.data.from}</span>
+            </p>
+            <div>
+              <span className="font-semibold">Test recipients:</span>
+              <ul className="list-disc list-inside ml-2 font-mono text-xs mt-1 space-y-0.5">
+                {gate.data.devInboxes.map((inbox) => (
+                  <li key={inbox}>{inbox}</li>
+                ))}
+              </ul>
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
 
       {gate.isError ? (
         <ErrorState title="Could not load send gate" error={gate.error} onRetry={() => void gate.refetch()} />
@@ -477,38 +569,60 @@ export function OutreachView() {
                           </TableCell>
                           <TableCell className="text-right">
                             <div className="flex flex-wrap justify-end gap-1">
-                              <Button type="button" size="sm" variant="outline" disabled={busy || !c.demoUrl} onClick={() => void onPreview(c)}>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                disabled={busyLeadId !== null || !c.demoUrl}
+                                onClick={() => void onPreview(c)}
+                              >
                                 Preview
                               </Button>
                               <Button
                                 type="button"
                                 size="sm"
                                 variant="outline"
-                                disabled={busy || !c.demoUrl || !c.companyEmail}
+                                disabled={busyLeadId !== null || !c.demoUrl || !c.companyEmail}
                                 onClick={() => void onDraft(c)}
                               >
                                 Draft
                               </Button>
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant="outline"
-                                disabled={busy || !c.demoUrl || !testAllowed || !canEdit}
-                                title={testAllowed ? `Send this lead's email to ${testInbox} only` : `${testInbox} is not allowlisted`}
-                                onClick={() => void onSendTest(c)}
-                              >
-                                Send test
-                              </Button>
-                              {allowlisted && c.companyEmail ? (
+                              {gate.data?.isDevMode ? (
                                 <Button
                                   type="button"
                                   size="sm"
-                                  disabled={busy || !c.demoUrl}
-                                  onClick={() => void onSendAllowlisted(c, c.companyEmail!)}
+                                  variant="default"
+                                  disabled={busyLeadId !== null || !c.demoUrl || !canEdit || !gate.data?.sendingEnabled}
+                                  loading={busy && busyAction === 'send-dev'}
+                                  title={`Send personalized demo email directly to ${(gate.data?.devInboxes ?? ['vinothjv4.tech@gmail.com', 'thinaakark2004@gmail.com']).join(' & ')}`}
+                                  onClick={() => void onSendToDevs(c)}
                                 >
-                                  Send
+                                  Send to Devs
                                 </Button>
-                              ) : null}
+                              ) : (
+                                <>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    disabled={busyLeadId !== null || !c.demoUrl || !testAllowed || !canEdit}
+                                    title={testAllowed ? `Send this lead's email to ${testInbox} only` : `${testInbox} is not allowlisted`}
+                                    onClick={() => void onSendTest(c)}
+                                  >
+                                    Send test
+                                  </Button>
+                                  {allowlisted && c.companyEmail ? (
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      disabled={busyLeadId !== null || !c.demoUrl}
+                                      onClick={() => void onSendAllowlisted(c, c.companyEmail!)}
+                                    >
+                                      Send
+                                    </Button>
+                                  ) : null}
+                                </>
+                              )}
                             </div>
                           </TableCell>
                         </TableRow>
@@ -577,17 +691,33 @@ export function OutreachView() {
                           </TableCell>
                           <TableCell className="text-right">
                             {approvable ? (
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant="outline"
-                                loading={busyEmailId === row.id}
-                                disabled={!allowed || !canEdit || busyEmailId !== null}
-                                title={allowed ? `Send to ${row.toEmail}` : `${row.toEmail} is not allowlisted; the draft stays a draft`}
-                                onClick={() => void onApproveDraft(row)}
-                              >
-                                Send
-                              </Button>
+                              <div className="flex flex-wrap justify-end gap-1">
+                                {gate.data?.isDevMode ? (
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    loading={busyEmailId === row.id}
+                                    disabled={!canEdit || busyEmailId !== null || !gate.data?.sendingEnabled}
+                                    title={`Send test copy directly to ${(gate.data?.devInboxes ?? ['vinothjv4.tech@gmail.com', 'thinaakark2004@gmail.com']).join(' & ')}`}
+                                    onClick={() => void onSendDraftToDevs(row)}
+                                  >
+                                    Send to Devs
+                                  </Button>
+                                ) : (
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    loading={busyEmailId === row.id}
+                                    disabled={!allowed || !canEdit || busyEmailId !== null}
+                                    title={allowed ? `Send to ${row.toEmail}` : `${row.toEmail} is not allowlisted; the draft stays a draft`}
+                                    onClick={() => void onApproveDraft(row)}
+                                  >
+                                    Send
+                                  </Button>
+                                )}
+                              </div>
                             ) : (
                               '—'
                             )}

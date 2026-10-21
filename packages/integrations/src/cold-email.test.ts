@@ -6,6 +6,8 @@ import {
   isColdEmailRecipientAllowed,
   parseColdEmailAllowlist,
   shortCompanyName,
+  isColdEmailDevMode,
+  getColdEmailDevInboxes,
 } from './cold-email';
 
 describe('coldEmailContent', () => {
@@ -80,5 +82,39 @@ describe('cold email gate', () => {
         COLD_EMAIL_ALLOWLIST: '*',
       }),
     ).toBe(true);
+  });
+});
+
+describe('development mode safety', () => {
+  it('defaults to dev mode enabled (fails closed)', () => {
+    expect(isColdEmailDevMode({})).toBe(true);
+    expect(isColdEmailDevMode({ COLD_EMAIL_DEV_MODE: 'false' })).toBe(true); // requires NODE_ENV=production too
+    expect(isColdEmailDevMode({ COLD_EMAIL_DEV_MODE: 'false', NODE_ENV: 'production' })).toBe(true); // requires confirmation
+    expect(
+      isColdEmailDevMode({
+        COLD_EMAIL_DEV_MODE: 'false',
+        NODE_ENV: 'production',
+        COLD_EMAIL_PRODUCTION_CONFIRMED: 'true',
+      }),
+    ).toBe(false);
+  });
+
+  it('returns default approved dev inboxes', () => {
+    expect(getColdEmailDevInboxes({})).toEqual([
+      'vinothjv4.tech@gmail.com',
+      'thinaakark2004@gmail.com',
+    ]);
+  });
+
+  it('parses custom dev inboxes or throws if invalid', () => {
+    expect(
+      getColdEmailDevInboxes({
+        COLD_EMAIL_DEV_INBOXES: 'test1@example.com, test2@example.com',
+      }),
+    ).toEqual(['test1@example.com', 'test2@example.com']);
+
+    expect(() => getColdEmailDevInboxes({ COLD_EMAIL_DEV_INBOXES: 'invalid-email' })).toThrow(
+      /invalid_dev_inbox/,
+    );
   });
 });

@@ -1,10 +1,15 @@
 import type { ColdEmailPayload, Mailer, PasswordResetEmail } from '@moncha/domain';
-import { coldEmailContent, isColdEmailRecipientAllowed } from './cold-email';
+import {
+  coldEmailContent,
+  getColdEmailDevInboxes,
+  isColdEmailDevMode,
+  isColdEmailRecipientAllowed,
+} from './cold-email';
 
 const RESEND_URL = 'https://api.resend.com/emails';
 /** Resend's shared test sender; it only delivers to the Resend account owner's address. */
 const DEFAULT_FROM = 'MonCha <onboarding@resend.dev>';
-const COLD_FROM_DEFAULT = 'MonCha <noreply@dev-moncha.com>';
+const COLD_FROM_DEFAULT = 'Moncha <support@jobteacher.pro>';
 
 const escapeHtml = (text: string) =>
   text.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
@@ -48,13 +53,36 @@ export class ResendMailer implements Mailer {
   }
 
   /**
-   * Sends a cold outreach email. Caller must already pass the allowlist / kill-switch check
-   * (`isColdEmailRecipientAllowed`); this method still refuses when the gate fails.
+   * Sends a cold outreach email to one or multiple recipients.
+   * In development mode, all recipients must be approved dev inboxes.
+   * All recipients must pass the allowlist / kill-switch check (`isColdEmailRecipientAllowed`).
    */
   async sendColdEmail(email: ColdEmailPayload, env: Record<string, unknown> = process.env): Promise<ColdEmailSendResult> {
-    if (!isColdEmailRecipientAllowed(email.to, env)) {
-      throw new Error('cold_email_blocked: recipient is not on COLD_EMAIL_ALLOWLIST or sending is disabled');
+    const rawList = Array.isArray(email.to) ? email.to : [email.to];
+    const recipients = rawList
+      .flatMap((s) => (typeof s === 'string' ? s.split(',') : []))
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
+
+    if (!recipients.length) {
+      throw new Error('cold_email_blocked: no recipients specified');
     }
+
+    if (isColdEmailDevMode(env)) {
+      const devInboxes = getColdEmailDevInboxes(env);
+      for (const r of recipients) {
+        if (!devInboxes.includes(r)) {
+          throw new Error(`cold_email_blocked: recipient ${r} is not an approved development inbox`);
+        }
+      }
+    }
+
+    for (const r of recipients) {
+      if (!isColdEmailRecipientAllowed(r, env)) {
+        throw new Error(`cold_email_blocked: recipient ${r} is not on COLD_EMAIL_ALLOWLIST or sending is disabled`);
+      }
+    }
+
     const content = coldEmailContent({
       companyName: email.companyName,
       demoUrl: email.demoUrl,
@@ -63,7 +91,7 @@ export class ResendMailer implements Mailer {
     });
     const id = await this.postEmail({
       from: this.coldFrom,
-      to: [email.to],
+      to: recipients,
       subject: email.subject ?? content.subject,
       text: content.text,
       html: content.html,
@@ -99,7 +127,7 @@ export function createResendMailerFromEnv(env: Record<string, unknown>): ResendM
   const coldFrom =
     typeof env.COLD_EMAIL_FROM === 'string' && env.COLD_EMAIL_FROM.trim()
       ? env.COLD_EMAIL_FROM.trim()
-      : from && from.includes('noreply@dev-moncha.com')
+      : from && from.includes('support@jobteacher.pro')
         ? from
         : COLD_FROM_DEFAULT;
   return new ResendMailer(apiKey, from, (input, init) => fetch(input, init), coldFrom);

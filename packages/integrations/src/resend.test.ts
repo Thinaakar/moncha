@@ -40,4 +40,65 @@ describe('ResendMailer', () => {
   it('says how long the link lasts', () => {
     expect(passwordResetEmailContent(email).text).toMatch(/expires in 30 minutes/);
   });
+
+  describe('sendColdEmail', () => {
+    const validEnv = {
+      COLD_EMAIL_SENDING_ENABLED: 'true',
+      COLD_EMAIL_ALLOWLIST: 'vinothjv4.tech@gmail.com,thinaakark2004@gmail.com',
+      COLD_EMAIL_DEV_MODE: 'true',
+    };
+
+    it('sends to multiple approved dev recipients with default sender Moncha <support@jobteacher.pro>', async () => {
+      const calls: Array<{ url: string; init: RequestInit }> = [];
+      const fetchImpl = (async (url: string, init: RequestInit) => {
+        calls.push({ url, init });
+        return new Response('{"id":"re_123"}', { status: 200 });
+      }) as unknown as typeof fetch;
+
+      const mailer = new ResendMailer('re_key', undefined, fetchImpl);
+      const res = await mailer.sendColdEmail(
+        {
+          to: ['vinothjv4.tech@gmail.com', 'thinaakark2004@gmail.com'],
+          companyName: 'Acme Corp',
+          demoUrl: 'https://demo.example.com',
+        },
+        validEnv,
+      );
+
+      expect(res).toEqual({ id: 're_123' });
+      expect(calls).toHaveLength(1);
+      const body = JSON.parse(calls[0]!.init.body as string);
+      expect(body.from).toBe('Moncha <support@jobteacher.pro>');
+      expect(body.to).toEqual(['vinothjv4.tech@gmail.com', 'thinaakark2004@gmail.com']);
+    });
+
+    it('rejects unapproved customer email in development mode', async () => {
+      const mailer = new ResendMailer('re_key');
+      await expect(
+        mailer.sendColdEmail(
+          {
+            to: 'customer@realclient.com',
+            companyName: 'Real Client',
+            demoUrl: 'https://demo.example.com',
+          },
+          validEnv,
+        ),
+      ).rejects.toThrow(/not an approved development inbox/);
+    });
+
+    it('handles Resend error and does not produce false success', async () => {
+      const fetchImpl = (async () => new Response('{"message":"domain not verified"}', { status: 403 })) as unknown as typeof fetch;
+      const mailer = new ResendMailer('re_key', undefined, fetchImpl);
+      await expect(
+        mailer.sendColdEmail(
+          {
+            to: ['vinothjv4.tech@gmail.com'],
+            companyName: 'Acme',
+            demoUrl: 'https://demo.example.com',
+          },
+          validEnv,
+        ),
+      ).rejects.toThrow(/resend_403/);
+    });
+  });
 });

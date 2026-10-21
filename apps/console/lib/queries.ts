@@ -450,11 +450,18 @@ export function useUpdateColdEmailAutomation() {
   });
 }
 
-/** Approve a draft: sends it to its company address, refused unless the send gate allows that address. */
+/** Approve a draft: sends it to its company address, or deliverToOverride if provided. */
 export function useSendColdEmailDraft() {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => api<ColdEmail>(`cold-emails/${encodeURIComponent(id)}/send`, { method: 'POST' }),
+    mutationFn: (input: string | { id: string; deliverToOverride?: string | string[] }) => {
+      const id = typeof input === 'string' ? input : input.id;
+      const deliverToOverride = typeof input === 'object' ? input.deliverToOverride : undefined;
+      return api<ColdEmail>(`cold-emails/${encodeURIComponent(id)}/send`, {
+        method: 'POST',
+        body: deliverToOverride ? { deliverToOverride } : undefined,
+      });
+    },
     onSuccess: async () => {
       await client.invalidateQueries({ queryKey: ['cold-emails'] });
     },
@@ -510,7 +517,7 @@ export function useSendColdEmail() {
       leadId?: string;
       companyName: string;
       toEmail?: string;
-      deliverTo: string;
+      deliverTo: string | string[];
       demoUrl: string;
       note?: string;
       subject?: string;
