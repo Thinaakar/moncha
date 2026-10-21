@@ -75,11 +75,11 @@ export class ResendMailer implements Mailer {
           throw new Error(`cold_email_blocked: recipient ${r} is not an approved development inbox`);
         }
       }
-    }
-
-    for (const r of recipients) {
-      if (!isColdEmailRecipientAllowed(r, env)) {
-        throw new Error(`cold_email_blocked: recipient ${r} is not on COLD_EMAIL_ALLOWLIST or sending is disabled`);
+    } else {
+      for (const r of recipients) {
+        if (!isColdEmailRecipientAllowed(r, env)) {
+          throw new Error(`cold_email_blocked: recipient ${r} is not on COLD_EMAIL_ALLOWLIST or sending is disabled`);
+        }
       }
     }
 
