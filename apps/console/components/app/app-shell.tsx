@@ -74,7 +74,7 @@ const NAV: Array<{ title: string; items: NavItem[] }> = [
     title: 'Discovery',
     items: [
       { href: '/discovery', label: 'Country crawl', icon: Radar },
-      { href: '/schedules', label: 'Lead schedule', icon: CalendarClock },
+      { href: '/schedules', label: 'Target region schedule', icon: CalendarClock },
       { href: '/imports', label: 'CSV import', icon: FileUp },
     ],
   },
