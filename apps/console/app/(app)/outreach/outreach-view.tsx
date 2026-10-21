@@ -592,7 +592,7 @@ export function OutreachView() {
                                   type="button"
                                   size="sm"
                                   variant="default"
-                                  disabled={busyLeadId !== null || !c.demoUrl || !canEdit || !gate.data?.sendingEnabled}
+                                  disabled={busyLeadId !== null || !c.demoUrl || !canEdit}
                                   loading={busy && busyAction === 'send-dev'}
                                   title={`Send personalized demo email directly to ${(gate.data?.devInboxes ?? ['vinothjv4.tech@gmail.com', 'thinaakark2004@gmail.com']).join(' & ')}`}
                                   onClick={() => void onSendToDevs(c)}
@@ -698,7 +698,7 @@ export function OutreachView() {
                                     size="sm"
                                     variant="outline"
                                     loading={busyEmailId === row.id}
-                                    disabled={!canEdit || busyEmailId !== null || !gate.data?.sendingEnabled}
+                                    disabled={!canEdit || busyEmailId !== null}
                                     title={`Send test copy directly to ${(gate.data?.devInboxes ?? ['vinothjv4.tech@gmail.com', 'thinaakark2004@gmail.com']).join(' & ')}`}
                                     onClick={() => void onSendDraftToDevs(row)}
                                   >

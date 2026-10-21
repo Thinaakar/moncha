@@ -198,7 +198,7 @@ export function coldEmailGate(deps: Pick<ColdEmailDeps, 'env' | 'mailer' | 'send
     devInboxes = [...APPROVED_DEV_INBOXES];
   }
   return {
-    sendingEnabled: deps.sendingEnabled(deps.env),
+    sendingEnabled: devMode ? true : deps.sendingEnabled(deps.env),
     allowlist: allow.open ? ['*'] : [...allow.emails],
     allowlistOpen: allow.open,
     resendConfigured: Boolean(deps.mailer),
@@ -288,14 +288,14 @@ export async function sendColdEmailNow(
         );
       }
     }
-  }
-
-  for (const to of deliverList) {
-    if (!deps.isAllowed(to, deps.env)) {
-      throw new ColdEmailError(
-        'blocked',
-        `Cold email sending is disabled or address "${to}" is not on COLD_EMAIL_ALLOWLIST`,
-      );
+  } else {
+    for (const to of deliverList) {
+      if (!deps.isAllowed(to, deps.env)) {
+        throw new ColdEmailError(
+          'blocked',
+          `Cold email sending is disabled or address "${to}" is not on COLD_EMAIL_ALLOWLIST`,
+        );
+      }
     }
   }
 
@@ -389,14 +389,14 @@ export async function sendColdEmailDraft(
         );
       }
     }
-  }
-
-  for (const to of deliverList) {
-    if (!deps.isAllowed(to, deps.env)) {
-      throw new ColdEmailError(
-        'blocked',
-        `Sending to ${to} is not allowed (COLD_EMAIL_SENDING_ENABLED / COLD_EMAIL_ALLOWLIST)`,
-      );
+  } else {
+    for (const to of deliverList) {
+      if (!deps.isAllowed(to, deps.env)) {
+        throw new ColdEmailError(
+          'blocked',
+          `Sending to ${to} is not allowed (COLD_EMAIL_SENDING_ENABLED / COLD_EMAIL_ALLOWLIST)`,
+        );
+      }
     }
   }
 

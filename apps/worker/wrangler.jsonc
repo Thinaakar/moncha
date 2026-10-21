@@ -58,6 +58,7 @@
     "EMAIL_FROM": "Moncha <support@jobteacher.pro>",
     "COLD_EMAIL_FROM": "Moncha <support@jobteacher.pro>",
     "COLD_EMAIL_DEV_MODE": "true",
-    "COLD_EMAIL_DEV_INBOXES": "vinothjv4.tech@gmail.com,thinaakark2004@gmail.com"
+    "COLD_EMAIL_DEV_INBOXES": "vinothjv4.tech@gmail.com,thinaakark2004@gmail.com",
+    "COLD_EMAIL_SENDING_ENABLED": "true"
   }
 }
