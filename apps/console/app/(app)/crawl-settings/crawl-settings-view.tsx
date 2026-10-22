@@ -17,18 +17,23 @@ import {
   Database,
   Filter,
   Gauge,
+  Globe,
   Info,
   Layers,
   Mail,
+  Minus,
   Play,
+  Plus,
   Radar,
   RefreshCw,
   Save,
   Send,
+  Shield,
   ShieldCheck,
   Sliders,
   SlidersHorizontal,
   Sparkles,
+  Target,
   Workflow,
   XCircle,
 } from 'lucide-react';
@@ -56,6 +61,80 @@ import { errorMessage } from '@/lib/api';
 import { formatDateTime, formatNumber, formatRelative } from '@/lib/format';
 import type { CrawlPipelineSettingsUpdate } from '@/lib/types';
 import { cn } from '@/lib/utils';
+
+function QuotaStepper({
+  value,
+  onChange,
+  min = 1,
+  max = 100,
+  step = 1,
+  presets,
+  unit,
+  disabled,
+}: {
+  value: number;
+  onChange: (val: number) => void;
+  min?: number;
+  max?: number;
+  step?: number;
+  presets?: number[];
+  unit?: string;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="space-y-2.5">
+      <div className="flex items-center gap-2">
+        <div className="inline-flex items-center rounded-lg border bg-muted/30 p-0.5 shadow-2xs">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            className="size-7 rounded-md text-muted-foreground hover:bg-card hover:text-foreground"
+            onClick={() => onChange(Math.max(min, value - step))}
+            disabled={disabled || value <= min}
+          >
+            <Minus className="size-3.5" />
+          </Button>
+          <span className="w-12 text-center font-display text-base font-bold tabular-nums text-foreground">
+            {value}
+          </span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            className="size-7 rounded-md text-muted-foreground hover:bg-card hover:text-foreground"
+            onClick={() => onChange(Math.min(max, value + step))}
+            disabled={disabled || value >= max}
+          >
+            <Plus className="size-3.5" />
+          </Button>
+        </div>
+        {unit && <span className="text-xs font-medium text-muted-foreground">{unit}</span>}
+      </div>
+
+      {presets && presets.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {presets.map((preset) => (
+            <button
+              key={preset}
+              type="button"
+              disabled={disabled}
+              onClick={() => onChange(preset)}
+              className={cn(
+                'rounded-md px-2.5 py-0.5 text-xs font-medium transition-all',
+                value === preset
+                  ? 'bg-primary text-primary-foreground font-semibold shadow-2xs'
+                  : 'bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground',
+              )}
+            >
+              {preset}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function CrawlSettingsView() {
   const canEdit = useCanEdit();
@@ -405,258 +484,261 @@ export function CrawlSettingsView() {
         )}
       </div>
 
-      {/* Settings Grid */}
-      <div className="grid gap-6 lg:grid-cols-2">
-        {/* Card 1: Batch Crawl & Daily Quotas */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Sliders className="size-4 text-primary" /> Crawl & Quota Settings
-            </CardTitle>
-            <CardDescription>
-              Set how many websites to extract in one crawl run and cap daily operations.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            {/* Setting: Crawl Batch Size */}
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <label htmlFor="crawlBatchSize" className="text-sm font-semibold">
-                    Websites Per Crawl Batch
-                  </label>
-                  <p className="text-xs text-muted-foreground">
-                    Number of raw websites to fetch during each discovery crawl execution.
-                  </p>
+      {/* Section 1: Top 3 Executive Quota Cards */}
+      <div className="space-y-3">
+        <h2 className="text-sm font-semibold tracking-wider text-muted-foreground uppercase">
+          Pipeline Batch Sizing & Daily Operations Targets
+        </h2>
+        <div className="grid gap-4 md:grid-cols-3">
+          {/* Tile 1: Crawl Batch Size */}
+          <Card className="flex flex-col justify-between transition-all hover:border-primary/40">
+            <CardHeader className="pb-3">
+              <div className="flex items-start justify-between">
+                <div className="flex size-10 items-center justify-center rounded-xl bg-blue-500/10 text-blue-600 dark:text-blue-400">
+                  <Radar className="size-5" />
                 </div>
-                <div className="flex items-center gap-2">
-                  <Input
-                    id="crawlBatchSize"
-                    type="number"
-                    min={5}
-                    max={100}
-                    value={crawlBatchSize}
-                    onChange={(e) => setCrawlBatchSize(Math.max(5, Math.min(100, Number(e.target.value) || 5)))}
-                    className="h-8 w-20 text-center font-bold tabular-nums"
-                  />
-                  <span className="text-xs text-muted-foreground">sites</span>
-                </div>
+                <Badge variant="outline" className="font-mono text-xs">
+                  Stage 1 · Crawl
+                </Badge>
               </div>
-              <input
-                type="range"
+              <CardTitle className="pt-2 text-base">Crawl Batch Size</CardTitle>
+              <CardDescription className="text-xs">
+                Raw websites fetched during each discovery crawl execution.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <QuotaStepper
+                value={crawlBatchSize}
+                onChange={setCrawlBatchSize}
                 min={5}
                 max={100}
                 step={5}
-                value={crawlBatchSize}
-                onChange={(e) => setCrawlBatchSize(Number(e.target.value))}
-                className="h-2 w-full cursor-pointer accent-primary"
+                presets={[10, 20, 30, 50, 100]}
+                unit="websites / crawl"
+                disabled={!canEdit}
               />
-              <div className="flex gap-2">
-                {[10, 20, 30, 50, 100].map((val) => (
-                  <button
-                    key={val}
-                    type="button"
-                    onClick={() => setCrawlBatchSize(val)}
-                    className={cn(
-                      'rounded-md border px-2.5 py-1 text-xs font-medium transition',
-                      crawlBatchSize === val
-                        ? 'border-primary bg-primary text-primary-foreground'
-                        : 'bg-muted/40 hover:bg-muted',
-                    )}
-                  >
-                    {val} sites
-                  </button>
-                ))}
+              <div className="rounded-lg bg-muted/30 p-2.5 text-xs text-muted-foreground">
+                <span className="font-medium text-foreground">Extraction footprint:</span> ~
+                {Math.ceil(crawlBatchSize / 20)} Google Places search batches per run.
               </div>
-            </div>
+            </CardContent>
+          </Card>
 
-            <div className="border-t pt-5" />
-
-            {/* Setting: Daily Website Creation Limit */}
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <label htmlFor="dailyCreation" className="text-sm font-semibold">
-                    Daily Website Creation Limit
-                  </label>
-                  <p className="text-xs text-muted-foreground">
-                    How many chatbot-enabled demo preview sites to create automatically today.
-                  </p>
+          {/* Tile 2: Daily Website Creation Limit */}
+          <Card className="flex flex-col justify-between transition-all hover:border-primary/40">
+            <CardHeader className="pb-3">
+              <div className="flex items-start justify-between">
+                <div className="flex size-10 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                  <Sparkles className="size-5" />
                 </div>
-                <div className="flex items-center gap-2">
-                  <Input
-                    id="dailyCreation"
-                    type="number"
-                    min={1}
-                    max={50}
-                    value={dailyWebsiteCreationLimit}
-                    onChange={(e) =>
-                      setDailyWebsiteCreationLimit(Math.max(1, Math.min(50, Number(e.target.value) || 1)))
-                    }
-                    className="h-8 w-20 text-center font-bold tabular-nums"
-                  />
-                  <span className="text-xs text-muted-foreground">/ day</span>
-                </div>
+                <Badge variant="outline" className="font-mono text-xs">
+                  Stage 5 · Creation
+                </Badge>
               </div>
-              <input
-                type="range"
-                min={1}
-                max={50}
+              <CardTitle className="pt-2 text-base">Daily Website Creation</CardTitle>
+              <CardDescription className="text-xs">
+                How many chatbot-enabled demo preview sites to create automatically today.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <QuotaStepper
                 value={dailyWebsiteCreationLimit}
-                onChange={(e) => setDailyWebsiteCreationLimit(Number(e.target.value))}
-                className="h-2 w-full cursor-pointer accent-primary"
-              />
-              <div className="flex gap-2">
-                {[3, 5, 10, 20, 50].map((val) => (
-                  <button
-                    key={val}
-                    type="button"
-                    onClick={() => setDailyWebsiteCreationLimit(val)}
-                    className={cn(
-                      'rounded-md border px-2.5 py-1 text-xs font-medium transition',
-                      dailyWebsiteCreationLimit === val
-                        ? 'border-primary bg-primary text-primary-foreground'
-                        : 'bg-muted/40 hover:bg-muted',
-                    )}
-                  >
-                    {val} / day
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="border-t pt-5" />
-
-            {/* Setting: Daily Customer Reach Limit */}
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <label htmlFor="dailyReach" className="text-sm font-semibold">
-                    Daily Customer Reach Limit
-                  </label>
-                  <p className="text-xs text-muted-foreground">
-                    How many qualified new customers to contact via outreach per day.
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Input
-                    id="dailyReach"
-                    type="number"
-                    min={1}
-                    max={50}
-                    value={dailyCustomerReachLimit}
-                    onChange={(e) =>
-                      setDailyCustomerReachLimit(Math.max(1, Math.min(50, Number(e.target.value) || 1)))
-                    }
-                    className="h-8 w-20 text-center font-bold tabular-nums"
-                  />
-                  <span className="text-xs text-muted-foreground">/ day</span>
-                </div>
-              </div>
-              <input
-                type="range"
+                onChange={setDailyWebsiteCreationLimit}
                 min={1}
                 max={50}
-                value={dailyCustomerReachLimit}
-                onChange={(e) => setDailyCustomerReachLimit(Number(e.target.value))}
-                className="h-2 w-full cursor-pointer accent-primary"
+                step={1}
+                presets={[3, 5, 10, 20, 50]}
+                unit="demo sites / day"
+                disabled={!canEdit}
               />
-              <div className="flex gap-2">
-                {[3, 5, 10, 20, 50].map((val) => (
-                  <button
-                    key={val}
-                    type="button"
-                    onClick={() => setDailyCustomerReachLimit(val)}
-                    className={cn(
-                      'rounded-md border px-2.5 py-1 text-xs font-medium transition',
-                      dailyCustomerReachLimit === val
-                        ? 'border-primary bg-primary text-primary-foreground'
-                        : 'bg-muted/40 hover:bg-muted',
-                    )}
-                  >
-                    {val} / day
-                  </button>
-                ))}
+              <div className="space-y-1.5 rounded-lg bg-muted/30 p-2.5 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Today&apos;s creation progress:</span>
+                  <span className="font-semibold text-foreground tabular-nums">
+                    {p?.websitesCreatedToday ?? 0} / {dailyWebsiteCreationLimit}
+                  </span>
+                </div>
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full bg-emerald-500 transition-all"
+                    style={{
+                      width: `${Math.min(100, Math.round(((p?.websitesCreatedToday ?? 0) / Math.max(1, dailyWebsiteCreationLimit)) * 100))}%`,
+                    }}
+                  />
+                </div>
               </div>
-            </div>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
 
-        {/* Card 2: Auto-Recrawl & Queue Replenishment */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <RefreshCw className="size-4 text-primary" /> Auto-Recrawl & Replenishment
-            </CardTitle>
-            <CardDescription>
-              Continuous replenishment loop that re-crawls until your daily creation quota is satisfied.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-5">
-            <div className="flex items-center justify-between rounded-lg border bg-muted/20 p-3.5">
-              <div className="space-y-0.5">
-                <span className="text-sm font-medium">Automatic Replenishment Loop</span>
-                <p className="text-xs text-muted-foreground">
-                  Triggers next crawl batch when queue has fewer qualified leads than today&apos;s creation target.
+          {/* Tile 3: Daily Customer Reach Limit */}
+          <Card className="flex flex-col justify-between transition-all hover:border-primary/40">
+            <CardHeader className="pb-3">
+              <div className="flex items-start justify-between">
+                <div className="flex size-10 items-center justify-center rounded-xl bg-purple-500/10 text-purple-600 dark:text-purple-400">
+                  <Send className="size-5" />
+                </div>
+                <Badge variant="outline" className="font-mono text-xs">
+                  Stage 6 · Outreach
+                </Badge>
+              </div>
+              <CardTitle className="pt-2 text-base">Daily Customer Reach</CardTitle>
+              <CardDescription className="text-xs">
+                How many qualified new businesses to contact via cold email per day.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <QuotaStepper
+                value={dailyCustomerReachLimit}
+                onChange={setDailyCustomerReachLimit}
+                min={1}
+                max={50}
+                step={1}
+                presets={[3, 5, 10, 20, 50]}
+                unit="customers / day"
+                disabled={!canEdit}
+              />
+              <div className="space-y-1.5 rounded-lg bg-muted/30 p-2.5 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Today&apos;s outreach progress:</span>
+                  <span className="font-semibold text-foreground tabular-nums">
+                    {p?.customersReachedToday ?? 0} / {dailyCustomerReachLimit}
+                  </span>
+                </div>
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full bg-purple-500 transition-all"
+                    style={{
+                      width: `${Math.min(100, Math.round(((p?.customersReachedToday ?? 0) / Math.max(1, dailyCustomerReachLimit)) * 100))}%`,
+                    }}
+                  />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+
+      {/* Settings Grid */}
+      <div className="grid gap-6 lg:grid-cols-2">
+
+        {/* Panel 1: Auto-Recrawl & Queue Replenishment */}
+        <Card className="flex flex-col justify-between">
+          <div>
+            <CardHeader>
+              <div className="flex items-center gap-2.5">
+                <span className="flex size-8 items-center justify-center rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400">
+                  <RefreshCw className="size-4" />
+                </span>
+                <div>
+                  <CardTitle className="text-base">Auto-Recrawl & Queue Replenishment</CardTitle>
+                  <CardDescription className="text-xs">
+                    Autonomous loop that re-crawls until your daily creation quota is fulfilled.
+                  </CardDescription>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-5">
+              {/* Replenishment Master Toggle */}
+              <div className="flex items-center justify-between rounded-xl border bg-muted/20 p-4 transition-all">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-semibold">Automatic Replenishment Loop</span>
+                    <Badge variant={autoRecrawlEnabled ? 'success' : 'muted'} dot>
+                      {autoRecrawlEnabled ? 'Active' : 'Off'}
+                    </Badge>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Triggers the next crawl batch whenever the queue buffer has fewer qualified leads than today&apos;s
+                    remaining creation target.
+                  </p>
+                </div>
+                <Switch
+                  checked={autoRecrawlEnabled}
+                  onCheckedChange={setAutoRecrawlEnabled}
+                  disabled={!canEdit}
+                  aria-label="Toggle auto-recrawl"
+                />
+              </div>
+
+              {/* Replenishment Parameters with QuotaStepper */}
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2 rounded-xl border bg-muted/10 p-3.5">
+                  <div>
+                    <label className="text-xs font-semibold text-foreground">Minimum Queue Buffer</label>
+                    <p className="text-[11px] text-muted-foreground">Keeps minimum qualified leads buffered.</p>
+                  </div>
+                  <QuotaStepper
+                    value={minQueueBuffer}
+                    onChange={setMinQueueBuffer}
+                    min={1}
+                    max={25}
+                    step={1}
+                    presets={[3, 5, 10, 15]}
+                    unit="leads"
+                    disabled={!canEdit || !autoRecrawlEnabled}
+                  />
+                </div>
+
+                <div className="space-y-2 rounded-xl border bg-muted/10 p-3.5">
+                  <div>
+                    <label className="text-xs font-semibold text-foreground">Max Daily Crawl Runs</label>
+                    <p className="text-[11px] text-muted-foreground">Daily safety circuit-breaker.</p>
+                  </div>
+                  <QuotaStepper
+                    value={maxDailyCrawlRuns}
+                    onChange={setMaxDailyCrawlRuns}
+                    min={1}
+                    max={30}
+                    step={1}
+                    presets={[5, 10, 15, 20]}
+                    unit="runs max"
+                    disabled={!canEdit || !autoRecrawlEnabled}
+                  />
+                </div>
+              </div>
+
+              {/* Logic Circuit Visualizer */}
+              <div className="rounded-xl border border-dashed bg-muted/15 p-3 text-xs">
+                <div className="flex items-center gap-1.5 font-medium text-foreground">
+                  <Workflow className="size-3.5 text-primary" />
+                  <span>Continuous Replenishment Logic:</span>
+                </div>
+                <p className="mt-1 text-muted-foreground">
+                  Fetch <span className="font-semibold text-foreground">{crawlBatchSize} sites</span> ➜ Filter DB
+                  Duplicates ➜ Audit Chatbots ➜ If Qualified in Queue &lt;{' '}
+                  <span className="font-semibold text-foreground">{minQueueBuffer}</span> and Today&apos;s Sites &lt;{' '}
+                  <span className="font-semibold text-foreground">{dailyWebsiteCreationLimit}</span> ➜{' '}
+                  <span className="font-semibold text-primary">Trigger Next Crawl Batch ↻</span>
                 </p>
               </div>
-              <Switch
-                checked={autoRecrawlEnabled}
-                onCheckedChange={setAutoRecrawlEnabled}
-                disabled={!canEdit}
-                aria-label="Toggle auto-recrawl"
-              />
-            </div>
+            </CardContent>
+          </div>
+        </Card>
 
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <label htmlFor="minBuffer" className="text-sm font-medium">
-                  Minimum Queue Buffer
-                </label>
-                <Input
-                  id="minBuffer"
-                  type="number"
-                  min={1}
-                  max={25}
-                  value={minQueueBuffer}
-                  onChange={(e) => setMinQueueBuffer(Math.max(1, Number(e.target.value) || 1))}
-                  className="font-bold tabular-nums"
-                />
-                <p className="text-xs text-muted-foreground">Keeps minimum qualified leads buffered.</p>
+        {/* Panel 2: Target Discovery Region & Industry Filters */}
+        <Card className="flex flex-col justify-between">
+          <div>
+            <CardHeader>
+              <div className="flex items-center gap-2.5">
+                <span className="flex size-8 items-center justify-center rounded-lg bg-indigo-500/10 text-indigo-600 dark:text-indigo-400">
+                  <Compass className="size-4" />
+                </span>
+                <div>
+                  <CardTitle className="text-base">Target Discovery Region & Industries</CardTitle>
+                  <CardDescription className="text-xs">
+                    Geographic and keyword focus for autonomous replenishment crawl executions.
+                  </CardDescription>
+                </div>
               </div>
-
-              <div className="space-y-1.5">
-                <label htmlFor="maxCrawlRuns" className="text-sm font-medium">
-                  Max Daily Crawl Runs
-                </label>
-                <Input
-                  id="maxCrawlRuns"
-                  type="number"
-                  min={1}
-                  max={30}
-                  value={maxDailyCrawlRuns}
-                  onChange={(e) => setMaxDailyCrawlRuns(Math.max(1, Number(e.target.value) || 1))}
-                  className="font-bold tabular-nums"
-                />
-                <p className="text-xs text-muted-foreground">Daily safety circuit-breaker.</p>
-              </div>
-            </div>
-
-            <div className="border-t pt-4" />
-
-            {/* Target Criteria for Auto-Crawl */}
-            <div className="space-y-4">
-              <h3 className="text-xs font-semibold tracking-wider text-muted-foreground uppercase">
-                Target Discovery Region & Industries
-              </h3>
-
-              <div className="grid gap-3 sm:grid-cols-2">
+            </CardHeader>
+            <CardContent className="space-y-5">
+              <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-1.5">
-                  <label htmlFor="countrySelect" className="text-xs font-medium text-muted-foreground">
+                  <label htmlFor="countrySelect" className="text-xs font-semibold text-foreground">
                     Target Country
                   </label>
                   <Select value={targetCountry} onValueChange={setTargetCountry} disabled={!canEdit}>
-                    <SelectTrigger id="countrySelect">
+                    <SelectTrigger id="countrySelect" className="w-full">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -667,34 +749,62 @@ export function CrawlSettingsView() {
                       ))}
                     </SelectContent>
                   </Select>
+                  <p className="text-[11px] text-muted-foreground">Region for Google Places search queries.</p>
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-muted-foreground">Target Search Areas (Cities)</label>
+                  <label className="text-xs font-semibold text-foreground">Target Search Areas (Cities)</label>
                   <MultiSelect
                     options={countryProfile?.cities ?? []}
                     value={targetCities}
                     onChange={setTargetCities}
-                    placeholder="All cities"
-                    allLabel="All cities"
+                    placeholder="All major cities"
+                    allLabel="All cities in region"
                     disabled={!canEdit}
                   />
+                  <p className="text-[11px] text-muted-foreground">Leave empty to cycle through all cities.</p>
                 </div>
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-xs font-medium text-muted-foreground">Target Industries</label>
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-semibold text-foreground">Target Industries</label>
+                  <span className="text-[11px] text-muted-foreground">
+                    {targetIndustries.length > 0
+                      ? `${targetIndustries.length} industries selected`
+                      : 'All 30 standard industries'}
+                  </span>
+                </div>
                 <MultiSelect
                   options={options.data?.industries ?? []}
                   value={targetIndustries}
                   onChange={setTargetIndustries}
-                  placeholder="All standard industries"
+                  placeholder="All 30 standard industries"
                   allLabel="All 30 standard industries"
                   disabled={!canEdit}
                 />
+                <p className="text-[11px] text-muted-foreground">
+                  Narrows crawling to specific business verticals (e.g. clinics, salons, dental, gyms).
+                </p>
               </div>
-            </div>
-          </CardContent>
+
+              {/* Scope pill preview */}
+              <div className="flex flex-wrap items-center gap-2 rounded-xl bg-muted/20 p-3 text-xs">
+                <span className="font-medium text-foreground">Active Scope:</span>
+                <Badge variant="outline">
+                  <Globe className="mr-1 size-3" /> {countryProfile?.name ?? targetCountry}
+                </Badge>
+                <Badge variant="outline">
+                  <Target className="mr-1 size-3" />{' '}
+                  {targetCities.length > 0 ? `${targetCities.length} Cities` : 'All Major Cities'}
+                </Badge>
+                <Badge variant="outline">
+                  <Filter className="mr-1 size-3" />{' '}
+                  {targetIndustries.length > 0 ? `${targetIndustries.length} Industries` : '30 Standard Industries'}
+                </Badge>
+              </div>
+            </CardContent>
+          </div>
         </Card>
 
         {/* Card 3: Dynamic Follow-Up Scheduling & Template Slot */}
@@ -722,23 +832,21 @@ export function CrawlSettingsView() {
           <CardContent className="space-y-6">
             <div className="grid gap-6 md:grid-cols-3">
               {/* Follow-up Delay Days */}
-              <div className="space-y-3 rounded-lg border bg-muted/20 p-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium">Follow-Up Delay</span>
-                  <span className="font-display text-lg font-bold tabular-nums text-primary">
-                    {followUpDelayDays} {followUpDelayDays === 1 ? 'day' : 'days'}
-                  </span>
+              <div className="space-y-3 rounded-xl border bg-muted/20 p-4">
+                <div>
+                  <label className="text-xs font-semibold text-foreground">Follow-Up Delay</label>
+                  <p className="text-[11px] text-muted-foreground">Days to wait after the initial outreach is sent.</p>
                 </div>
-                <input
-                  type="range"
+                <QuotaStepper
+                  value={followUpDelayDays}
+                  onChange={setFollowUpDelayDays}
                   min={1}
                   max={14}
-                  value={followUpDelayDays}
-                  onChange={(e) => setFollowUpDelayDays(Number(e.target.value))}
+                  step={1}
+                  presets={[1, 2, 3, 5, 7]}
+                  unit="days wait"
                   disabled={!followUpEnabled || !canEdit}
-                  className="h-2 w-full cursor-pointer accent-primary"
                 />
-                <p className="text-xs text-muted-foreground">Days to wait after the initial outreach is sent.</p>
               </div>
 
               {/* Follow-up Mode: Business vs Calendar */}
