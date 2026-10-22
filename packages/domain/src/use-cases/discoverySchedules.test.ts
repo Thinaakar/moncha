@@ -228,4 +228,40 @@ describe('schedule use cases', () => {
       stoppedReason: 'run_budget_reached',
     });
   });
+
+  it('stores selected industries on schedule creation and passes them to job payload', async () => {
+    const schedules = memorySchedules();
+    const created = await createSchedule(
+      { schedules, now: () => now },
+      {
+        tenantId: 't1',
+        country: 'MY',
+        time: '10:00',
+        industries: ['dentist', 'medical clinic'],
+      },
+    );
+    expect(created.industries).toEqual(['dentist', 'medical clinic']);
+    expect(schedules.rows[0]!.industries).toEqual(['dentist', 'medical clinic']);
+
+    // When enqueued, the job payload must include the selected industries
+    await enqueueDueSchedules({ schedules, now: () => new Date('2026-09-29T02:00:05Z') });
+    expect(schedules.jobs).toHaveLength(1);
+    const jobPayload = schedules.jobs[0]!.payload as any;
+    expect(jobPayload.industries).toEqual(['dentist', 'medical clinic']);
+  });
+
+  it('omits industries from job payload when schedule was created with empty/no industries (defaults to all)', async () => {
+    const schedules = memorySchedules();
+    const created = await createSchedule(
+      { schedules, now: () => now },
+      { tenantId: 't1', country: 'MY', time: '10:00' },
+    );
+    expect(created.industries).toBeUndefined();
+
+    // When enqueued, job payload industries should be undefined
+    await enqueueDueSchedules({ schedules, now: () => new Date('2026-09-29T02:00:05Z') });
+    expect(schedules.jobs).toHaveLength(1);
+    const jobPayload = schedules.jobs[0]!.payload as any;
+    expect(jobPayload.industries).toBeUndefined();
+  });
 });

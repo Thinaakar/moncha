@@ -31,7 +31,7 @@ export class ScheduleError extends Error {
 /** Payload of a country_discovery job; the discover CLI writes the same shape with origin "manual". */
 export type CountryDiscoveryJobPayload = {
   mode: 'country';
-  origin: 'schedule' | 'manual';
+  origin: 'schedule' | 'manual' | 'auto';
   country: string;
   countryCode: string;
   scheduleId?: string;
@@ -56,6 +56,7 @@ export type ScheduleView = {
   /** "today", "tomorrow" or YYYY-MM-DD in the schedule's time zone. */
   nextRunDay: string;
   lastRunAt: string | null;
+  industries?: string[];
 };
 
 export type CountryScheduleGroup = {
@@ -73,7 +74,7 @@ export type ScheduleRunView = {
   country: string;
   time: string;
   timezone: string;
-  trigger: 'schedule' | 'manual';
+  trigger: 'schedule' | 'manual' | 'auto';
   status: JobStatus;
   found: number;
   saved: number;
@@ -108,18 +109,21 @@ function toView(s: DiscoveryScheduleRecord, now: Date): ScheduleView {
     nextRunAt: s.nextRunAt.toISOString(),
     nextRunDay: relativeDay(s.nextRunAt, s.timezone, now),
     lastRunAt: s.lastRunAt?.toISOString() ?? null,
+    industries: s.industries?.length ? s.industries : undefined,
   };
 }
 
 export async function createSchedule(
   deps: ScheduleDeps,
-  input: { tenantId: string; country: string; time: string; timezone?: string },
+  input: { tenantId: string; country: string; time: string; timezone?: string; industries?: string[] },
 ): Promise<ScheduleView> {
   const profile = countryOrThrow(input.country);
   const time = input.time.trim();
   if (!TIME_OF_DAY.test(time)) throw new ScheduleError('validation_error', `Invalid time "${input.time}", use HH:mm`);
   const timezone = input.timezone?.trim() || DEFAULT_SCHEDULE_TIMEZONE;
   if (!isValidTimeZone(timezone)) throw new ScheduleError('validation_error', `Unknown time zone "${timezone}"`);
+
+  const industries = input.industries?.map((i) => i.trim().toLowerCase()).filter(Boolean);
 
   const now = deps.now?.() ?? new Date();
   const created = await deps.schedules.create({
@@ -128,6 +132,7 @@ export async function createSchedule(
     timeOfDay: time,
     timezone,
     nextRunAt: computeNextRun(time, timezone, now),
+    ...(industries && industries.length > 0 ? { industries } : {}),
   });
   if (!created) throw new ScheduleError('conflict', `${profile.name} is already scheduled at ${time}`);
   return toView(created, now);
@@ -185,7 +190,7 @@ function toRunView(job: JobRunRecord): ScheduleRunView {
     country: profile?.name ?? payload.country ?? '',
     time: payload.time ?? localTime(at, timezone),
     timezone,
-    trigger: payload.origin === 'schedule' ? 'schedule' : 'manual',
+    trigger: payload.origin === 'schedule' ? 'schedule' : payload.origin === 'auto' ? 'auto' : 'manual',
     status: job.status,
     found: result.found ?? 0,
     saved: result.created ?? 0,
@@ -239,6 +244,7 @@ export async function enqueueDueSchedules(
         time: s.timeOfDay,
         timezone: s.timezone,
         scheduledFor: s.nextRunAt.toISOString(),
+        ...(s.industries && s.industries.length > 0 ? { industries: s.industries } : {}),
       };
       const { job } = await deps.schedules.advance(s, next, now, {
         tenantId: s.tenantId,

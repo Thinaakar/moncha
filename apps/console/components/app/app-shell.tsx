@@ -21,6 +21,7 @@ import {
   Radar,
   ScanEye,
   Settings,
+  SlidersHorizontal,
   Sun,
   Users,
 } from 'lucide-react';
@@ -74,6 +75,7 @@ const NAV: Array<{ title: string; items: NavItem[] }> = [
     title: 'Discovery',
     items: [
       { href: '/discovery', label: 'Country crawl', icon: Radar },
+      { href: '/crawl-settings', label: 'Crawl settings', icon: SlidersHorizontal },
       { href: '/schedules', label: 'Target region schedule', icon: CalendarClock },
       { href: '/imports', label: 'CSV import', icon: FileUp },
     ],

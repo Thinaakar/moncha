@@ -1199,3 +1199,81 @@ export type ColdEmailCandidatePage = {
   pageSize: number;
   totalPages: number;
 };
+
+// ---------------------------------------------------------------------------
+// Crawl & Pipeline Settings
+// ---------------------------------------------------------------------------
+
+export const crawlPipelineSettingsUpdateSchema = z.object({
+  active: z.boolean().optional(),
+  crawlBatchSize: z.number().int().min(5).max(100).optional(),
+  targetCountry: z.string().trim().min(2).max(10).optional(),
+  targetCities: z.array(z.string().trim()).optional(),
+  targetIndustries: z.array(z.string().trim()).optional(),
+  maxPagesPerSearch: z.number().int().min(1).max(5).optional(),
+  dailyWebsiteCreationLimit: z.number().int().min(1).max(100).optional(),
+  dailyCustomerReachLimit: z.number().int().min(1).max(100).optional(),
+  autoRecrawlEnabled: z.boolean().optional(),
+  minQueueBuffer: z.number().int().min(0).max(50).optional(),
+  maxDailyCrawlRuns: z.number().int().min(1).max(50).optional(),
+  followUpEnabled: z.boolean().optional(),
+  followUpDelayDays: z.number().int().min(1).max(30).optional(),
+  followUpMode: z.enum(['business_days', 'calendar_days']).optional(),
+  followUpPreferredHour: z.number().int().min(0).max(23).optional(),
+  followUpSubject: z.string().trim().max(200).optional().nullable(),
+  followUpBodyTemplate: z.string().trim().max(10000).optional().nullable(),
+});
+
+export const crawlPipelineTriggerSchema = z.object({
+  batchSize: z.number().int().min(5).max(100).optional(),
+  country: z.string().trim().min(2).max(10).optional(),
+  forceRecrawl: z.boolean().optional(),
+});
+
+export type CrawlPipelineSettingsUpdate = z.infer<typeof crawlPipelineSettingsUpdateSchema>;
+export type CrawlPipelineTrigger = z.infer<typeof crawlPipelineTriggerSchema>;
+
+export type CrawlPipelineSettingsView = {
+  active: boolean;
+  crawlBatchSize: number;
+  targetCountry: string;
+  targetCities: string[];
+  targetIndustries: string[];
+  maxPagesPerSearch: number;
+  dailyWebsiteCreationLimit: number;
+  dailyCustomerReachLimit: number;
+  autoRecrawlEnabled: boolean;
+  minQueueBuffer: number;
+  maxDailyCrawlRuns: number;
+  followUpEnabled: boolean;
+  followUpDelayDays: number;
+  followUpMode: 'business_days' | 'calendar_days';
+  followUpPreferredHour: number;
+  followUpSubject: string | null;
+  followUpBodyTemplate: string | null;
+  lastRecrawlAt: string | null;
+  updatedBy: string | null;
+  updatedAt: string;
+};
+
+export type CrawlPipelineProgressView = {
+  websitesCrawledToday: number;
+  duplicatesFilteredToday: number;
+  auditsPendingToday: number;
+  auditsQualifiedToday: number;
+  websitesCreatedToday: number;
+  customersReachedToday: number;
+  qualifiedWaitingInQueue: number;
+  followUpsScheduled: number;
+  followUpsDueToday: number;
+  crawlsRunToday: number;
+  recrawlNeeded: boolean;
+  recrawlReason?: string;
+  nextScheduledCrawl?: string | null;
+};
+
+export type CrawlPipelineStatusView = {
+  settings: CrawlPipelineSettingsView;
+  progress: CrawlPipelineProgressView;
+  workerOnline: boolean;
+};

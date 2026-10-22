@@ -397,6 +397,7 @@ export type DiscoveryScheduleRecord = {
   nextRunAt: Date;
   lastRunAt?: Date | null;
   createdAt?: Date;
+  industries?: string[];
 };
 
 export type DiscoveryScheduleCreate = {
@@ -405,7 +406,34 @@ export type DiscoveryScheduleCreate = {
   timeOfDay: string;
   timezone: string;
   nextRunAt: Date;
+  industries?: string[];
 };
+
+export type DiscoveryIndustryRecord = {
+  id: string;
+  tenantId: string | null;
+  name: string;
+  slug: string;
+  category: string;
+  isDefault: boolean;
+  isActive: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+export type DiscoveryIndustryCreate = {
+  tenantId: string;
+  name: string;
+  category?: string;
+};
+
+export interface DiscoveryIndustryRepo {
+  list(tenantId: string): Promise<DiscoveryIndustryRecord[]>;
+  findBySlug(tenantId: string, slug: string): Promise<DiscoveryIndustryRecord | null>;
+  findById(tenantId: string, id: string): Promise<DiscoveryIndustryRecord | null>;
+  create(data: DiscoveryIndustryCreate): Promise<DiscoveryIndustryRecord | null>;
+  archive(tenantId: string, id: string): Promise<boolean>;
+}
 
 export interface DiscoveryScheduleRepo {
   /** Returns null when the tenant already has a schedule for this country at this time. */

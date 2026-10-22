@@ -126,12 +126,14 @@ model Tenant {
   discoveryTargets   DiscoveryTarget[]
   discoveryUsages    DiscoveryUsage[]
   discoverySchedules DiscoverySchedule[]
+  discoveryIndustries DiscoveryIndustry[]
   siteSnapshots      SiteSnapshot[]
   siteAutomation     SiteAutomationSettings?
   siteAutomationCrawls SiteAutomationCrawl[]
   leadBots           LeadBot[]
   coldEmails         ColdEmail[]
   coldEmailAutomation ColdEmailAutomationSettings?
+  crawlPipelineSettings CrawlPipelineSettings?
 }
 
 model User {
@@ -258,6 +260,13 @@ model ColdEmail {
   resendId    String?
   error       String?
   sentAt      DateTime?
+  /// Scheduled follow-up email fields
+  followUpDueDate     DateTime?
+  /// none | scheduled | draft | sent | failed | suppressed | cancelled
+  followUpStatus      String?   @default("none")
+  followUpSentAt      DateTime?
+  followUpResendId    String?
+  followUpError       String?
   /// manual (console/API), auto (cold email automation) or test (sent to an allowlisted test inbox, not the lead).
   /// Test rows never count as the lead having been emailed.
   origin      String    @default("manual")
@@ -271,6 +280,7 @@ model ColdEmail {
   @@index([tenantId, leadId])
   @@index([tenantId, toEmail])
   @@index([tenantId, origin, createdAt])
+  @@index([tenantId, followUpStatus, followUpDueDate])
 }
 
 /// Per-tenant cold email automation. Off by default. `draft` only queues drafts for approval; `send` also sends them,
@@ -583,6 +593,7 @@ model DiscoverySchedule {
   timeOfDay   String
   /// IANA zone, e.g. Asia/Kuala_Lumpur.
   timezone    String
+  industries  String[]  @default([])
   enabled     Boolean   @default(true)
   /// Next slot in UTC; the scheduler picks rows where nextRunAt <= now.
   nextRunAt   DateTime
@@ -593,6 +604,23 @@ model DiscoverySchedule {
   @@unique([tenantId, countryCode, timeOfDay])
   @@index([enabled, nextRunAt])
   @@index([tenantId, countryCode])
+}
+
+model DiscoveryIndustry {
+  id        String   @id @default(cuid())
+  tenantId  String?
+  name      String
+  slug      String
+  category  String   @default("General")
+  isDefault Boolean  @default(false)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenant    Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, isActive])
+  @@index([category])
+  @@index([slug])
 }
 
 /// Website copy of one lead's homepage. Files live in R2 under storagePrefix; the row tracks
@@ -808,4 +836,42 @@ model SiteAutomationCrawl {
 
   @@index([tenantId, status, crawlFinishedAt])
   @@index([tenantId, crawlFinishedAt])
+}
+
+/// Per-tenant unified crawl, website creation, customer reach and follow-up pipeline settings.
+model CrawlPipelineSettings {
+  tenantId                    String    @id
+  active                      Boolean   @default(false)
+
+  /// Crawl Batch & Search parameters
+  crawlBatchSize              Int       @default(20)
+  targetCountry               String    @default("SG")
+  targetCities                Json?
+  targetIndustries            Json?
+  maxPagesPerSearch           Int       @default(3)
+
+  /// Daily Quotas
+  dailyWebsiteCreationLimit   Int       @default(5)
+  dailyCustomerReachLimit     Int       @default(5)
+
+  /// Continuous Auto-Recrawl / Queue Replenishment Loop
+  autoRecrawlEnabled          Boolean   @default(true)
+  minQueueBuffer              Int       @default(5)
+  maxDailyCrawlRuns           Int       @default(10)
+
+  /// Dynamic Follow-up Scheduling
+  followUpEnabled             Boolean   @default(true)
+  followUpDelayDays           Int       @default(3)
+  /// business_days | calendar_days
+  followUpMode                String    @default("business_days")
+  /// 24h hour of day (e.g. 10 = 10:00 AM)
+  followUpPreferredHour       Int       @default(10)
+  followUpSubject             String?
+  followUpBodyTemplate        String?
+
+  lastRecrawlAt               DateTime?
+  updatedBy                   String?
+  createdAt                   DateTime  @default(now())
+  updatedAt                   DateTime  @updatedAt
+  tenant                      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }

@@ -39,3 +39,4 @@ export * from './site/public-site';
 export * from './site/evidence-brand';
 export * from './site/company-email';
 export * from './site/image-size';
+export * from './use-cases/crawlPipeline';

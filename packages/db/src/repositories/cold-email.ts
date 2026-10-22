@@ -34,6 +34,11 @@ function mapRow(row: ColdEmailRow): ColdEmailRecord {
     resendId: row.resendId,
     error: row.error,
     sentAt: row.sentAt,
+    followUpDueDate: row.followUpDueDate,
+    followUpStatus: row.followUpStatus,
+    followUpSentAt: row.followUpSentAt,
+    followUpResendId: row.followUpResendId,
+    followUpError: row.followUpError,
     origin: row.origin as ColdEmailOrigin,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -155,7 +160,22 @@ export class PrismaColdEmailRepository implements ColdEmailRepo {
   async update(
     tenantId: string,
     id: string,
-    patch: Partial<Pick<ColdEmailRecord, 'status' | 'resendId' | 'error' | 'sentAt' | 'deliveredTo' | 'subject'>>,
+    patch: Partial<
+      Pick<
+        ColdEmailRecord,
+        | 'status'
+        | 'resendId'
+        | 'error'
+        | 'sentAt'
+        | 'deliveredTo'
+        | 'subject'
+        | 'followUpDueDate'
+        | 'followUpStatus'
+        | 'followUpSentAt'
+        | 'followUpResendId'
+        | 'followUpError'
+      >
+    >,
   ) {
     const existing = await this.db.coldEmail.findFirst({ where: { id, tenantId } });
     if (!existing) return null;
@@ -168,9 +188,28 @@ export class PrismaColdEmailRepository implements ColdEmailRepo {
         ...(patch.sentAt !== undefined ? { sentAt: patch.sentAt } : {}),
         ...(patch.deliveredTo !== undefined ? { deliveredTo: patch.deliveredTo } : {}),
         ...(patch.subject !== undefined ? { subject: patch.subject } : {}),
+        ...(patch.followUpDueDate !== undefined ? { followUpDueDate: patch.followUpDueDate } : {}),
+        ...(patch.followUpStatus !== undefined ? { followUpStatus: patch.followUpStatus } : {}),
+        ...(patch.followUpSentAt !== undefined ? { followUpSentAt: patch.followUpSentAt } : {}),
+        ...(patch.followUpResendId !== undefined ? { followUpResendId: patch.followUpResendId } : {}),
+        ...(patch.followUpError !== undefined ? { followUpError: patch.followUpError } : {}),
       },
     });
     return mapRow(row);
+  }
+
+  async listDueFollowUps(tenantId: string, now: Date, limit = 10): Promise<ColdEmailRecord[]> {
+    const rows = await this.db.coldEmail.findMany({
+      where: {
+        tenantId,
+        status: 'sent',
+        followUpStatus: 'scheduled',
+        followUpDueDate: { lte: now },
+      },
+      take: limit,
+      orderBy: { followUpDueDate: 'asc' },
+    });
+    return rows.map(mapRow);
   }
 
   async listCandidates(tenantId: string, opts?: { page?: number; pageSize?: number; readyOnly?: boolean }) {

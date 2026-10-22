@@ -43,6 +43,11 @@ import type {
   ColdEmail,
   ColdEmailAutomation,
   ColdEmailStatus,
+  CrawlPipelineSettingsUpdate,
+  CrawlPipelineTrigger,
+  CrawlPipelineSettingsView,
+  CrawlPipelineStatusView,
+  IndustryItem,
 } from '@/lib/types';
 
 export const qk = {
@@ -77,6 +82,7 @@ export const qk = {
   coldEmailAutomation: ['cold-emails', 'automation'] as const,
   coldEmails: (q: object) => ['cold-emails', 'list', q] as const,
   coldEmailCandidates: (q: object) => ['cold-emails', 'candidates', q] as const,
+  crawlPipeline: ['crawl-pipeline'] as const,
 };
 
 const isTerminal = (status: JobStatus | undefined) => status === 'done' || status === 'failed';
@@ -221,6 +227,14 @@ export function useDiscoveryOptions() {
     queryKey: qk.options,
     queryFn: () => api<DiscoveryOptions>('discovery/options'),
     staleTime: Infinity,
+  });
+}
+
+export function useDiscoveryIndustries() {
+  return useQuery({
+    queryKey: ['discovery', 'industries'],
+    queryFn: () => api<{ industries: IndustryItem[] }>('discovery/industries'),
+    staleTime: 60_000,
   });
 }
 
@@ -546,3 +560,38 @@ export function useApiMutation<TInput, TResult>(
     },
   });
 }
+
+export function useCrawlPipeline() {
+  return useQuery({
+    queryKey: qk.crawlPipeline,
+    queryFn: () => api<CrawlPipelineStatusView>('crawl-settings'),
+    refetchInterval: 10_000,
+  });
+}
+
+export function useUpdateCrawlPipeline() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: CrawlPipelineSettingsUpdate) =>
+      api<{ settings: CrawlPipelineSettingsView }>('crawl-settings', { method: 'PUT', body }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: qk.crawlPipeline });
+    },
+  });
+}
+
+export function useTriggerCrawlBatch() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: CrawlPipelineTrigger) =>
+      api<{ id: string; status: string; type: string; batchSize: number }>('crawl-settings/trigger', {
+        method: 'POST',
+        body,
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: qk.crawlPipeline });
+      void qc.invalidateQueries({ queryKey: qk.jobs({}) });
+    },
+  });
+}
+

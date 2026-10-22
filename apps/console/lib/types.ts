@@ -436,3 +436,22 @@ export type ColdEmailCandidatePage = {
   pageSize: number;
   totalPages: number;
 };
+
+export type {
+  CrawlPipelineSettingsUpdate,
+  CrawlPipelineTrigger,
+  CrawlPipelineSettingsView,
+  CrawlPipelineProgressView,
+  CrawlPipelineStatusView,
+} from '@moncha/contracts';
+
+export type IndustryItem = {
+  id: string;
+  name: string;
+  slug: string;
+  category: string;
+  isDefault: boolean;
+  isActive: boolean;
+  isCustom?: boolean;
+  tenantId?: string | null;
+};

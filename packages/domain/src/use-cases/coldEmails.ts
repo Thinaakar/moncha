@@ -51,6 +51,11 @@ export type ColdEmailRecord = {
   resendId: string | null;
   error: string | null;
   sentAt: Date | null;
+  followUpDueDate?: Date | null;
+  followUpStatus?: string | null;
+  followUpSentAt?: Date | null;
+  followUpResendId?: string | null;
+  followUpError?: string | null;
   origin: ColdEmailOrigin;
   createdAt: Date;
   updatedAt: Date;
@@ -97,6 +102,8 @@ export interface ColdEmailRepo {
       error?: string | null;
       sentAt?: Date | null;
       origin?: ColdEmailOrigin;
+      followUpDueDate?: Date | null;
+      followUpStatus?: string | null;
     },
   ): Promise<ColdEmailRecord>;
   /**
@@ -109,8 +116,24 @@ export interface ColdEmailRepo {
   update(
     tenantId: string,
     id: string,
-    patch: Partial<Pick<ColdEmailRecord, 'status' | 'resendId' | 'error' | 'sentAt' | 'deliveredTo' | 'subject'>>,
+    patch: Partial<
+      Pick<
+        ColdEmailRecord,
+        | 'status'
+        | 'resendId'
+        | 'error'
+        | 'sentAt'
+        | 'deliveredTo'
+        | 'subject'
+        | 'followUpDueDate'
+        | 'followUpStatus'
+        | 'followUpSentAt'
+        | 'followUpResendId'
+        | 'followUpError'
+      >
+    >,
   ): Promise<ColdEmailRecord | null>;
+  listDueFollowUps?(tenantId: string, now: Date, limit?: number): Promise<ColdEmailRecord[]>;
   listCandidates(
     tenantId: string,
     opts?: { page?: number; pageSize?: number; readyOnly?: boolean },

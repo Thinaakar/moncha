@@ -30,6 +30,11 @@ import {
   siteSnapshotListQuerySchema,
   sourceImportSchema,
   updateProfileSchema,
+  crawlPipelineSettingsUpdateSchema,
+  crawlPipelineTriggerSchema,
+  type CrawlPipelineProgressView,
+  type CrawlPipelineSettingsView,
+  type CrawlPipelineStatusView,
   type SiteCostModelPrice,
   type SiteCostPricing,
   type SiteCostSummary,
@@ -82,6 +87,7 @@ import {
   PrismaSiteSnapshotRepository,
   PrismaWebsiteRepository,
   PrismaWorkerSettingsRepository,
+  PrismaCrawlPipelineRepository,
   withDbRetry,
 } from '@moncha/db';
 import {
@@ -120,6 +126,7 @@ import {
   ReviewError,
   ScheduleError,
   supportedCountries,
+  evaluateAutoRecrawl,
   websiteAuditDedupeKey,
   normalizeSiteFilePath,
   cancelSiteSnapshot,
@@ -180,6 +187,7 @@ import {
 import { CsvImportError, SOURCE_IMPORT_JOB_TYPES, sourceImportView, startCsvImport, type CsvSqlClient } from './csv-import';
 import { monchaInternalClient, siteAgentConfig, siteAutoCopyEnabled, siteGithubPublisher, siteWorkerDeployer } from './site-agent';
 import { workerHealth } from './worker-health';
+import { liveCountryCrawls } from './country-crawls';
 
 // Local test API for Postman: exposes the same use cases the console routes call.
 // Routes other than /api/v1/auth/* need no login: tenant comes from the x-tenant-id header or DEFAULT_TENANT_ID.
@@ -197,6 +205,7 @@ const logger = createConsoleLogger();
 const schedules = new PrismaDiscoveryScheduleRepository(prisma);
 const jobs = new PrismaJobRunRepository(prisma);
 const leads = new PrismaLeadRepository(prisma);
+const crawlPipelineRepo = new PrismaCrawlPipelineRepository(prisma);
 let neonSql: CsvSqlClient | null = null;
 /** Set-based CSV import and worker health share their SQL with the Cloudflare edge. */
 const sqlClient = (): CsvSqlClient => (neonSql ??= neon(process.env.DATABASE_URL || '') as unknown as CsvSqlClient);
@@ -323,6 +332,138 @@ route('GET', '/api/v1/discovery/options', async () => ({
     defaults: { source: 'google_places', maxPages: 3, timezone: DEFAULT_SCHEDULE_TIMEZONE },
   },
 }));
+
+// Crawl & Pipeline settings: dynamic limits, auto-recrawl replenishment, and follow-up configuration.
+route('GET', '/api/v1/crawl-settings', async ({ tenantId }) => {
+  const settings = await crawlPipelineRepo.get(tenantId);
+  const counters = await crawlPipelineRepo.getCountersToday(tenantId);
+  const decision = evaluateAutoRecrawl(settings, counters);
+  const workerStatus = workerStatusProvider?.();
+
+  const settingsView: CrawlPipelineSettingsView = {
+    active: settings.active,
+    crawlBatchSize: settings.crawlBatchSize,
+    targetCountry: settings.targetCountry,
+    targetCities: settings.targetCities,
+    targetIndustries: settings.targetIndustries,
+    maxPagesPerSearch: settings.maxPagesPerSearch,
+    dailyWebsiteCreationLimit: settings.dailyWebsiteCreationLimit,
+    dailyCustomerReachLimit: settings.dailyCustomerReachLimit,
+    autoRecrawlEnabled: settings.autoRecrawlEnabled,
+    minQueueBuffer: settings.minQueueBuffer,
+    maxDailyCrawlRuns: settings.maxDailyCrawlRuns,
+    followUpEnabled: settings.followUpEnabled,
+    followUpDelayDays: settings.followUpDelayDays,
+    followUpMode: settings.followUpMode,
+    followUpPreferredHour: settings.followUpPreferredHour,
+    followUpSubject: settings.followUpSubject,
+    followUpBodyTemplate: settings.followUpBodyTemplate,
+    lastRecrawlAt: settings.lastRecrawlAt?.toISOString() ?? null,
+    updatedBy: settings.updatedBy,
+    updatedAt: settings.updatedAt.toISOString(),
+  };
+
+  const progressView: CrawlPipelineProgressView = {
+    ...counters,
+    recrawlNeeded: decision.shouldRecrawl,
+    recrawlReason: decision.reason,
+  };
+
+  const json: CrawlPipelineStatusView = {
+    settings: settingsView,
+    progress: progressView,
+    workerOnline: Boolean(workerStatus),
+  };
+
+  return { json };
+});
+
+route('PUT', '/api/v1/crawl-settings', async ({ req, tenantId, body }) => {
+  const user = await requireEditor(req, tenantId, 'update crawl settings');
+  const patch = crawlPipelineSettingsUpdateSchema.parse(await body());
+  const updated = await crawlPipelineRepo.save(tenantId, patch, user.email);
+
+  const settingsView: CrawlPipelineSettingsView = {
+    active: updated.active,
+    crawlBatchSize: updated.crawlBatchSize,
+    targetCountry: updated.targetCountry,
+    targetCities: updated.targetCities,
+    targetIndustries: updated.targetIndustries,
+    maxPagesPerSearch: updated.maxPagesPerSearch,
+    dailyWebsiteCreationLimit: updated.dailyWebsiteCreationLimit,
+    dailyCustomerReachLimit: updated.dailyCustomerReachLimit,
+    autoRecrawlEnabled: updated.autoRecrawlEnabled,
+    minQueueBuffer: updated.minQueueBuffer,
+    maxDailyCrawlRuns: updated.maxDailyCrawlRuns,
+    followUpEnabled: updated.followUpEnabled,
+    followUpDelayDays: updated.followUpDelayDays,
+    followUpMode: updated.followUpMode,
+    followUpPreferredHour: updated.followUpPreferredHour,
+    followUpSubject: updated.followUpSubject,
+    followUpBodyTemplate: updated.followUpBodyTemplate,
+    lastRecrawlAt: updated.lastRecrawlAt?.toISOString() ?? null,
+    updatedBy: updated.updatedBy,
+    updatedAt: updated.updatedAt.toISOString(),
+  };
+
+  logger.info('crawl_pipeline.settings_updated', { tenantId, by: user.email, ...patch });
+  return { json: { settings: settingsView } };
+});
+
+route('POST', '/api/v1/crawl-settings/trigger', async ({ req, tenantId, body }) => {
+  await requireEditor(req, tenantId, 'trigger crawl batch');
+  const input = crawlPipelineTriggerSchema.parse(await body());
+  const settings = await crawlPipelineRepo.get(tenantId);
+  const countryCode = input.country || settings.targetCountry || 'SG';
+  const profile = resolveCountry(countryCode);
+  if (!profile) {
+    throw new HttpError(400, 'validation_error', `Unsupported country "${countryCode}".`);
+  }
+
+  const live = await liveCountryCrawls(tenantId, profile.name);
+  if (live.length && !input.forceRecrawl) {
+    throw new HttpError(409, 'crawl_busy', `A crawl is already running for ${profile.name} (job ${live.join(', ')})`);
+  }
+
+  const batchSize = input.batchSize || settings.crawlBatchSize || 20;
+  const maxPages = Math.min(settings.maxPagesPerSearch, 3);
+  const maxSearches = Math.max(1, Math.ceil(batchSize / 20));
+
+  const payload: CountryDiscoveryJobPayload = {
+    mode: 'country',
+    origin: 'auto',
+    country: profile.name,
+    countryCode: profile.code,
+    cities: settings.targetCities.length ? settings.targetCities : undefined,
+    industries: settings.targetIndustries.length ? settings.targetIndustries : undefined,
+    maxPages,
+    maxSearches,
+    maxCallsPerDay: Number(process.env.DISCOVERY_MAX_CALLS_PER_DAY || 500),
+    reset: false,
+  };
+
+  const job = await jobs.create({ tenantId, type: 'country_discovery', payload, maxAttempts: 1 });
+  await crawlPipelineRepo.recordRecrawlRun(tenantId);
+  logger.info('crawl_pipeline.crawl_triggered', {
+    tenantId,
+    jobId: job.id,
+    country: profile.code,
+    batchSize,
+    maxSearches,
+  });
+
+  return {
+    status: 202,
+    json: {
+      id: job.id,
+      status: job.status,
+      type: job.type,
+      batchSize,
+      country: profile.name,
+      countryCode: profile.code,
+    },
+  };
+});
 
 /**
  * Fills `deploy.domains` (the lead's MonCha widget allowed hosts, set right after a deploy) on deployed copies, with one

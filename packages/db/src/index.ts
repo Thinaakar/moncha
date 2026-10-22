@@ -20,3 +20,4 @@ export * from './repositories/site-cost';
 export * from './repositories/lead-bot';
 export * from './repositories/cold-email';
 export * from './repositories/worker-settings';
+export * from './repositories/crawl-pipeline';
