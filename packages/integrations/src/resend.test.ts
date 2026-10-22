@@ -48,7 +48,7 @@ describe('ResendMailer', () => {
       COLD_EMAIL_DEV_MODE: 'true',
     };
 
-    it('sends to multiple approved dev recipients with default sender Moncha <support@jobteacher.pro>', async () => {
+    it('sends to multiple approved dev recipients with default sender MonCha <team@moncha.co>', async () => {
       const calls: Array<{ url: string; init: RequestInit }> = [];
       const fetchImpl = (async (url: string, init: RequestInit) => {
         calls.push({ url, init });
@@ -68,7 +68,7 @@ describe('ResendMailer', () => {
       expect(res).toEqual({ id: 're_123' });
       expect(calls).toHaveLength(1);
       const body = JSON.parse(calls[0]!.init.body as string);
-      expect(body.from).toBe('Moncha <support@jobteacher.pro>');
+      expect(body.from).toBe('MonCha <team@moncha.co>');
       expect(body.to).toEqual(['vinothjv4.tech@gmail.com', 'thinaakark2004@gmail.com']);
     });
 

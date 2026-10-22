@@ -9,7 +9,7 @@ import {
 const RESEND_URL = 'https://api.resend.com/emails';
 /** Resend's shared test sender; it only delivers to the Resend account owner's address. */
 const DEFAULT_FROM = 'MonCha <onboarding@resend.dev>';
-const COLD_FROM_DEFAULT = 'Moncha <support@jobteacher.pro>';
+const COLD_FROM_DEFAULT = 'MonCha <team@moncha.co>';
 
 const escapeHtml = (text: string) =>
   text.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);

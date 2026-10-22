@@ -12,6 +12,7 @@
     "avatars:backfill": "tsx src/avatars-backfill.ts",
     "train:kick": "tsx src/train-kick.ts",
     "cold-email:demo": "tsx src/cold-email-demo.ts",
+    "follow-up-email:demo": "tsx src/follow-up-email-demo.ts",
     "api": "tsx src/api.ts",
     "cf:typecheck": "tsc -p cloudflare/tsconfig.json",
     "cf:check": "wrangler deploy --dry-run --containers-rollout=none",
