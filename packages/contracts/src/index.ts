@@ -1277,3 +1277,18 @@ export type CrawlPipelineStatusView = {
   progress: CrawlPipelineProgressView;
   workerOnline: boolean;
 };
+
+export const followUpEmailPreviewSchema = z.object({
+  companyName: z.string().trim().min(1).max(200).optional(),
+  demoUrl: z.string().trim().url().max(2000).optional(),
+  customSubject: z.string().trim().max(200).optional().nullable(),
+  customTemplate: z.string().trim().max(10000).optional().nullable(),
+});
+
+export type FollowUpEmailPreviewInput = z.infer<typeof followUpEmailPreviewSchema>;
+
+export type FollowUpEmailPreviewView = {
+  subject: string;
+  text: string;
+  html: string;
+};

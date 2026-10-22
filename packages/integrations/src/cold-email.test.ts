@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   COLD_EMAIL_LOGO_URL,
   coldEmailContent,
+  followUpEmailContent,
   coldEmailSendingEnabled,
   isColdEmailRecipientAllowed,
   parseColdEmailAllowlist,
@@ -63,6 +64,44 @@ describe('coldEmailContent', () => {
     expect(html).not.toContain('not a live outreach to the company');
     expect(text).not.toContain('This is an internal template preview');
     expect(text).not.toContain('not a live outreach to the company');
+  });
+});
+
+describe('followUpEmailContent', () => {
+  it('renders the separate follow-up reminder template with MonCha branding', () => {
+    const { subject, html, text } = followUpEmailContent({
+      companyName: 'Car Battery SG',
+      demoUrl: 'https://carbattery-sg.vinothjv4-tech.workers.dev',
+    });
+    expect(subject).toBe('Have you had a chance to explore your AI assistant?');
+    expect(html).toContain('Have you had a chance to explore your AI assistant?');
+    expect(html).toContain('Hi Car Battery SG team,');
+    expect(html).toContain('I wanted to follow up on the AI support assistant demo we shared with you recently.');
+    expect(html).toContain('HOW IT HELPS YOUR BUSINESS');
+    expect(html).toContain('Accurate answers');
+    expect(html).toContain('Available 24/7');
+    expect(html).toContain('Leads and bookings');
+    expect(html).toContain('https://carbattery-sg.vinothjv4-tech.workers.dev');
+    expect(html).toContain('Open demo');
+    expect(html).toContain('We&#39;d love to hear what you think.');
+    expect(html).toContain('Best regards,<br><span style="color:#0f172a;font-weight:600">The MonCha team</span>');
+    expect(html).toContain(COLD_EMAIL_LOGO_URL);
+    expect(html).not.toContain('This is an internal template preview');
+    expect(text).toContain('HOW IT HELPS YOUR BUSINESS');
+    expect(text).toContain('The MonCha team');
+  });
+
+  it('substitutes custom template and subject placeholders', () => {
+    const { subject, text, html } = followUpEmailContent({
+      companyName: 'Apex Motors Pte Ltd',
+      demoUrl: 'https://apex.workers.dev',
+      customSubject: 'Reminder for {companyName}',
+      customTemplate: 'Hi {companyName},\n\nJust checking in on {demoUrl}!\n\nCheers.',
+    });
+    expect(subject).toBe('Reminder for Apex Motors');
+    expect(text).toContain('Just checking in on https://apex.workers.dev!');
+    expect(html).toContain('Just checking in on https://apex.workers.dev!');
+    expect(html).toContain('Open demo');
   });
 });
 

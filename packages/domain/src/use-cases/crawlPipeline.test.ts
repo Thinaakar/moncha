@@ -127,9 +127,14 @@ describe('buildFollowUpContent', () => {
       companyName: 'Acme Design',
       demoUrl: 'https://acme.workers.dev',
     });
-    expect(content.subject).toContain('Acme Design');
+    expect(content.subject).toBe('Have you had a chance to explore your AI assistant?');
+    expect(content.text).toContain('Hi Acme Design team,');
     expect(content.text).toContain('https://acme.workers.dev');
     expect(content.html).toContain('https://acme.workers.dev');
+    expect(content.html).toContain('Have you had a chance to explore your AI assistant?');
+    expect(content.html).toContain('HOW IT HELPS YOUR BUSINESS');
+    expect(content.html).toContain('Open demo');
+    expect(content.html).not.toContain('internal template preview');
   });
 
   it('renders custom template with variables substituted', () => {
@@ -142,6 +147,9 @@ describe('buildFollowUpContent', () => {
       customTemplate,
     });
     expect(content.subject).toBe('Action required for Nova Spa');
-    expect(content.text).toBe('Hello Nova Spa, please review your preview at https://nova.workers.dev. Cheers!');
+    expect(content.text).toContain('Hello Nova Spa, please review your preview at https://nova.workers.dev. Cheers!');
+    expect(content.text).toContain('HOW IT HELPS YOUR BUSINESS');
+    expect(content.html).toContain('Hello Nova Spa, please review your preview at https://nova.workers.dev. Cheers!');
+    expect(content.html).toContain('Open demo');
   });
 });

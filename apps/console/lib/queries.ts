@@ -47,6 +47,7 @@ import type {
   CrawlPipelineTrigger,
   CrawlPipelineSettingsView,
   CrawlPipelineStatusView,
+  FollowUpEmailPreviewView,
   IndustryItem,
 } from '@/lib/types';
 
@@ -592,6 +593,21 @@ export function useTriggerCrawlBatch() {
       void qc.invalidateQueries({ queryKey: qk.crawlPipeline });
       void qc.invalidateQueries({ queryKey: qk.jobs({}) });
     },
+  });
+}
+
+export function useFollowUpEmailPreview() {
+  return useMutation({
+    mutationFn: (body: {
+      companyName?: string;
+      demoUrl?: string;
+      customSubject?: string | null;
+      customTemplate?: string | null;
+    }) =>
+      api<FollowUpEmailPreviewView>('crawl-settings/follow-up-preview', {
+        method: 'POST',
+        body,
+      }),
   });
 }
 

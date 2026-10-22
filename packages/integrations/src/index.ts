@@ -30,6 +30,7 @@ export { ResendMailer, createResendMailerFromEnv, passwordResetEmailContent } fr
 export {
   COLD_EMAIL_LOGO_URL,
   coldEmailContent,
+  followUpEmailContent,
   coldEmailSendingEnabled,
   isColdEmailRecipientAllowed,
   parseColdEmailAllowlist,
@@ -37,6 +38,7 @@ export {
   isColdEmailDevMode,
   getColdEmailDevInboxes,
   type ColdEmailContentInput,
+  type FollowUpEmailContentInput,
 } from './cold-email';
 export { R2SiteStore, createR2SiteStoreFromEnv, r2ConfigFromEnv, type R2Config } from './r2';
 export { MemorySiteStore } from './memory-site-store';

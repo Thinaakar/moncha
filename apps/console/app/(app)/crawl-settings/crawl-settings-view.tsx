@@ -15,6 +15,7 @@ import {
   Clock,
   Compass,
   Database,
+  Eye,
   Filter,
   Gauge,
   Globe,
@@ -41,6 +42,14 @@ import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Switch, Tooltip } from '@/components/ui/misc';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -54,6 +63,7 @@ import { useCanEdit } from '@/components/app/user-context';
 import {
   useCrawlPipeline,
   useDiscoveryOptions,
+  useFollowUpEmailPreview,
   useTriggerCrawlBatch,
   useUpdateCrawlPipeline,
 } from '@/lib/queries';
@@ -182,6 +192,21 @@ export function CrawlSettingsView() {
   const [followUpPreferredHour, setFollowUpPreferredHour] = useState(10);
   const [followUpSubject, setFollowUpSubject] = useState('');
   const [followUpBodyTemplate, setFollowUpBodyTemplate] = useState('');
+
+  // Follow-up email template preview
+  const followUpPreview = useFollowUpEmailPreview();
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewTab, setPreviewTab] = useState<'html' | 'text'>('html');
+
+  function handleOpenPreview() {
+    setPreviewOpen(true);
+    followUpPreview.mutate({
+      companyName: 'Car Battery SG',
+      demoUrl: 'https://carbattery-sg.vinothjv4-tech.workers.dev',
+      customSubject: followUpSubject.trim() || null,
+      customTemplate: followUpBodyTemplate.trim() || null,
+    });
+  }
 
   // Sync state when pipeline data loads
   useEffect(() => {
@@ -833,6 +858,16 @@ export function CrawlSettingsView() {
               </CardDescription>
             </div>
             <div className="flex items-center gap-3">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleOpenPreview}
+                disabled={followUpPreview.isPending}
+                className="gap-1.5"
+              >
+                <Eye className="size-3.5 text-primary" /> Preview Email
+              </Button>
               <span className="text-sm font-medium">{followUpEnabled ? 'Follow-ups On' : 'Follow-ups Off'}</span>
               <Switch
                 checked={followUpEnabled}
@@ -914,12 +949,24 @@ export function CrawlSettingsView() {
                 <div>
                   <h3 className="text-sm font-semibold">Follow-Up Email Template & Format Slot</h3>
                   <p className="text-xs text-muted-foreground">
-                    Customize your follow-up subject and body. When left blank, a clean default follow-up is dispatched.
+                    Customize your follow-up subject and body. When left blank, the official MonCha reminder email is dispatched.
                   </p>
                 </div>
-                <Badge variant={followUpBodyTemplate.trim() ? 'success' : 'outline'}>
-                  {followUpBodyTemplate.trim() ? 'Custom Template Active' : 'Default Follow-up Placeholder Active'}
-                </Badge>
+                <div className="flex items-center gap-2">
+                  <Badge variant={followUpBodyTemplate.trim() ? 'success' : 'outline'}>
+                    {followUpBodyTemplate.trim() ? 'Custom Template Active' : 'Default MonCha Reminder Active'}
+                  </Badge>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleOpenPreview}
+                    disabled={followUpPreview.isPending}
+                    className="h-7 text-xs text-primary hover:text-primary gap-1"
+                  >
+                    <Eye className="size-3" /> Preview
+                  </Button>
+                </div>
               </div>
 
               <div className="space-y-3 pt-2">
@@ -983,6 +1030,91 @@ export function CrawlSettingsView() {
             </Button>
           </CardFooter>
         </Card>
+
+        {/* Follow-Up Reminder Email Preview Dialog */}
+        <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
+          <DialogContent className="max-w-3xl overflow-hidden p-0 max-h-[92vh] flex flex-col">
+            <DialogHeader className="border-b p-5 bg-card">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <DialogTitle className="flex items-center gap-2">
+                    <Eye className="size-4 text-primary" /> Follow-Up Reminder Email Preview
+                  </DialogTitle>
+                  <DialogDescription className="mt-1">
+                    Matches the official MonCha layout sent to customer after initial outreach.
+                  </DialogDescription>
+                </div>
+                <div className="flex items-center gap-1 rounded-lg border bg-muted/40 p-0.5 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setPreviewTab('html')}
+                    className={cn(
+                      'rounded-md px-2.5 py-1 font-medium transition-all',
+                      previewTab === 'html'
+                        ? 'bg-card text-foreground font-semibold shadow-2xs'
+                        : 'text-muted-foreground hover:text-foreground',
+                    )}
+                  >
+                    Rendered Preview
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPreviewTab('text')}
+                    className={cn(
+                      'rounded-md px-2.5 py-1 font-medium transition-all',
+                      previewTab === 'text'
+                        ? 'bg-card text-foreground font-semibold shadow-2xs'
+                        : 'text-muted-foreground hover:text-foreground',
+                    )}
+                  >
+                    Plaintext
+                  </button>
+                </div>
+              </div>
+              <div className="mt-3 flex items-center gap-2 rounded-lg bg-muted/30 px-3 py-1.5 text-xs">
+                <span className="font-semibold text-muted-foreground uppercase text-[10px] tracking-wider">
+                  Subject:
+                </span>
+                <span className="font-medium text-foreground">
+                  {followUpPreview.data?.subject ||
+                    (followUpSubject.trim()
+                      ? followUpSubject.replace(/\{companyName\}/gi, 'Car Battery SG')
+                      : 'Have you had a chance to explore your AI assistant?')}
+                </span>
+              </div>
+            </DialogHeader>
+
+            <div className="flex-1 overflow-y-auto bg-muted/10 p-5 flex justify-center">
+              {followUpPreview.isPending ? (
+                <div className="flex flex-col items-center justify-center p-12 space-y-3">
+                  <RefreshCw className="size-6 animate-spin text-primary" />
+                  <p className="text-xs text-muted-foreground">Rendering follow-up template...</p>
+                </div>
+              ) : previewTab === 'html' ? (
+                <iframe
+                  srcDoc={followUpPreview.data?.html}
+                  className="w-full max-w-[580px] min-h-[580px] rounded-xl border bg-white shadow-xs"
+                  title="Follow-Up Email Preview"
+                  sandbox="allow-same-origin"
+                />
+              ) : (
+                <pre className="w-full max-w-[580px] whitespace-pre-wrap rounded-xl border bg-card p-5 font-mono text-xs text-foreground leading-relaxed shadow-xs">
+                  {followUpPreview.data?.text}
+                </pre>
+              )}
+            </div>
+
+            <DialogFooter className="border-t p-4 bg-card flex items-center justify-between sm:justify-between">
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <CheckCircle2 className="size-3.5 text-emerald-500" />
+                <span>Verified MonCha design system with live demo link integration</span>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => setPreviewOpen(false)}>
+                Close Preview
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </div>
   );

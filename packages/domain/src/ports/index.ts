@@ -117,6 +117,8 @@ export type ColdEmailPayload = {
   demoUrl: string;
   note?: string;
   subject?: string;
+  text?: string;
+  html?: string;
 };
 
 export interface Mailer {

@@ -443,6 +443,7 @@ export type {
   CrawlPipelineSettingsView,
   CrawlPipelineProgressView,
   CrawlPipelineStatusView,
+  FollowUpEmailPreviewView,
 } from '@moncha/contracts';
 
 export type IndustryItem = {

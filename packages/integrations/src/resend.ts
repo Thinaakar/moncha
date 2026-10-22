@@ -83,12 +83,15 @@ export class ResendMailer implements Mailer {
       }
     }
 
-    const content = coldEmailContent({
-      companyName: email.companyName,
-      demoUrl: email.demoUrl,
-      note: email.note,
-      logoUrl: typeof env.COLD_EMAIL_LOGO_URL === 'string' ? env.COLD_EMAIL_LOGO_URL : undefined,
-    });
+    const content =
+      email.html && email.text
+        ? { subject: email.subject, text: email.text, html: email.html }
+        : coldEmailContent({
+            companyName: email.companyName,
+            demoUrl: email.demoUrl,
+            note: email.note,
+            logoUrl: typeof env.COLD_EMAIL_LOGO_URL === 'string' ? env.COLD_EMAIL_LOGO_URL : undefined,
+          });
     const id = await this.postEmail({
       from: this.coldFrom,
       to: recipients,

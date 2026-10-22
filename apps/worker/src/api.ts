@@ -32,9 +32,11 @@ import {
   updateProfileSchema,
   crawlPipelineSettingsUpdateSchema,
   crawlPipelineTriggerSchema,
+  followUpEmailPreviewSchema,
   type CrawlPipelineProgressView,
   type CrawlPipelineSettingsView,
   type CrawlPipelineStatusView,
+  type FollowUpEmailPreviewView,
   type SiteCostModelPrice,
   type SiteCostPricing,
   type SiteCostSummary,
@@ -127,6 +129,7 @@ import {
   ScheduleError,
   supportedCountries,
   evaluateAutoRecrawl,
+  buildFollowUpContent,
   websiteAuditDedupeKey,
   normalizeSiteFilePath,
   cancelSiteSnapshot,
@@ -463,6 +466,32 @@ route('POST', '/api/v1/crawl-settings/trigger', async ({ req, tenantId, body }) 
       countryCode: profile.code,
     },
   };
+});
+
+route('POST', '/api/v1/crawl-settings/follow-up-preview', async ({ req, tenantId, body }) => {
+  await requireEditor(req, tenantId, 'preview follow-up emails');
+  const input = followUpEmailPreviewSchema.parse(await body());
+  const content = buildFollowUpContent({
+    companyName: input.companyName || 'Car Battery SG',
+    demoUrl: input.demoUrl || 'https://carbattery-sg.vinothjv4-tech.workers.dev',
+    customSubject: input.customSubject,
+    customTemplate: input.customTemplate,
+  });
+  const json: FollowUpEmailPreviewView = content;
+  return { json };
+});
+
+route('POST', '/api/v1/crawl-pipeline/follow-up-preview', async ({ req, tenantId, body }) => {
+  await requireEditor(req, tenantId, 'preview follow-up emails');
+  const input = followUpEmailPreviewSchema.parse(await body());
+  const content = buildFollowUpContent({
+    companyName: input.companyName || 'Car Battery SG',
+    demoUrl: input.demoUrl || 'https://carbattery-sg.vinothjv4-tech.workers.dev',
+    customSubject: input.customSubject,
+    customTemplate: input.customTemplate,
+  });
+  const json: FollowUpEmailPreviewView = content;
+  return { json };
 });
 
 /**
