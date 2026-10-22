@@ -40,7 +40,9 @@ export function coldEmailContent(input: ColdEmailContentInput) {
   const greeting = name === 'there' ? 'Hi there,' : `Hi ${name} team,`;
   const subject = `Your AI support assistant demo for ${name}`;
   const intro = `We have built an AI support assistant for ${name}, trained on the content of your website. It answers your visitors' questions around the clock and hands over to your team whenever it cannot help.`;
-  const note = input.note?.trim();
+  const rawNote = input.note?.trim();
+  const note =
+    rawNote && !rawNote.toLowerCase().includes('internal template preview') ? rawNote : undefined;
   const demoUrl = input.demoUrl;
   const text = [
     greeting,

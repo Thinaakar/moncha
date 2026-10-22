@@ -307,7 +307,6 @@ export function OutreachView() {
         toEmail: c.companyEmail ?? devRecipients[0],
         deliverTo: devRecipients,
         demoUrl: c.demoUrl,
-        note: 'Internal developer test preview',
       });
       toast.success(`Demo sent to ${row.deliveredTo || devRecipients.join(' & ')}`);
       url.set({ tab: 'sent', page: null });

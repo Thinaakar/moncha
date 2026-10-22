@@ -52,6 +52,18 @@ describe('coldEmailContent', () => {
     const custom = coldEmailContent({ companyName: 'Acme', demoUrl: 'https://acme.example', logoUrl: 'https://cdn.example/logo.png?a=1&b=2' });
     expect(custom.html).toContain('src="https://cdn.example/logo.png?a=1&amp;b=2"');
   });
+
+  it('removes internal template preview disclaimer from html and text', () => {
+    const { html, text } = coldEmailContent({
+      companyName: 'Acme',
+      demoUrl: 'https://acme.example',
+      note: 'This is an internal template preview — not a live outreach to the company.',
+    });
+    expect(html).not.toContain('This is an internal template preview');
+    expect(html).not.toContain('not a live outreach to the company');
+    expect(text).not.toContain('This is an internal template preview');
+    expect(text).not.toContain('not a live outreach to the company');
+  });
 });
 
 describe('cold email gate', () => {
