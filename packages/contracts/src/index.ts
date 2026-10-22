@@ -1206,18 +1206,18 @@ export type ColdEmailCandidatePage = {
 
 export const crawlPipelineSettingsUpdateSchema = z.object({
   active: z.boolean().optional(),
-  crawlBatchSize: z.number().int().min(5).max(100).optional(),
+  crawlBatchSize: z.number().int().min(1).optional(),
   targetCountry: z.string().trim().min(2).max(10).optional(),
   targetCities: z.array(z.string().trim()).optional(),
   targetIndustries: z.array(z.string().trim()).optional(),
-  maxPagesPerSearch: z.number().int().min(1).max(5).optional(),
-  dailyWebsiteCreationLimit: z.number().int().min(1).max(100).optional(),
-  dailyCustomerReachLimit: z.number().int().min(1).max(100).optional(),
+  maxPagesPerSearch: z.number().int().min(1).max(20).optional(),
+  dailyWebsiteCreationLimit: z.number().int().min(0).optional(),
+  dailyCustomerReachLimit: z.number().int().min(0).optional(),
   autoRecrawlEnabled: z.boolean().optional(),
-  minQueueBuffer: z.number().int().min(0).max(50).optional(),
-  maxDailyCrawlRuns: z.number().int().min(1).max(50).optional(),
+  minQueueBuffer: z.number().int().min(0).optional(),
+  maxDailyCrawlRuns: z.number().int().min(1).optional(),
   followUpEnabled: z.boolean().optional(),
-  followUpDelayDays: z.number().int().min(1).max(30).optional(),
+  followUpDelayDays: z.number().int().min(0).optional(),
   followUpMode: z.enum(['business_days', 'calendar_days']).optional(),
   followUpPreferredHour: z.number().int().min(0).max(23).optional(),
   followUpSubject: z.string().trim().max(200).optional().nullable(),
@@ -1225,7 +1225,7 @@ export const crawlPipelineSettingsUpdateSchema = z.object({
 });
 
 export const crawlPipelineTriggerSchema = z.object({
-  batchSize: z.number().int().min(5).max(100).optional(),
+  batchSize: z.number().int().min(1).optional(),
   country: z.string().trim().min(2).max(10).optional(),
   forceRecrawl: z.boolean().optional(),
 });

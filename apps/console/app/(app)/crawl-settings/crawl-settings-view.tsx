@@ -65,8 +65,8 @@ import { cn } from '@/lib/utils';
 function QuotaStepper({
   value,
   onChange,
-  min = 1,
-  max = 100,
+  min = 0,
+  max,
   step = 1,
   presets,
   unit,
@@ -84,27 +84,45 @@ function QuotaStepper({
   return (
     <div className="space-y-2.5">
       <div className="flex items-center gap-2">
-        <div className="inline-flex items-center rounded-lg border bg-muted/30 p-0.5 shadow-2xs">
+        <div className="inline-flex items-center rounded-lg border bg-card p-0.5 shadow-2xs transition-all focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20">
           <Button
             type="button"
             variant="ghost"
             size="icon-sm"
-            className="size-7 rounded-md text-muted-foreground hover:bg-card hover:text-foreground"
-            onClick={() => onChange(Math.max(min, value - step))}
-            disabled={disabled || value <= min}
+            className="size-7 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+            onClick={() => onChange(Math.max(min, (Number(value) || 0) - step))}
+            disabled={disabled || (min !== undefined && value <= min)}
+            aria-label="Decrease value"
           >
             <Minus className="size-3.5" />
           </Button>
-          <span className="w-12 text-center font-display text-base font-bold tabular-nums text-foreground">
-            {value}
-          </span>
+          <input
+            type="number"
+            min={min}
+            max={max}
+            value={value}
+            disabled={disabled}
+            onChange={(e) => {
+              const raw = e.target.value;
+              if (raw === '') {
+                onChange(min);
+                return;
+              }
+              const num = parseInt(raw, 10);
+              if (!isNaN(num)) {
+                onChange(max !== undefined ? Math.min(max, Math.max(min, num)) : Math.max(min, num));
+              }
+            }}
+            className="w-16 bg-transparent px-1 text-center font-display text-base font-bold tabular-nums text-foreground outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+          />
           <Button
             type="button"
             variant="ghost"
             size="icon-sm"
-            className="size-7 rounded-md text-muted-foreground hover:bg-card hover:text-foreground"
-            onClick={() => onChange(Math.min(max, value + step))}
-            disabled={disabled || value >= max}
+            className="size-7 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+            onClick={() => onChange((Number(value) || 0) + step)}
+            disabled={disabled || (max !== undefined && value >= max)}
+            aria-label="Increase value"
           >
             <Plus className="size-3.5" />
           </Button>
@@ -510,8 +528,7 @@ export function CrawlSettingsView() {
               <QuotaStepper
                 value={crawlBatchSize}
                 onChange={setCrawlBatchSize}
-                min={5}
-                max={100}
+                min={1}
                 step={5}
                 presets={[10, 20, 30, 50, 100]}
                 unit="websites / crawl"
@@ -544,8 +561,7 @@ export function CrawlSettingsView() {
               <QuotaStepper
                 value={dailyWebsiteCreationLimit}
                 onChange={setDailyWebsiteCreationLimit}
-                min={1}
-                max={50}
+                min={0}
                 step={1}
                 presets={[3, 5, 10, 20, 50]}
                 unit="demo sites / day"
@@ -590,8 +606,7 @@ export function CrawlSettingsView() {
               <QuotaStepper
                 value={dailyCustomerReachLimit}
                 onChange={setDailyCustomerReachLimit}
-                min={1}
-                max={50}
+                min={0}
                 step={1}
                 presets={[3, 5, 10, 20, 50]}
                 unit="customers / day"
@@ -670,8 +685,7 @@ export function CrawlSettingsView() {
                   <QuotaStepper
                     value={minQueueBuffer}
                     onChange={setMinQueueBuffer}
-                    min={1}
-                    max={25}
+                    min={0}
                     step={1}
                     presets={[3, 5, 10, 15]}
                     unit="leads"
@@ -688,7 +702,6 @@ export function CrawlSettingsView() {
                     value={maxDailyCrawlRuns}
                     onChange={setMaxDailyCrawlRuns}
                     min={1}
-                    max={30}
                     step={1}
                     presets={[5, 10, 15, 20]}
                     unit="runs max"
@@ -840,8 +853,7 @@ export function CrawlSettingsView() {
                 <QuotaStepper
                   value={followUpDelayDays}
                   onChange={setFollowUpDelayDays}
-                  min={1}
-                  max={14}
+                  min={0}
                   step={1}
                   presets={[1, 2, 3, 5, 7]}
                   unit="days wait"
