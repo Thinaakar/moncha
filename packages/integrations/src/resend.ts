@@ -7,9 +7,8 @@ import {
 } from './cold-email';
 
 const RESEND_URL = 'https://api.resend.com/emails';
-/** Resend's shared test sender; it only delivers to the Resend account owner's address. */
-const DEFAULT_FROM = 'MonCha <onboarding@resend.dev>';
-const COLD_FROM_DEFAULT = 'MonCha <team@moncha.co>';
+const DEFAULT_FROM = 'Moncha <support@jobteacher.pro>';
+const COLD_FROM_DEFAULT = 'Moncha <support@jobteacher.pro>';
 
 const escapeHtml = (text: string) =>
   text.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
@@ -126,12 +125,10 @@ export class ResendMailer implements Mailer {
 export function createResendMailerFromEnv(env: Record<string, unknown>): ResendMailer | null {
   const apiKey = typeof env.RESEND_API_KEY === 'string' ? env.RESEND_API_KEY.trim() : '';
   if (!apiKey) return null;
-  const from = typeof env.EMAIL_FROM === 'string' && env.EMAIL_FROM.trim() ? env.EMAIL_FROM.trim() : undefined;
+  const from = typeof env.EMAIL_FROM === 'string' && env.EMAIL_FROM.trim() ? env.EMAIL_FROM.trim() : DEFAULT_FROM;
   const coldFrom =
     typeof env.COLD_EMAIL_FROM === 'string' && env.COLD_EMAIL_FROM.trim()
       ? env.COLD_EMAIL_FROM.trim()
-      : from && from.includes('support@jobteacher.pro')
-        ? from
-        : COLD_FROM_DEFAULT;
+      : from || COLD_FROM_DEFAULT;
   return new ResendMailer(apiKey, from, (input, init) => fetch(input, init), coldFrom);
 }

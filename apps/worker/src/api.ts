@@ -1179,7 +1179,7 @@ const coldEmailDeps = {
   buildContent: coldEmailContent,
   coldFrom:
     process.env.COLD_EMAIL_FROM?.trim() ||
-    (process.env.EMAIL_FROM?.includes('support@jobteacher.pro') ? process.env.EMAIL_FROM.trim() : undefined) ||
+    process.env.EMAIL_FROM?.trim() ||
     'Moncha <support@jobteacher.pro>',
 };
 
