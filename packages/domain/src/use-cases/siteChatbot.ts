@@ -570,8 +570,8 @@ export type ChatbotAvatarDeps = {
 };
 
 /**
- * After a Worker deploy: the bot's profile picture (botIconUrl) becomes the website's icon or logo as the live copy
- * serves it, on a white background. The launcher bubble keeps MonCha's chat icon. When the copy has no usable image,
+ * After a Worker deploy: the bot's profile picture (botIconUrl) and launcher button (launcherIconUrl) become the website's
+ * icon or logo as the live copy serves it, on a white background for the avatar. When the copy has no usable image,
  * a picture taken earlier from this same Worker is removed (initials again); one set by someone else is left alone.
  * Null when the lead has no created bot; `changed: false` when the widget already matches. Throws MonCha API errors.
  */
@@ -596,17 +596,25 @@ export async function setChatbotAvatarForLiveUrl(
 
   const before = await deps.api.widget({ botId: bot.chatbotId, signal: input.signal });
   const current = typeof before.config.botIconUrl === 'string' ? before.config.botIconUrl : null;
+  const currentLauncher = typeof before.config.launcherIconUrl === 'string' ? before.config.launcherIconUrl : null;
   const bg = typeof before.config.botAvatarBgColor === 'string' ? before.config.botAvatarBgColor.toUpperCase() : null;
   let config: WidgetConfig;
   if (botIconUrl) {
-    if (current === botIconUrl && bg === CHATBOT_AVATAR_BG) return { botIconUrl, changed: false };
-    config = widgetConfigWith(before.config, { botIconUrl, botAvatarBgColor: CHATBOT_AVATAR_BG });
+    if (current === botIconUrl && currentLauncher === botIconUrl && bg === CHATBOT_AVATAR_BG) {
+      return { botIconUrl, changed: false };
+    }
+    config = widgetConfigWith(before.config, {
+      botIconUrl,
+      botAvatarBgColor: CHATBOT_AVATAR_BG,
+      launcherIconUrl: botIconUrl,
+    });
   } else {
     const origin = urlOrigin(input.workerUrl);
     if (!origin || !current?.startsWith(`${origin}/`)) return { botIconUrl: null, changed: false };
     config = widgetConfigWith(before.config, {});
     delete config.botIconUrl;
     delete config.botAvatarBgColor;
+    delete config.launcherIconUrl;
   }
 
   const after = await deps.api.updateWidget({ botId: bot.chatbotId, config, signal: input.signal });

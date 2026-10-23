@@ -1,7 +1,7 @@
 /**
- * One-shot: for every live website copy with the chatbot installed, set the bot's profile picture (botIconUrl) to the
- * website's favicon (at least 48 px), else its logo, as its Worker serves it. The launcher bubble keeps MonCha's chat icon. New deploys do this
- * automatically; this covers copies deployed before that.
+ * One-shot: for every live website copy with the chatbot installed, set the bot's profile picture (botIconUrl)
+ * and the floating launcher bubble (launcherIconUrl) to the website's favicon (at least 48 px), else its logo,
+ * as its Worker serves it. New deploys do this automatically; this covers copies deployed before that.
  *   pnpm --filter @moncha/worker avatars:backfill -- --dry-run [--limit <n>]
  *   pnpm --filter @moncha/worker avatars:backfill [-- --tenant <id>] [-- --limit <n>] [-- --lead <id>]
  */

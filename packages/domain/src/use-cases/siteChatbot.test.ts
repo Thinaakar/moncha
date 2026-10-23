@@ -363,20 +363,26 @@ describe('setChatbotAvatarForLiveUrl', () => {
   const iconUrl = 'https://acclaim-sg.x.workers.dev/assets/acclaim.sg/apple-touch-icon.png';
   const input = { tenantId: 't1', leadId: 'lead1', workerUrl: 'https://acclaim-sg.x.workers.dev', manifest, brand: null };
 
-  it('sets botIconUrl and a white avatar background, keeping every other widget field', async () => {
+  it('sets botIconUrl, launcherIconUrl, and a white avatar background, keeping every other widget field', async () => {
     const t = setup();
     const result = await setChatbotAvatarForLiveUrl({ bots: t.deps.bots, api: t.deps.api, logger, now: () => NOW }, input);
     expect(result).toEqual({ botIconUrl: iconUrl, changed: true });
     expect(t.calls.at(-1)).toEqual({
       method: 'PUT widget',
-      config: { botName: 'Jurong Academy', primaryColor: '#1877F2', hideBranding: false, botIconUrl: iconUrl, botAvatarBgColor: CHATBOT_AVATAR_BG },
+      config: {
+        botName: 'Jurong Academy',
+        primaryColor: '#1877F2',
+        hideBranding: false,
+        botIconUrl: iconUrl,
+        botAvatarBgColor: CHATBOT_AVATAR_BG,
+        launcherIconUrl: iconUrl,
+      },
     });
-    expect(t.calls.at(-1)?.config).not.toHaveProperty('launcherIconUrl');
     expect(t.botPatches.at(-1)).toMatchObject({ widgetConfiguredAt: NOW });
   });
 
   it('does not PUT when the widget already shows it', async () => {
-    const t = setup({ widget: { botIconUrl: iconUrl, botAvatarBgColor: '#ffffff' } });
+    const t = setup({ widget: { botIconUrl: iconUrl, botAvatarBgColor: '#ffffff', launcherIconUrl: iconUrl } });
     expect(await setChatbotAvatarForLiveUrl({ bots: t.deps.bots, api: t.deps.api, logger }, input)).toEqual({ botIconUrl: iconUrl, changed: false });
     expect(t.calls.map((c) => c.method)).toEqual(['GET widget']);
   });
@@ -389,7 +395,13 @@ describe('setChatbotAvatarForLiveUrl', () => {
 
   it('without a usable image, removes a picture taken from this Worker and leaves any other picture alone', async () => {
     const noImage = { ...input, manifest: { assets: [] } };
-    const ours = setup({ widget: { botIconUrl: 'https://acclaim-sg.x.workers.dev/assets/x/pfavico.ico', botAvatarBgColor: '#FFFFFF' } });
+    const ours = setup({
+      widget: {
+        botIconUrl: 'https://acclaim-sg.x.workers.dev/assets/x/pfavico.ico',
+        botAvatarBgColor: '#FFFFFF',
+        launcherIconUrl: 'https://acclaim-sg.x.workers.dev/assets/x/pfavico.ico',
+      },
+    });
     expect(await setChatbotAvatarForLiveUrl({ bots: ours.deps.bots, api: ours.deps.api, logger }, noImage)).toEqual({
       botIconUrl: null,
       changed: true,
