@@ -85,6 +85,11 @@ function ScheduleGroupCard({
               <Clock className="size-3.5 text-muted-foreground" />
               {s.time}
               <span className="text-xs font-normal text-muted-foreground">{s.timezone.split('/').pop()?.replace(/_/g, ' ')}</span>
+              {s.industries && s.industries.length > 0 && (
+                <span className="rounded border bg-background/80 px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground">
+                  {s.industries.length} industries
+                </span>
+              )}
               {canEdit && (
                 <button
                   type="button"

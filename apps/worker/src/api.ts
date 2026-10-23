@@ -33,6 +33,7 @@ import {
   crawlPipelineSettingsUpdateSchema,
   crawlPipelineTriggerSchema,
   followUpEmailPreviewSchema,
+  industryCreateSchema,
   type CrawlPipelineProgressView,
   type CrawlPipelineSettingsView,
   type CrawlPipelineStatusView,
@@ -78,6 +79,7 @@ import {
   PrismaColdEmailAutomationRepository,
   PrismaColdEmailRepository,
   PrismaCompanyRepository,
+  PrismaDiscoveryIndustryRepository,
   PrismaDiscoveryScheduleRepository,
   PrismaJobRunRepository,
   PrismaLeadBotRepository,
@@ -116,6 +118,7 @@ import {
   COUNTRY_PROFILES,
   DEFAULT_AUDIT_CONFIG,
   DEFAULT_INDUSTRIES,
+  DEFAULT_INDUSTRY_ITEMS,
   DEFAULT_SCHEDULE_TIMEZONE,
   deleteCountrySchedules,
   deleteSchedule,
@@ -209,6 +212,7 @@ const schedules = new PrismaDiscoveryScheduleRepository(prisma);
 const jobs = new PrismaJobRunRepository(prisma);
 const leads = new PrismaLeadRepository(prisma);
 const crawlPipelineRepo = new PrismaCrawlPipelineRepository(prisma);
+const discoveryIndustries = new PrismaDiscoveryIndustryRepository(prisma);
 let neonSql: CsvSqlClient | null = null;
 /** Set-based CSV import and worker health share their SQL with the Cloudflare edge. */
 const sqlClient = (): CsvSqlClient => (neonSql ??= neon(process.env.DATABASE_URL || '') as unknown as CsvSqlClient);
@@ -327,14 +331,134 @@ route('POST', '/api/v1/discovery/country', async ({ tenantId, body }) => {
   return { status: 202, json: { id: job.id, status: job.status, type: job.type } };
 });
 
+// Ensure 30 default industries exist in the DB
+async function ensureDefaultIndustriesSeeded(): Promise<void> {
+  try {
+    const defaultCount = await prisma.discoveryIndustry.count({ where: { isDefault: true, isActive: true } });
+    if (defaultCount < DEFAULT_INDUSTRY_ITEMS.length) {
+      for (const item of DEFAULT_INDUSTRY_ITEMS) {
+        const existing = await prisma.discoveryIndustry.findFirst({
+          where: { slug: item.slug, tenantId: null },
+        });
+        if (!existing) {
+          await prisma.discoveryIndustry.create({
+            data: {
+              name: item.name,
+              slug: item.slug,
+              category: item.category,
+              isDefault: true,
+              isActive: true,
+            },
+          }).catch(() => {});
+        } else if (!existing.isActive) {
+          await prisma.discoveryIndustry.update({
+            where: { id: existing.id },
+            data: { isActive: true },
+          }).catch(() => {});
+        }
+      }
+    }
+  } catch (err) {
+    logger.error('discovery_industries.seed_check_failed', { err: String(err) });
+  }
+}
+
+// Discovery Industries list: returns 30 default catalog industries + custom added industries
+route('GET', '/api/v1/discovery/industries', async ({ tenantId }) => {
+  await ensureDefaultIndustriesSeeded();
+  try {
+    const list = await discoveryIndustries.list(tenantId);
+    if (list.length > 0) {
+      return {
+        json: {
+          industries: list.map((i) => ({
+            id: i.id,
+            name: i.name,
+            slug: i.slug,
+            category: i.category,
+            isDefault: i.isDefault,
+            isActive: i.isActive,
+            isCustom: !i.isDefault || Boolean(i.tenantId),
+            tenantId: i.tenantId,
+          })),
+        },
+      };
+    }
+  } catch (err) {
+    logger.error('discovery_industries.list_failed', { err: String(err) });
+  }
+
+  // Guaranteed fallback to all 30 default industries
+  return {
+    json: {
+      industries: DEFAULT_INDUSTRY_ITEMS.map((item, idx) => ({
+        id: `def_${idx}_${item.slug}`,
+        name: item.name,
+        slug: item.slug,
+        category: item.category,
+        isDefault: true,
+        isActive: true,
+        isCustom: false,
+        tenantId: null,
+      })),
+    },
+  };
+});
+
+// Add new custom industry
+route('POST', '/api/v1/discovery/industries', async ({ req, tenantId, body }) => {
+  const input = industryCreateSchema.parse(await body());
+  const created = await discoveryIndustries.create({
+    tenantId,
+    name: input.name,
+    category: input.category || 'Custom',
+  });
+  if (!created) {
+    throw new HttpError(409, 'conflict', `Industry "${input.name}" already exists or could not be created`);
+  }
+  return {
+    status: 201,
+    json: {
+      id: created.id,
+      name: created.name,
+      slug: created.slug,
+      category: created.category,
+      isDefault: created.isDefault,
+      isActive: created.isActive,
+      isCustom: true,
+      tenantId: created.tenantId,
+    },
+  };
+});
+
+// Remove custom industry
+route('DELETE', '/api/v1/discovery/industries/:id', async ({ req, tenantId, params }) => {
+  const ok = await discoveryIndustries.archive(tenantId, params.id!);
+  if (!ok) {
+    throw new HttpError(404, 'not_found', 'Industry not found or cannot be removed');
+  }
+  return { json: { ok: true } };
+});
+
 // Form options for the country crawl and schedules.
-route('GET', '/api/v1/discovery/options', async () => ({
-  json: {
-    countries: COUNTRY_PROFILES.map((p) => ({ code: p.code, name: p.name, cities: [...p.cities] })),
-    industries: [...DEFAULT_INDUSTRIES],
-    defaults: { source: 'google_places', maxPages: 3, timezone: DEFAULT_SCHEDULE_TIMEZONE },
-  },
-}));
+route('GET', '/api/v1/discovery/options', async ({ tenantId }) => {
+  let industrySlugs: string[] = [...DEFAULT_INDUSTRIES];
+  try {
+    const list = await discoveryIndustries.list(tenantId);
+    if (list.length > 0) {
+      industrySlugs = list.map((i) => i.slug);
+    }
+  } catch {
+    // fallback
+  }
+  return {
+    json: {
+      countries: COUNTRY_PROFILES.map((p) => ({ code: p.code, name: p.name, cities: [...p.cities] })),
+      industries: industrySlugs,
+      defaults: { source: 'google_places', maxPages: 3, timezone: DEFAULT_SCHEDULE_TIMEZONE },
+    },
+  };
+});
 
 // Crawl & Pipeline settings: dynamic limits, auto-recrawl replenishment, and follow-up configuration.
 route('GET', '/api/v1/crawl-settings', async ({ tenantId }) => {

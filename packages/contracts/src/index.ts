@@ -118,6 +118,12 @@ export const scheduleCreateSchema = z.object({
     .regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Use 24-hour HH:mm'),
   /** IANA zone; the server defaults to Asia/Kuala_Lumpur. */
   timezone: z.string().trim().min(1).optional(),
+  industries: z.array(z.string().trim().min(1)).optional(),
+});
+
+export const industryCreateSchema = z.object({
+  name: z.string().trim().min(2, 'Name must be at least 2 characters').max(100),
+  category: z.string().trim().max(100).optional(),
 });
 
 export const scheduleDeleteCountrySchema = z.object({

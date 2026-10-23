@@ -273,6 +273,7 @@ export type Schedule = {
   nextRunAt: string;
   nextRunDay: string;
   lastRunAt: string | null;
+  industries?: string[];
 };
 
 export type ScheduleGroup = {
