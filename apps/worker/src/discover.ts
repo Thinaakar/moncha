@@ -1,8 +1,10 @@
 import './env';
 import { countryDiscoverySchema } from '@moncha/contracts';
-import { prisma, PrismaDiscoveryTargetRepository, PrismaDiscoveryUsageRepository } from '@moncha/db';
+import { prisma, PrismaCrawlPipelineRepository, PrismaDiscoveryTargetRepository, PrismaDiscoveryUsageRepository } from '@moncha/db';
 import {
   createConsoleLogger,
+  crawlRunClaim,
+  crawlRunLimitMessage,
   resolveCountry,
   runCountryDiscoveryJob,
   supportedCountries,
@@ -106,7 +108,17 @@ async function main() {
     maxCallsPerDay: input.maxCallsPerDay,
     reset: input.reset,
   };
-  const job = await deps.jobs.create({ tenantId, type: 'country_discovery', payload, status: 'running', maxAttempts: 1 });
+  // The CLI counts against Max Daily Crawl Runs like the console's Run crawl now (unreserved runs only).
+  const crawlSettings = new PrismaCrawlPipelineRepository(prisma);
+  const claimed = await crawlSettings.createCrawlJob({
+    job: { tenantId, type: 'country_discovery', payload, status: 'running', maxAttempts: 1 },
+    kind: 'manual',
+  });
+  if (claimed.status === 'limited') {
+    const settings = await crawlSettings.get(tenantId);
+    throw new Error(crawlRunLimitMessage(claimed.usage, crawlRunClaim(settings, 'manual')));
+  }
+  const { job } = claimed;
 
   const controller = new AbortController();
   process.on('SIGINT', () => {

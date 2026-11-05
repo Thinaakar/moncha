@@ -1,7 +1,11 @@
-import type { SiteAutomationSettingsRecord } from '../ports';
+import type { CrawlRunClaim, CrawlRunKind, CrawlRunUsage, SiteAutomationSettingsRecord } from '../ports';
 import { resolveCountry } from '../discovery/countries';
 import { localCalendarDate, zonedTimeToUtc } from '../discovery/schedule-time';
 import type { ColdEmailAutomationSettings } from './coldEmails';
+
+/** Which triggers may start crawls. Manual runs are always allowed (within the daily limit). */
+export type CrawlMode = 'both' | 'scheduled_only' | 'auto_only';
+export const CRAWL_MODES: readonly CrawlMode[] = ['both', 'scheduled_only', 'auto_only'];
 
 export type CrawlPipelineSettingsRecord = {
   tenantId: string;
@@ -16,6 +20,9 @@ export type CrawlPipelineSettingsRecord = {
   autoRecrawlEnabled: boolean;
   minQueueBuffer: number;
   maxDailyCrawlRuns: number;
+  crawlMode: CrawlMode;
+  /** Of maxDailyCrawlRuns, runs only schedules may use. */
+  scheduleReservedRuns: number;
   followUpEnabled: boolean;
   followUpDelayDays: number;
   followUpMode: 'business_days' | 'calendar_days';
@@ -27,6 +34,42 @@ export type CrawlPipelineSettingsRecord = {
   createdAt: Date;
   updatedAt: Date;
 };
+
+/** The daily run claim a trigger makes, from the crawl settings. */
+export function crawlRunClaim(
+  settings: Pick<CrawlPipelineSettingsRecord, 'maxDailyCrawlRuns' | 'scheduleReservedRuns'>,
+  kind: CrawlRunKind,
+): CrawlRunClaim {
+  return {
+    kind,
+    maxRuns: settings.maxDailyCrawlRuns,
+    reservedForSchedules: Math.min(settings.maxDailyCrawlRuns, Math.max(0, settings.scheduleReservedRuns)),
+  };
+}
+
+/**
+ * Whether one more run may be claimed today. Schedules may use every run of the limit; auto-recrawl and manual runs
+ * only the unreserved ones. The database applies the same rule atomically (claimCrawlRun).
+ */
+export function canClaimCrawlRun(usage: Pick<CrawlRunUsage, 'runs' | 'scheduledRuns'>, claim: CrawlRunClaim): boolean {
+  if (usage.runs >= claim.maxRuns) return false;
+  if (claim.kind === 'schedule') return true;
+  return usage.runs - usage.scheduledRuns < claim.maxRuns - claim.reservedForSchedules;
+}
+
+/** Runs a trigger of this kind may still start today. */
+export function crawlRunsLeft(usage: Pick<CrawlRunUsage, 'runs' | 'scheduledRuns'>, claim: CrawlRunClaim): number {
+  const total = Math.max(0, claim.maxRuns - usage.runs);
+  if (claim.kind === 'schedule') return total;
+  return Math.max(0, Math.min(total, claim.maxRuns - claim.reservedForSchedules - (usage.runs - usage.scheduledRuns)));
+}
+
+/** "Daily run limit reached: …" for a failed claim. */
+export function crawlRunLimitMessage(usage: Pick<CrawlRunUsage, 'runs' | 'scheduledRuns'>, claim: CrawlRunClaim): string {
+  if (usage.runs >= claim.maxRuns) return `Daily run limit reached: ${usage.runs} of ${claim.maxRuns} runs used today (UTC)`;
+  const unreserved = claim.maxRuns - claim.reservedForSchedules;
+  return `Daily run limit reached: ${usage.runs - usage.scheduledRuns} of ${unreserved} unreserved runs used today (UTC); ${claim.reservedForSchedules} reserved for schedules`;
+}
 
 export type CrawlPipelineSettingsPatch = Partial<
   Omit<CrawlPipelineSettingsRecord, 'tenantId' | 'createdAt' | 'updatedAt'>
@@ -52,7 +95,10 @@ export type CrawlPipelineCounters = {
   /** Scheduled follow-ups whose due time has passed. */
   followUpsOverdue: number;
   followUpsSentToday: number;
+  /** Runs claimed today (CrawlRunUsage; before the first claim, country crawls created today). */
   crawlsRunToday: number;
+  /** Of crawlsRunToday, the runs started by a schedule. */
+  scheduledRunsToday: number;
 };
 
 export type CrawlPipelineDecision = {
@@ -164,15 +210,18 @@ export function evaluateAutoRecrawl(
     return { shouldRecrawl: false, reason: 'Pipeline is paused' };
   }
 
+  if (settings.crawlMode === 'scheduled_only') {
+    return { shouldRecrawl: false, reason: 'Crawl mode is Scheduled only: crawls start from Target region schedules' };
+  }
+
   if (!settings.autoRecrawlEnabled) {
     return { shouldRecrawl: false, reason: 'Auto-recrawl is turned off' };
   }
 
-  if (counters.crawlsRunToday >= settings.maxDailyCrawlRuns) {
-    return {
-      shouldRecrawl: false,
-      reason: `Maximum daily crawl runs (${settings.maxDailyCrawlRuns}) reached for today`,
-    };
+  const usage = { runs: counters.crawlsRunToday, scheduledRuns: counters.scheduledRunsToday };
+  const claim = crawlRunClaim(settings, 'auto');
+  if (!canClaimCrawlRun(usage, claim)) {
+    return { shouldRecrawl: false, reason: crawlRunLimitMessage(usage, claim) };
   }
 
   // Check if daily website creation limit is already fulfilled

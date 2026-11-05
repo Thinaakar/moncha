@@ -1,6 +1,5 @@
 import { neon } from '@neondatabase/serverless';
 import {
-  countryDiscoverySchema,
   leadListQuerySchema,
   manualLeadSchema,
   passwordLoginSchema,
@@ -25,11 +24,9 @@ import {
   deleteSchedule,
   listScheduleRuns,
   listSchedules,
-  resolveCountry,
   ScheduleError,
   supportedCountries,
   websiteAuditDedupeKey,
-  type CountryDiscoveryJobPayload,
 } from '@moncha/domain';
 import {
   NeonAuthUserRepo,
@@ -259,29 +256,9 @@ export async function handleNeonApi(
       return jsonResponse(result, 200, cors);
     }
 
-    // 3. Country Discovery Job
-    if (pathname === '/api/v1/discovery/country' && method === 'POST') {
-      const body = await readJson(request);
-      const input = countryDiscoverySchema.parse(body);
-      const profile = resolveCountry(input.country);
-      if (!profile) {
-        throw new HttpError(400, 'validation_error', `Unsupported country. Supported: ${supportedCountries().join(', ')}`);
-      }
-      const payload: CountryDiscoveryJobPayload = {
-        mode: 'country',
-        origin: 'manual',
-        country: profile.name,
-        countryCode: profile.code,
-        cities: input.cities,
-        industries: input.industries,
-        maxPages: input.maxPages,
-        maxSearches: input.maxSearches,
-        maxCallsPerDay: input.maxCallsPerDay,
-        reset: input.reset,
-      };
-      const job = await jobs.create({ tenantId, type: 'country_discovery', payload, maxAttempts: 1 });
-      return jsonResponse({ id: job.id, status: job.status, type: job.type }, 202, cors);
-    }
+    // 3. Country crawls are created only by the container (apps/worker/src/api.ts), where the daily run is claimed in
+    // the same transaction as the job (Max Daily Crawl Runs).
+    if (pathname === '/api/v1/discovery/country' && method === 'POST') return null;
 
     // 4. Jobs
     const jobIdMatch = pathname.match(/^\/api\/v1\/jobs\/(?<id>[^/]+)$/);

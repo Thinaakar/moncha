@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { CRAWL_SETTINGS_LIMITS } from '@moncha/contracts';
 import { crawlSettings } from '@/test/fixtures';
-import { crawlCost, formFromSettings, NUMBER_FIELDS, syncFromServer, toPayload, validateForm, withCountry } from './form';
+import {
+  crawlCost,
+  formFromSettings,
+  NUMBER_FIELDS,
+  runsLeftToday,
+  syncFromServer,
+  toPayload,
+  validateForm,
+  withCountry,
+} from './form';
 
 describe('crawl settings form', () => {
   it('round-trips saved settings into the API payload', () => {
@@ -20,7 +29,8 @@ describe('crawl settings form', () => {
   });
 
   it('flags every numeric field outside the shared limits, empty or fractional', () => {
-    const base = formFromSettings(crawlSettings());
+    // A daily limit at its maximum, so the reserved-runs maximum is not also more than the daily limit.
+    const base = { ...formFromSettings(crawlSettings()), maxDailyCrawlRuns: String(CRAWL_SETTINGS_LIMITS.maxDailyCrawlRuns.max) };
     for (const field of NUMBER_FIELDS) {
       const { min, max } = CRAWL_SETTINGS_LIMITS[field];
       expect(validateForm({ ...base, [field]: String(max + 1) })[field]).toBe(`Must be between ${min} and ${max}`);
@@ -54,6 +64,31 @@ describe('crawl settings form', () => {
     expect(kept.values.crawlBatchSize).toBe('45');
     expect(kept.baseline.dailyWebsiteCreationLimit).toBe('9');
     expect(syncFromServer(null, fromServer).values).toBe(fromServer);
+  });
+
+  it('sends the crawl mode and the runs reserved for schedules', () => {
+    const form = formFromSettings(crawlSettings({ crawlMode: 'scheduled_only', scheduleReservedRuns: 3 }));
+    expect(toPayload(form)).toMatchObject({ crawlMode: 'scheduled_only', scheduleReservedRuns: 3 });
+    // Older backends without the fields default to both triggers and no reservation.
+    const legacy = formFromSettings({ ...crawlSettings(), crawlMode: undefined, scheduleReservedRuns: undefined });
+    expect(legacy).toMatchObject({ crawlMode: 'both', scheduleReservedRuns: '0' });
+  });
+
+  it('does not allow more reserved runs than crawl runs per day', () => {
+    const form = formFromSettings(crawlSettings({ maxDailyCrawlRuns: 10 }));
+    expect(validateForm({ ...form, scheduleReservedRuns: '10' }).scheduleReservedRuns).toBeUndefined();
+    expect(validateForm({ ...form, scheduleReservedRuns: '11' }).scheduleReservedRuns).toBe(
+      'Cannot be more than the crawl runs per day',
+    );
+    expect(validateForm({ ...form, maxDailyCrawlRuns: '4', scheduleReservedRuns: '5' }).scheduleReservedRuns).toBeTruthy();
+  });
+
+  it('works out the runs left for schedules and for auto-recrawl / Run crawl now', () => {
+    const settings = { maxDailyCrawlRuns: 10, scheduleReservedRuns: 4 };
+    expect(runsLeftToday(settings, { runs: 0, scheduledRuns: 0 })).toEqual({ schedules: 10, unreserved: 6 });
+    expect(runsLeftToday(settings, { runs: 6, scheduledRuns: 0 })).toEqual({ schedules: 4, unreserved: 0 });
+    expect(runsLeftToday(settings, { runs: 7, scheduledRuns: 3 })).toEqual({ schedules: 3, unreserved: 2 });
+    expect(runsLeftToday(settings, { runs: 10, scheduledRuns: 4 })).toEqual({ schedules: 0, unreserved: 0 });
   });
 
   it('shows the searches and Places calls a run costs', () => {

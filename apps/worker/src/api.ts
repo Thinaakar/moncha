@@ -132,7 +132,12 @@ import {
   buildFollowUpContent,
   copyAutomationFromCrawlSettings,
   crawlBatchLimits,
+  crawlRunClaim,
+  crawlRunLimitMessage,
   crawlTargetError,
+  listScheduleSkips,
+  type CrawlPipelineSettingsRecord,
+  type CrawlRunUsage,
   outreachAutomationFromCrawlSettings,
   websiteAuditDedupeKey,
   normalizeSiteFilePath,
@@ -305,6 +310,12 @@ route('GET', '/api/v1/schedules/runs', async ({ tenantId, url }) => {
   return { json: { runs: await listScheduleRuns({ schedules }, { tenantId, limit }) } };
 });
 
+// Schedule slots that were skipped (engine off, crawl mode, daily run limit, invalid targets, missed window).
+route('GET', '/api/v1/schedules/skips', async ({ tenantId, url }) => {
+  const { limit } = scheduleRunsQuerySchema.parse(query(url, 'limit'));
+  return { json: { skips: await listScheduleSkips({ schedules }, { tenantId, limit }) } };
+});
+
 route('DELETE', '/api/v1/schedules/:id', async ({ req, tenantId, params }) => {
   await requireEditor(req, tenantId, 'delete schedules');
   return { json: await deleteSchedule({ schedules }, { tenantId, id: params.id! }) };
@@ -329,9 +340,20 @@ route('POST', '/api/v1/discovery/country', async ({ tenantId, body }) => {
     maxCallsPerDay: input.maxCallsPerDay,
     reset: input.reset,
   };
-  const job = await jobs.create({ tenantId, type: 'country_discovery', payload, maxAttempts: 1 });
+  const claimed = await crawlPipelineRepo.createCrawlJob({
+    job: { tenantId, type: 'country_discovery', payload, maxAttempts: 1 },
+    kind: 'manual',
+  });
+  if (claimed.status === 'limited') throw await dailyRunLimitError(tenantId, claimed.usage);
+  const { job } = claimed;
   return { status: 202, json: { id: job.id, status: job.status, type: job.type } };
 });
+
+/** 409 for a manual crawl when no unreserved run is left today. */
+async function dailyRunLimitError(tenantId: string, usage: CrawlRunUsage, settings?: CrawlPipelineSettingsRecord) {
+  const s = settings ?? (await crawlPipelineRepo.get(tenantId));
+  return new HttpError(409, 'daily_run_limit', crawlRunLimitMessage(usage, crawlRunClaim(s, 'manual')));
+}
 
 // Ensure 30 default industries exist in the DB
 async function ensureDefaultIndustriesSeeded(): Promise<void> {
@@ -463,14 +485,11 @@ route('GET', '/api/v1/discovery/options', async ({ tenantId }) => {
 });
 
 // Crawl & Pipeline settings: dynamic limits, auto-recrawl replenishment, and follow-up configuration.
-route('GET', '/api/v1/crawl-settings', async ({ tenantId }) => {
-  const settings = await crawlPipelineRepo.get(tenantId);
-  const counters = await crawlPipelineRepo.getCountersToday(tenantId);
-  const decision = evaluateAutoRecrawl(settings, counters);
-  const workerStatus = workerStatusProvider?.();
-
-  const settingsView: CrawlPipelineSettingsView = {
+function crawlSettingsView(settings: CrawlPipelineSettingsRecord): CrawlPipelineSettingsView {
+  return {
     active: settings.active,
+    crawlMode: settings.crawlMode,
+    scheduleReservedRuns: settings.scheduleReservedRuns,
     crawlBatchSize: settings.crawlBatchSize,
     targetCountry: settings.targetCountry,
     targetCities: settings.targetCities,
@@ -491,6 +510,15 @@ route('GET', '/api/v1/crawl-settings', async ({ tenantId }) => {
     updatedBy: settings.updatedBy,
     updatedAt: settings.updatedAt.toISOString(),
   };
+}
+
+route('GET', '/api/v1/crawl-settings', async ({ tenantId }) => {
+  const settings = await crawlPipelineRepo.get(tenantId);
+  const counters = await crawlPipelineRepo.getCountersToday(tenantId);
+  const decision = evaluateAutoRecrawl(settings, counters);
+  const workerStatus = workerStatusProvider?.();
+
+  const settingsView = crawlSettingsView(settings);
 
   const progressView: CrawlPipelineProgressView = {
     ...counters,
@@ -510,41 +538,38 @@ route('GET', '/api/v1/crawl-settings', async ({ tenantId }) => {
 route('PUT', '/api/v1/crawl-settings', async ({ req, tenantId, body }) => {
   const user = await requireEditor(req, tenantId, 'update crawl settings');
   const patch = crawlPipelineSettingsUpdateSchema.parse(await body());
-  if (patch.targetCountry !== undefined || patch.targetCities !== undefined) {
+  const touchesTargets = patch.targetCountry !== undefined || patch.targetCities !== undefined;
+  const touchesRuns = patch.maxDailyCrawlRuns !== undefined || patch.scheduleReservedRuns !== undefined;
+  if (touchesTargets || touchesRuns) {
     const current = await crawlPipelineRepo.get(tenantId);
-    const targetError = crawlTargetError(
-      patch.targetCountry ?? current.targetCountry,
-      patch.targetCities ?? current.targetCities,
-    );
-    if (targetError) throw new HttpError(400, 'validation_error', targetError);
+    if (touchesTargets) {
+      const targetError = crawlTargetError(
+        patch.targetCountry ?? current.targetCountry,
+        patch.targetCities ?? current.targetCities,
+      );
+      if (targetError) throw new HttpError(400, 'validation_error', targetError);
+    }
+    const maxRuns = patch.maxDailyCrawlRuns ?? current.maxDailyCrawlRuns;
+    const reserved = patch.scheduleReservedRuns ?? current.scheduleReservedRuns;
+    if (reserved > maxRuns) {
+      throw new HttpError(
+        400,
+        'validation_error',
+        `Runs reserved for schedules (${reserved}) cannot be more than Max Daily Crawl Runs (${maxRuns})`,
+      );
+    }
   }
   const updated = await crawlPipelineRepo.save(tenantId, patch, user.email);
 
-  const settingsView: CrawlPipelineSettingsView = {
-    active: updated.active,
-    crawlBatchSize: updated.crawlBatchSize,
-    targetCountry: updated.targetCountry,
-    targetCities: updated.targetCities,
-    targetIndustries: updated.targetIndustries,
-    maxPagesPerSearch: updated.maxPagesPerSearch,
-    dailyWebsiteCreationLimit: updated.dailyWebsiteCreationLimit,
-    dailyCustomerReachLimit: updated.dailyCustomerReachLimit,
-    autoRecrawlEnabled: updated.autoRecrawlEnabled,
-    minQueueBuffer: updated.minQueueBuffer,
-    maxDailyCrawlRuns: updated.maxDailyCrawlRuns,
-    followUpEnabled: updated.followUpEnabled,
-    followUpDelayDays: updated.followUpDelayDays,
-    followUpMode: updated.followUpMode,
-    followUpPreferredHour: updated.followUpPreferredHour,
-    followUpSubject: updated.followUpSubject,
-    followUpBodyTemplate: updated.followUpBodyTemplate,
-    lastRecrawlAt: updated.lastRecrawlAt?.toISOString() ?? null,
-    updatedBy: updated.updatedBy,
-    updatedAt: updated.updatedAt.toISOString(),
-  };
-
-  logger.info('crawl_pipeline.settings_updated', { tenantId, by: user.email, ...patch });
-  return { json: { settings: settingsView } };
+  const { followUpBodyTemplate, followUpSubject, ...logged } = patch;
+  logger.info('crawl_pipeline.settings_updated', {
+    tenantId,
+    by: user.email,
+    ...logged,
+    ...(followUpSubject !== undefined ? { followUpSubject: followUpSubject ? 'custom' : null } : {}),
+    ...(followUpBodyTemplate !== undefined ? { followUpBodyTemplate: followUpBodyTemplate ? 'custom' : null } : {}),
+  });
+  return { json: { settings: crawlSettingsView(updated) } };
 });
 
 route('POST', '/api/v1/crawl-settings/trigger', async ({ req, tenantId, body }) => {
@@ -566,7 +591,7 @@ route('POST', '/api/v1/crawl-settings/trigger', async ({ req, tenantId, body }) 
 
   const payload: CountryDiscoveryJobPayload = {
     mode: 'country',
-    origin: 'auto',
+    origin: 'manual',
     country: profile.name,
     countryCode: profile.code,
     cities: settings.targetCities.length ? settings.targetCities : undefined,
@@ -577,7 +602,13 @@ route('POST', '/api/v1/crawl-settings/trigger', async ({ req, tenantId, body }) 
     reset: false,
   };
 
-  const job = await jobs.create({ tenantId, type: 'country_discovery', payload, maxAttempts: 1 });
+  const claimed = await crawlPipelineRepo.createCrawlJob({
+    job: { tenantId, type: 'country_discovery', payload, maxAttempts: 1 },
+    kind: 'manual',
+    settings,
+  });
+  if (claimed.status === 'limited') throw await dailyRunLimitError(tenantId, claimed.usage, settings);
+  const { job } = claimed;
   await crawlPipelineRepo.recordRecrawlRun(tenantId);
   logger.info('crawl_pipeline.crawl_triggered', {
     tenantId,
@@ -585,6 +616,7 @@ route('POST', '/api/v1/crawl-settings/trigger', async ({ req, tenantId, body }) 
     country: profile.code,
     batchSize,
     maxSearches,
+    runsToday: claimed.usage.runs,
   });
 
   return {

@@ -54,6 +54,7 @@ export function AddScheduleDialog({
   const [time, setTime] = useState('09:00');
   const [timezone, setTimezone] = useState('');
   const [selectedSlugs, setSelectedSlugs] = useState<Set<string>>(new Set());
+  const [industryMode, setIndustryMode] = useState<'crawl_settings' | 'custom'>('crawl_settings');
   const [searchFilter, setSearchFilter] = useState('');
   const [newIndustryName, setNewIndustryName] = useState('');
   const [newIndustryCategory, setNewIndustryCategory] = useState('Custom');
@@ -72,6 +73,10 @@ export function AddScheduleDialog({
       setError(null);
     }
   }, [open, defaultCountry, options.data]);
+
+  useEffect(() => {
+    if (open) setIndustryMode('crawl_settings');
+  }, [open]);
 
   useEffect(() => {
     if (!open || allIndustries.length === 0) return;
@@ -194,7 +199,8 @@ export function AddScheduleDialog({
       setError('Use a 24-hour time like 09:30');
       return;
     }
-    if (selectedSlugs.size === 0) {
+    const custom = industryMode === 'custom';
+    if (custom && selectedSlugs.size === 0) {
       setError('Please select at least one industry to crawl');
       return;
     }
@@ -203,10 +209,12 @@ export function AddScheduleDialog({
         country,
         time,
         timezone,
-        industries: Array.from(selectedSlugs),
+        ...(custom ? { industries: Array.from(selectedSlugs) } : {}),
       });
       toast.success(`${created.country} scheduled daily at ${created.time}`, {
-        description: `Next run ${created.nextRunDay} (${created.timezone}) · ${selectedSlugs.size} industries`,
+        description: `Next run ${created.nextRunDay} (${created.timezone}) · ${
+          custom ? `${selectedSlugs.size} custom industries` : 'industries from Crawl settings'
+        }`,
       });
       onOpenChange(false);
     } catch (err) {
@@ -225,7 +233,8 @@ export function AddScheduleDialog({
           <DialogHeader>
             <DialogTitle>Add daily schedule</DialogTitle>
             <DialogDescription>
-              Every day at this local time, the worker crawls the selected industries in this country within the per-run budget.
+              Every day at this local time, the worker crawls this country. The batch size, pages per search and daily
+              run limit come from Crawl & Pipeline Settings.
             </DialogDescription>
           </DialogHeader>
 
@@ -282,7 +291,47 @@ export function AddScheduleDialog({
             </Field>
           </div>
 
-          {/* Target Industries Selection Section */}
+          {/* Industries: from Crawl & Pipeline Settings (default) or this schedule's own list */}
+          <fieldset className="grid gap-2">
+            <legend className="mb-1 text-sm font-medium">Industries</legend>
+            {(
+              [
+                {
+                  value: 'crawl_settings',
+                  label: 'Use the industries from Crawl & Pipeline Settings',
+                  hint: 'Recommended. Changing the target industries there changes this schedule too.',
+                },
+                {
+                  value: 'custom',
+                  label: 'Custom industries for this schedule',
+                  hint: 'This schedule always crawls the industries picked below.',
+                },
+              ] as const
+            ).map((o) => (
+              <label
+                key={o.value}
+                className={cn(
+                  'flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2.5 text-sm transition-colors',
+                  industryMode === o.value ? 'border-primary/50 bg-primary/[0.04]' : 'hover:bg-muted/40',
+                )}
+              >
+                <input
+                  type="radio"
+                  name="industryMode"
+                  value={o.value}
+                  checked={industryMode === o.value}
+                  onChange={() => setIndustryMode(o.value)}
+                  className="mt-0.5 accent-[var(--primary)]"
+                />
+                <span>
+                  <span className="block font-medium">{o.label}</span>
+                  <span className="block text-xs text-muted-foreground">{o.hint}</span>
+                </span>
+              </label>
+            ))}
+          </fieldset>
+
+          {industryMode === 'custom' && (
           <div className="space-y-3 rounded-xl border bg-muted/20 p-4">
             <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-center">
               <div>
@@ -464,6 +513,7 @@ export function AddScheduleDialog({
               </div>
             )}
           </div>
+          )}
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
@@ -472,9 +522,9 @@ export function AddScheduleDialog({
             <Button
               type="submit"
               loading={createSchedule.isPending}
-              disabled={!country || !timezone || selectedCount === 0}
+              disabled={!country || !timezone || (industryMode === 'custom' && selectedCount === 0)}
             >
-              Add schedule ({selectedCount} industries)
+              {industryMode === 'custom' ? `Add schedule (${selectedCount} industries)` : 'Add schedule'}
             </Button>
           </DialogFooter>
         </form>

@@ -212,10 +212,12 @@ async function tick() {
   );
 }
 
-/** Scheduled runs follow the crawl settings (engine, daily run limit, batch size, industries, cities). */
+/**
+ * Scheduled runs follow the crawl settings (engine, crawl mode, batch size, industries, cities); their daily run is
+ * claimed atomically with the job (PrismaDiscoveryScheduleRepository.advance).
+ */
 const scheduleCrawlSettings = {
   get: (tenantId: string) => crawlPipelineRepo.get(tenantId),
-  crawlsSince: (tenantId: string, since: Date) => crawlPipelineRepo.countCrawlsSince(tenantId, since),
 };
 
 async function schedulerTick() {
@@ -524,20 +526,30 @@ async function crawlPipelineTick() {
               reset: false,
             };
 
-            const job = await jobs.create({
-              tenantId: settings.tenantId,
-              type: 'country_discovery',
-              payload,
-              maxAttempts: 1,
+            const claimed = await crawlPipelineRepo.createCrawlJob({
+              job: { tenantId: settings.tenantId, type: 'country_discovery', payload, maxAttempts: 1 },
+              kind: 'auto',
+              settings,
             });
-            await crawlPipelineRepo.recordRecrawlRun(settings.tenantId);
-            logger.info('crawl_pipeline.auto_recrawl_queued', {
-              tenantId: settings.tenantId,
-              jobId: job.id,
-              country: profile.code,
-              batchSize,
-              reason: decision.reason,
-            });
+            if (claimed.status === 'limited') {
+              logger.info('crawl_pipeline.auto_recrawl_limited', {
+                tenantId: settings.tenantId,
+                runsToday: claimed.usage.runs,
+                scheduledRunsToday: claimed.usage.scheduledRuns,
+                maxDailyCrawlRuns: settings.maxDailyCrawlRuns,
+                scheduleReservedRuns: settings.scheduleReservedRuns,
+              });
+            } else {
+              await crawlPipelineRepo.recordRecrawlRun(settings.tenantId);
+              logger.info('crawl_pipeline.auto_recrawl_queued', {
+                tenantId: settings.tenantId,
+                jobId: claimed.job.id,
+                country: profile.code,
+                batchSize,
+                reason: decision.reason,
+                runsToday: claimed.usage.runs,
+              });
+            }
           }
         }
       }

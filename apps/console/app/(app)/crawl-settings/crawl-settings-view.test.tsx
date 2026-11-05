@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { ApiError } from '@/lib/api';
 import { renderWithClient } from '@/test/render';
-import { crawlSettings, discoveryOptions, gate, pipelineStatus } from '@/test/fixtures';
-import type { CrawlPipelineSettingsView } from '@/lib/types';
+import { crawlSettings, discoveryOptions, gate, pipelineStatus, progress } from '@/test/fixtures';
+import type { CrawlPipelineProgressView, CrawlPipelineSettingsView } from '@/lib/types';
 
 const apiMock = vi.hoisted(() => vi.fn());
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
@@ -26,6 +26,7 @@ type Init = { method?: string; body?: unknown } | undefined;
 
 function backend(opts: {
   settings?: CrawlPipelineSettingsView;
+  progress?: Partial<CrawlPipelineProgressView>;
   load?: () => Promise<unknown>;
   put?: (body: Record<string, unknown>) => Promise<unknown>;
   gateResult?: () => Promise<unknown>;
@@ -40,8 +41,9 @@ function backend(opts: {
       saved = { ...saved, ...(body as Partial<CrawlPipelineSettingsView>), updatedAt: new Date().toISOString() };
       return { settings: saved };
     }
-    if (path === 'crawl-settings') return opts.load ? opts.load() : pipelineStatus(saved);
+    if (path === 'crawl-settings') return opts.load ? opts.load() : pipelineStatus(saved, progress(opts.progress));
     if (path === 'discovery/options') return discoveryOptions;
+    if (path === 'schedules') return { countries: [] };
     if (path === 'cold-emails/gate') return opts.gateResult ? opts.gateResult() : gate();
     throw new Error(`unexpected api call ${init?.method ?? 'GET'} ${path}`);
   });
@@ -169,6 +171,34 @@ describe('Crawl & Pipeline Settings page', () => {
     renderWithClient(<CrawlSettingsView />);
     expect(await screen.findByText('Editors only')).toBeTruthy();
     expect(screen.queryByText(/^Email delivery:/)).toBeNull();
+  });
+
+  it('blocks reserving more runs than crawl runs per day', async () => {
+    const { puts } = backend();
+    renderWithClient(<CrawlSettingsView />);
+    fireEvent.change(await screen.findByLabelText('Runs reserved for schedules'), { target: { value: '11' } });
+    expect(screen.getByText('Cannot be more than the crawl runs per day')).toBeTruthy();
+    for (const b of saveButtons()) expect(b.hasAttribute('disabled')).toBe(true);
+    fireEvent.change(screen.getByLabelText('Runs reserved for schedules'), { target: { value: '4' } });
+    fireEvent.click(saveButtons()[0]!);
+    await waitFor(() => expect(puts).toHaveLength(1));
+    expect(puts[0]).toMatchObject({ scheduleReservedRuns: 4, crawlMode: 'both' });
+  });
+
+  it('shows the runs left today and disables Run crawl now when no unreserved run is left', async () => {
+    backend({ settings: crawlSettings({ maxDailyCrawlRuns: 10, scheduleReservedRuns: 4 }), progress: { crawlsRunToday: 6, scheduledRunsToday: 0 } });
+    renderWithClient(<CrawlSettingsView />);
+    expect(await screen.findByText('0 runs left today')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /run crawl now/i }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByText(/4 left for schedules, 0 for auto-recrawl and\s+Run crawl now/)).toBeTruthy();
+  });
+
+  it('explains that auto-recrawl is off in Scheduled only mode', async () => {
+    backend({ settings: crawlSettings({ crawlMode: 'scheduled_only' }) });
+    renderWithClient(<CrawlSettingsView />);
+    expect(await screen.findByText('Off in Scheduled only mode')).toBeTruthy();
+    expect(screen.getByText(/Only Target region schedules start crawls/)).toBeTruthy();
+    expect((screen.getByLabelText('Runs reserved for schedules') as HTMLInputElement).disabled).toBe(true);
   });
 
   it("previews the follow-up time on the target country's clock", async () => {

@@ -1,4 +1,12 @@
-import type { DiscoveryScheduleRecord, DiscoveryScheduleRepo, JobRunRecord, JobStatus, Logger } from '../ports';
+import type {
+  CrawlRunClaim,
+  DiscoveryScheduleRecord,
+  DiscoveryScheduleRepo,
+  JobRunRecord,
+  JobStatus,
+  Logger,
+  ScheduleSkipReason,
+} from '../ports';
 import { resolveCountry, supportedCountries } from '../discovery/countries';
 import {
   computeNextRun,
@@ -10,8 +18,7 @@ import {
   TIME_OF_DAY,
 } from '../discovery/schedule-time';
 import { crawlTargetError, type CountryDiscoveryResult } from './runCountryDiscovery';
-import { crawlBatchLimits, type CrawlPipelineSettingsRecord } from './crawlPipeline';
-import { utcDayStart } from './siteAutomation';
+import { crawlBatchLimits, crawlRunClaim, type CrawlPipelineSettingsRecord } from './crawlPipeline';
 
 export type ScheduleErrorCode = 'validation_error' | 'not_found' | 'conflict';
 
@@ -70,6 +77,8 @@ export type CountryScheduleGroup = {
 
 export type ScheduleRunView = {
   id: string;
+  /** The schedule that started the run; null for auto-recrawl and manual runs. */
+  scheduleId: string | null;
   /** Local date the run was for (schedule's time zone), YYYY-MM-DD. */
   day: string;
   countryCode: string;
@@ -187,6 +196,7 @@ function toRunView(job: JobRunRecord): ScheduleRunView {
   const profile = resolveCountry(payload.countryCode ?? payload.country ?? '');
   return {
     id: job.id,
+    scheduleId: payload.scheduleId ?? null,
     day: localDate(at, timezone),
     countryCode: profile?.code ?? payload.countryCode ?? '',
     country: profile?.name ?? payload.country ?? '',
@@ -208,22 +218,66 @@ export function scheduleRunDedupeKey(scheduleId: string, day: string): string {
   return `schedule:${scheduleId}:${day}`;
 }
 
-/** `skipped` = due slots not run because of the crawl settings (engine off, daily run limit, invalid target cities). */
+/**
+ * `skipped` = due slots not run because of the crawl settings (engine off, crawl mode, daily run limit, invalid target
+ * cities); `missed` = slots past the grace window or for an unsupported country. Both are recorded as skips.
+ */
 export type EnqueueDueResult = { enqueued: string[]; missed: number; failed: number; skipped: number };
 
 export type ScheduleCrawlSettings = Pick<
   CrawlPipelineSettingsRecord,
-  'active' | 'crawlBatchSize' | 'maxPagesPerSearch' | 'maxDailyCrawlRuns' | 'targetCountry' | 'targetCities' | 'targetIndustries'
+  | 'active'
+  | 'crawlMode'
+  | 'crawlBatchSize'
+  | 'maxPagesPerSearch'
+  | 'maxDailyCrawlRuns'
+  | 'scheduleReservedRuns'
+  | 'targetCountry'
+  | 'targetCities'
+  | 'targetIndustries'
 >;
 
 /** The central crawl settings every scheduled run follows. */
 export type ScheduleCrawlSettingsSource = {
   get(tenantId: string): Promise<ScheduleCrawlSettings>;
-  /** Country crawls (any trigger) created since `since`. */
-  crawlsSince(tenantId: string, since: Date): Promise<number>;
 };
 
-type ScheduleSkipReason = 'engine_paused' | 'daily_run_limit' | 'invalid_targets';
+export type ScheduleSkipView = {
+  id: string;
+  scheduleId: string | null;
+  /** Local date of the skipped slot (schedule's time zone), YYYY-MM-DD. */
+  day: string;
+  countryCode: string;
+  country: string;
+  time: string;
+  timezone: string;
+  scheduledFor: string;
+  reason: ScheduleSkipReason;
+  detail: string | null;
+  createdAt: string;
+};
+
+export async function listScheduleSkips(
+  deps: ScheduleDeps,
+  input: { tenantId: string; limit?: number },
+): Promise<ScheduleSkipView[]> {
+  if (!deps.schedules.recentSkips) return [];
+  const limit = Math.min(200, Math.max(1, Math.floor(input.limit ?? 50)));
+  const rows = await deps.schedules.recentSkips(input.tenantId, limit);
+  return rows.map((r) => ({
+    id: r.id,
+    scheduleId: r.scheduleId,
+    day: localDate(r.scheduledFor, r.timezone),
+    countryCode: r.countryCode,
+    country: resolveCountry(r.countryCode)?.name ?? r.countryCode,
+    time: r.timeOfDay,
+    timezone: r.timezone,
+    scheduledFor: r.scheduledFor.toISOString(),
+    reason: r.reason,
+    detail: r.detail,
+    createdAt: r.createdAt.toISOString(),
+  }));
+}
 
 /** Crawl shape of a scheduled run: the schedule's own country, the rest from the crawl settings. */
 function scheduledCrawlShape(
@@ -245,10 +299,11 @@ function scheduledCrawlShape(
  * Turns due schedules into country_discovery jobs, once per schedule per local day.
  * A slot more than `graceMs` in the past (worker was down) is skipped rather than run late.
  *
- * With `crawlSettings`, each run follows the tenant's Crawl & Pipeline Settings: it is skipped (and moved to its next
- * slot, never made up later) while the engine is off or once today's Max Daily Crawl Runs (UTC day) is used, and its
- * batch size, pages per search, industries (unless the schedule has its own) and cities (when the schedule's country
- * is the target country) come from those settings. Queue depth never skips a scheduled run.
+ * With `crawlSettings`, each run follows the tenant's Crawl & Pipeline Settings: it is skipped (moved to its next
+ * slot, never made up later, and recorded) while the engine is off, when the crawl mode is Auto-recrawl only, when the
+ * target cities are invalid, or when the atomic daily run claim fails (Max Daily Crawl Runs, UTC day; schedules may use
+ * the runs reserved for them). Its batch size, pages per search, industries (unless the schedule has its own) and
+ * cities (when the schedule's country is the target country) come from those settings. Queue depth never skips a run.
  */
 export async function enqueueDueSchedules(
   deps: ScheduleDeps & { logger?: Logger; crawlSettings?: ScheduleCrawlSettingsSource },
@@ -258,7 +313,6 @@ export async function enqueueDueSchedules(
   const graceMs = opts.graceMs ?? 2 * 60 * 60_000;
   const out: EnqueueDueResult = { enqueued: [], missed: 0, failed: 0, skipped: 0 };
   const settingsByTenant = new Map<string, ScheduleCrawlSettings>();
-  const crawlsToday = new Map<string, number>();
 
   for (const s of await deps.schedules.due(now, opts.limit ?? 50)) {
     try {
@@ -266,50 +320,45 @@ export async function enqueueDueSchedules(
       const profile = resolveCountry(s.countryCode);
       const late = now.getTime() - s.nextRunAt.getTime() > graceMs;
       if (late || !profile) {
-        const { advanced } = await deps.schedules.advance(s, next, now);
+        const reason: ScheduleSkipReason = profile ? 'missed_window' : 'unsupported_country';
+        const { advanced } = await deps.schedules.advance(s, next, now, undefined, { skip: { reason } });
         if (advanced) out.missed += 1;
-        deps.logger?.info('schedule_run_skipped', {
-          scheduleId: s.id,
-          reason: profile ? 'missed_window' : 'unsupported_country',
-          scheduledFor: s.nextRunAt.toISOString(),
-        });
+        deps.logger?.info('schedule_run_skipped', { scheduleId: s.id, reason, scheduledFor: s.nextRunAt.toISOString() });
         continue;
       }
 
       let shape: ReturnType<typeof scheduledCrawlShape> | null = null;
+      let claim: CrawlRunClaim | undefined;
       if (deps.crawlSettings) {
         let settings = settingsByTenant.get(s.tenantId);
         if (!settings) {
           settings = await deps.crawlSettings.get(s.tenantId);
           settingsByTenant.set(s.tenantId, settings);
         }
-        let used = crawlsToday.get(s.tenantId);
-        if (used === undefined) {
-          used = await deps.crawlSettings.crawlsSince(s.tenantId, utcDayStart(now));
-          crawlsToday.set(s.tenantId, used);
-        }
         shape = scheduledCrawlShape(s, profile.code, settings);
         const targetError = shape.cities ? crawlTargetError(profile.code, shape.cities) : null;
         const reason: ScheduleSkipReason | null = !settings.active
           ? 'engine_paused'
-          : used >= settings.maxDailyCrawlRuns
-            ? 'daily_run_limit'
+          : settings.crawlMode === 'auto_only'
+            ? 'crawl_mode'
             : targetError
               ? 'invalid_targets'
               : null;
         if (reason) {
-          const { advanced } = await deps.schedules.advance(s, next, now);
+          const { advanced } = await deps.schedules.advance(s, next, now, undefined, {
+            skip: { reason, detail: targetError },
+          });
           if (advanced) out.skipped += 1;
           deps.logger?.info('schedule_run_skipped', {
             scheduleId: s.id,
             reason,
             scheduledFor: s.nextRunAt.toISOString(),
             nextRunAt: next.toISOString(),
-            ...(reason === 'daily_run_limit' ? { crawlsToday: used, maxDailyCrawlRuns: settings.maxDailyCrawlRuns } : {}),
             ...(targetError ? { error: targetError } : {}),
           });
           continue;
         }
+        claim = crawlRunClaim(settings, 'schedule');
       }
 
       const payload: CountryDiscoveryJobPayload = {
@@ -323,16 +372,32 @@ export async function enqueueDueSchedules(
         scheduledFor: s.nextRunAt.toISOString(),
         ...(shape ?? (s.industries && s.industries.length > 0 ? { industries: s.industries } : {})),
       };
-      const { job } = await deps.schedules.advance(s, next, now, {
-        tenantId: s.tenantId,
-        type: 'country_discovery',
-        payload,
-        dedupeKey: scheduleRunDedupeKey(s.id, localDate(s.nextRunAt, s.timezone)),
-        maxAttempts: 1,
-      });
+      const { advanced, job, limited } = await deps.schedules.advance(
+        s,
+        next,
+        now,
+        {
+          tenantId: s.tenantId,
+          type: 'country_discovery',
+          payload,
+          dedupeKey: scheduleRunDedupeKey(s.id, localDate(s.nextRunAt, s.timezone)),
+          maxAttempts: 1,
+        },
+        claim ? { claim } : undefined,
+      );
+      if (advanced && limited) {
+        out.skipped += 1;
+        deps.logger?.info('schedule_run_skipped', {
+          scheduleId: s.id,
+          reason: 'daily_run_limit',
+          scheduledFor: s.nextRunAt.toISOString(),
+          nextRunAt: next.toISOString(),
+          maxDailyCrawlRuns: claim?.maxRuns,
+        });
+        continue;
+      }
       if (job) {
         out.enqueued.push(job.id);
-        if (crawlsToday.has(s.tenantId)) crawlsToday.set(s.tenantId, crawlsToday.get(s.tenantId)! + 1);
         deps.logger?.info('schedule_run_enqueued', {
           scheduleId: s.id,
           jobId: job.id,

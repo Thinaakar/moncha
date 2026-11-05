@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { Eye, Play } from 'lucide-react';
 import { toast } from 'sonner';
 import { CRAWL_SETTINGS_LIMITS as LIMITS } from '@moncha/contracts';
@@ -21,13 +22,14 @@ import {
   useCrawlPipeline,
   useDiscoveryOptions,
   useFollowUpEmailPreview,
+  useSchedules,
   useTriggerCrawlBatch,
   useUpdateCrawlPipeline,
 } from '@/lib/queries';
 import { ApiError, errorMessage } from '@/lib/api';
 import { formatNumber } from '@/lib/format';
 import { TodayActivity } from './activity';
-import { crawlCost, toPayload } from './form';
+import { CRAWL_MODE_OPTIONS, crawlCost, runsLeftToday, toPayload } from './form';
 import { followUpPreview, hourLabel, zoneLabel } from './follow-up-time';
 import { FollowUpPreviewDialog } from './follow-up-preview-dialog';
 import { NumberField, SettingsSection, ToggleRow } from './sections';
@@ -58,6 +60,7 @@ export function CrawlSettingsView() {
   const updateSettings = useUpdateCrawlPipeline();
   const triggerCrawl = useTriggerCrawlBatch();
   const preview = useFollowUpEmailPreview();
+  const schedules = useSchedules();
 
   const saved = pipeline.data?.settings;
   const form = useCrawlSettingsForm(saved);
@@ -102,6 +105,11 @@ export function CrawlSettingsView() {
   const cost = crawlCost(Number(v.crawlBatchSize), Number(v.maxPagesPerSearch));
   const industryCount = options.data?.industries.length ?? 0;
   const canSave = editable && form.dirty && form.valid;
+  const runsLeft = runsLeftToday(saved, {
+    runs: pipeline.data.progress.crawlsRunToday,
+    scheduledRuns: pipeline.data.progress.scheduledRunsToday ?? 0,
+  });
+  const scheduleCount = schedules.data ? schedules.data.reduce((n, g) => n + g.timesPerDay, 0) : null;
 
   async function handleSave() {
     if (!form.values || !form.valid) return;
@@ -167,13 +175,22 @@ export function CrawlSettingsView() {
                 Unsaved changes
               </Badge>
             )}
+            <span className="text-xs text-muted-foreground tabular-nums">
+              {formatNumber(runsLeft.unreserved)} run{runsLeft.unreserved === 1 ? '' : 's'} left today
+            </span>
             <Button
               variant="outline"
               size="sm"
               onClick={handleTriggerCrawl}
-              disabled={!canEdit || form.dirty || triggerCrawl.isPending}
+              disabled={!canEdit || form.dirty || triggerCrawl.isPending || runsLeft.unreserved === 0}
               loading={triggerCrawl.isPending}
-              title={form.dirty ? 'Save your changes first: the crawl uses the saved settings' : undefined}
+              title={
+                form.dirty
+                  ? 'Save your changes first: the crawl uses the saved settings'
+                  : runsLeft.unreserved === 0
+                    ? 'No unreserved crawl runs left today (UTC)'
+                    : undefined
+              }
             >
               <Play /> Run crawl now
             </Button>
@@ -247,6 +264,60 @@ export function CrawlSettingsView() {
             disabled={!editable}
           />
         </div>
+      </SettingsSection>
+
+      <SettingsSection
+        id="crawl-mode"
+        title="How crawls start"
+        description="Which triggers may start crawls. Every crawl, whoever starts it, uses one of today's crawl runs."
+        aside={
+          <Link href="/schedules" className="mt-3 inline-block text-sm font-medium text-primary hover:underline">
+            {scheduleCount === null
+              ? 'Target region schedules'
+              : `${formatNumber(scheduleCount)} schedule${scheduleCount === 1 ? '' : 's'} on the Target region page`}
+          </Link>
+        }
+      >
+        <div className="grid gap-1.5">
+          <Label htmlFor="crawlMode">Crawl mode</Label>
+          <Select
+            value={v.crawlMode}
+            onValueChange={(x) => form.set('crawlMode', x as (typeof CRAWL_MODE_OPTIONS)[number]['value'])}
+            disabled={!editable}
+          >
+            <SelectTrigger id="crawlMode" className="w-full sm:w-80">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {CRAWL_MODE_OPTIONS.map((o) => (
+                <SelectItem key={o.value} value={o.value}>
+                  {o.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">
+            {CRAWL_MODE_OPTIONS.find((o) => o.value === v.crawlMode)?.description} Run crawl now always works within
+            the limits.
+          </p>
+        </div>
+        <NumberField
+          id="scheduleReservedRuns"
+          label="Runs reserved for schedules"
+          unit={`of ${v.maxDailyCrawlRuns || '…'} crawl runs per day`}
+          hint="Auto-recrawl and Run crawl now cannot use these"
+          value={v.scheduleReservedRuns}
+          onChange={(x) => form.set('scheduleReservedRuns', x)}
+          error={form.errors.scheduleReservedRuns}
+          {...LIMITS.scheduleReservedRuns}
+          disabled={!editable || v.crawlMode !== 'both'}
+        />
+        <p className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+          Today: {formatNumber(pipeline.data.progress.crawlsRunToday)} of {formatNumber(saved.maxDailyCrawlRuns)} crawl
+          runs used ({formatNumber(pipeline.data.progress.scheduledRunsToday ?? 0)} by schedules).{' '}
+          {formatNumber(runsLeft.schedules)} left for schedules, {formatNumber(runsLeft.unreserved)} for auto-recrawl and
+          Run crawl now.
+        </p>
       </SettingsSection>
 
       <SettingsSection
@@ -351,6 +422,11 @@ export function CrawlSettingsView() {
         title="Auto-recrawl"
         description="Starts another crawl when too few qualified leads are waiting for a copy, until today's copy limit or crawl-run limit is reached."
       >
+        {v.crawlMode === 'scheduled_only' && (
+          <InlineAlert variant="info" title="Off in Scheduled only mode">
+            Auto-recrawl does not start crawls while the crawl mode is Scheduled only.
+          </InlineAlert>
+        )}
         <ToggleRow
           id="autoRecrawlEnabled"
           label="Recrawl automatically"

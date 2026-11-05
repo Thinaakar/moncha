@@ -1223,6 +1223,8 @@ export const CRAWL_SETTINGS_LIMITS = {
   dailyCustomerReachLimit: { min: 0, max: 500 },
   minQueueBuffer: { min: 0, max: 1000 },
   maxDailyCrawlRuns: { min: 1, max: 100 },
+  /** Must also be at most maxDailyCrawlRuns (checked by the API against the saved value). */
+  scheduleReservedRuns: { min: 0, max: 100 },
   followUpDelayDays: { min: 1, max: 30 },
   followUpPreferredHour: { min: 0, max: 23 },
 } as const;
@@ -1244,6 +1246,8 @@ export const crawlPipelineSettingsUpdateSchema = z.object({
   autoRecrawlEnabled: z.boolean().optional(),
   minQueueBuffer: limited('minQueueBuffer').optional(),
   maxDailyCrawlRuns: limited('maxDailyCrawlRuns').optional(),
+  crawlMode: z.enum(['both', 'scheduled_only', 'auto_only']).optional(),
+  scheduleReservedRuns: limited('scheduleReservedRuns').optional(),
   followUpEnabled: z.boolean().optional(),
   followUpDelayDays: limited('followUpDelayDays').optional(),
   followUpMode: z.enum(['business_days', 'calendar_days']).optional(),
@@ -1261,8 +1265,15 @@ export const crawlPipelineTriggerSchema = z.object({
 export type CrawlPipelineSettingsUpdate = z.infer<typeof crawlPipelineSettingsUpdateSchema>;
 export type CrawlPipelineTrigger = z.infer<typeof crawlPipelineTriggerSchema>;
 
+/** Which triggers may start crawls: both, Target region schedules only, or auto-recrawl only. Manual runs always may. */
+export type CrawlModeView = 'both' | 'scheduled_only' | 'auto_only';
+
 export type CrawlPipelineSettingsView = {
   active: boolean;
+  /** Missing from backends older than the crawl run limit; treat as 'both'. */
+  crawlMode?: CrawlModeView;
+  /** Of maxDailyCrawlRuns, runs only schedules may use. Missing from older backends; treat as 0. */
+  scheduleReservedRuns?: number;
   crawlBatchSize: number;
   targetCountry: string;
   targetCities: string[];
@@ -1298,7 +1309,10 @@ export type CrawlPipelineProgressView = {
   /** Scheduled follow-ups whose due time has passed. */
   followUpsOverdue?: number;
   followUpsSentToday?: number;
+  /** Daily runs claimed today (UTC), every trigger counted. */
   crawlsRunToday: number;
+  /** Of crawlsRunToday, the runs started by a schedule. */
+  scheduledRunsToday?: number;
   recrawlNeeded: boolean;
   recrawlReason?: string;
   nextScheduledCrawl?: string | null;

@@ -9,6 +9,8 @@ import type {
 export function crawlSettings(over: Partial<CrawlPipelineSettingsView> = {}): CrawlPipelineSettingsView {
   return {
     active: true,
+    crawlMode: 'both',
+    scheduleReservedRuns: 0,
     crawlBatchSize: 20,
     targetCountry: 'SG',
     targetCities: ['Tampines'],
@@ -46,6 +48,7 @@ export function progress(over: Partial<CrawlPipelineProgressView> = {}): CrawlPi
     followUpsOverdue: 1,
     followUpsSentToday: 1,
     crawlsRunToday: 1,
+    scheduledRunsToday: 0,
     recrawlNeeded: false,
     recrawlReason: 'Queue is sufficiently buffered (7 qualified leads waiting)',
     ...over,

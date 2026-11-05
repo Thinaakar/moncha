@@ -16,7 +16,8 @@
       "dependsOn": ["^typecheck"]
     },
     "test": {
-      "dependsOn": ["^test"]
+      "dependsOn": ["^test"],
+      "passThroughEnv": ["TEST_DATABASE_HOST", "TEST_DATABASE_URL"]
     }
   }
 }

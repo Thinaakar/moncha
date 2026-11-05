@@ -22,7 +22,7 @@
     "sites:dev": "cd sites-pages && wrangler pages dev",
     "sites:deploy": "cd sites-pages && wrangler pages deploy --branch main --commit-dirty=true",
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
     "lint": "node -e \"process.exit(0)\"",
     "test": "vitest run"
   },

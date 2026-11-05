@@ -3,7 +3,11 @@ import {
   buildFollowUpContent,
   calculateFollowUpDueDate,
   copyAutomationFromCrawlSettings,
+  canClaimCrawlRun,
   crawlBatchLimits,
+  crawlRunClaim,
+  crawlRunLimitMessage,
+  crawlRunsLeft,
   evaluateAutoRecrawl,
   followUpTimezone,
   outreachAutomationFromCrawlSettings,
@@ -97,6 +101,8 @@ describe('evaluateAutoRecrawl', () => {
     autoRecrawlEnabled: true,
     minQueueBuffer: 5,
     maxDailyCrawlRuns: 10,
+    crawlMode: 'both',
+    scheduleReservedRuns: 0,
     followUpEnabled: true,
     followUpDelayDays: 3,
     followUpMode: 'business_days',
@@ -122,6 +128,7 @@ describe('evaluateAutoRecrawl', () => {
     followUpsOverdue: 0,
     followUpsSentToday: 0,
     crawlsRunToday: 1,
+    scheduledRunsToday: 0,
   };
 
   it('triggers recrawl when qualified leads in queue are below required daily target buffer', () => {
@@ -158,7 +165,24 @@ describe('evaluateAutoRecrawl', () => {
       crawlsRunToday: 10, // Max runs reached!
     });
     expect(decision.shouldRecrawl).toBe(false);
-    expect(decision.reason).toContain('Maximum daily crawl runs');
+    expect(decision.reason).toContain('Daily run limit reached: 10 of 10 runs');
+  });
+
+  it('does NOT recrawl when the crawl mode is Scheduled only', () => {
+    const decision = evaluateAutoRecrawl({ ...baseSettings, crawlMode: 'scheduled_only' }, baseCounters);
+    expect(decision.shouldRecrawl).toBe(false);
+    expect(decision.reason).toContain('Scheduled only');
+  });
+
+  it('keeps the runs reserved for schedules away from auto-recrawl', () => {
+    const settings = { ...baseSettings, maxDailyCrawlRuns: 10, scheduleReservedRuns: 4 };
+    // 6 unreserved runs used: auto-recrawl stops even though 4 runs are left for schedules.
+    const used = evaluateAutoRecrawl(settings, { ...baseCounters, crawlsRunToday: 6, scheduledRunsToday: 0 });
+    expect(used.shouldRecrawl).toBe(false);
+    expect(used.reason).toContain('6 of 6 unreserved runs');
+    // Runs used by schedules do not count against the unreserved ones.
+    const scheduled = evaluateAutoRecrawl(settings, { ...baseCounters, crawlsRunToday: 8, scheduledRunsToday: 4 });
+    expect(scheduled.shouldRecrawl).toBe(true);
   });
 
   it('drives copy and outreach automation from the crawl settings', () => {
@@ -176,6 +200,34 @@ describe('evaluateAutoRecrawl', () => {
     });
     expect(decision.shouldRecrawl).toBe(false);
     expect(decision.reason).toContain('website audits currently running');
+  });
+});
+
+describe('daily crawl run claims', () => {
+  const claim = (kind: 'schedule' | 'auto' | 'manual', maxRuns = 10, reserved = 4) =>
+    crawlRunClaim({ maxDailyCrawlRuns: maxRuns, scheduleReservedRuns: reserved }, kind);
+
+  it('lets schedules use every run and auto or manual runs only the unreserved ones', () => {
+    const usage = { runs: 6, scheduledRuns: 0 };
+    expect(canClaimCrawlRun(usage, claim('schedule'))).toBe(true);
+    expect(canClaimCrawlRun(usage, claim('auto'))).toBe(false);
+    expect(canClaimCrawlRun(usage, claim('manual'))).toBe(false);
+    expect(crawlRunsLeft(usage, claim('schedule'))).toBe(4);
+    expect(crawlRunsLeft(usage, claim('manual'))).toBe(0);
+  });
+
+  it('never goes past the daily limit, whoever claims', () => {
+    const full = { runs: 10, scheduledRuns: 7 };
+    for (const kind of ['schedule', 'auto', 'manual'] as const) expect(canClaimCrawlRun(full, claim(kind))).toBe(false);
+    expect(crawlRunLimitMessage(full, claim('schedule'))).toBe('Daily run limit reached: 10 of 10 runs used today (UTC)');
+    expect(crawlRunLimitMessage({ runs: 6, scheduledRuns: 0 }, claim('manual'))).toBe(
+      'Daily run limit reached: 6 of 6 unreserved runs used today (UTC); 4 reserved for schedules',
+    );
+  });
+
+  it('caps the reservation at the daily limit', () => {
+    expect(claim('auto', 5, 9)).toEqual({ kind: 'auto', maxRuns: 5, reservedForSchedules: 5 });
+    expect(canClaimCrawlRun({ runs: 0, scheduledRuns: 0 }, claim('auto', 5, 9))).toBe(false);
   });
 });
 

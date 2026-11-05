@@ -204,6 +204,44 @@ describe.skipIf(!databaseUrl)('worker API (integration)', () => {
       expect((await call('POST', 'crawl-settings/trigger', { token: viewerToken, body: {} })).status).toBe(403);
     });
 
+    it('rejects reserving more runs for schedules than the daily limit', async () => {
+      const res = await call('PUT', 'crawl-settings', { token: editorToken, body: { maxDailyCrawlRuns: 2, scheduleReservedRuns: 3 } });
+      expect(res.status).toBe(400);
+      expect(res.json.error.message).toContain('cannot be more than Max Daily Crawl Runs');
+    });
+
+    it('stops manual crawls at the daily run limit and keeps reserved runs for schedules', async () => {
+      // One manual run is already used today (previous test).
+      await call('PUT', 'crawl-settings', { token: editorToken, body: { maxDailyCrawlRuns: 1, scheduleReservedRuns: 0 } });
+      const full = await call('POST', 'crawl-settings/trigger', { token: editorToken, body: {} });
+      expect(full.status).toBe(409);
+      expect(full.json.error.code).toBe('daily_run_limit');
+
+      await call('PUT', 'crawl-settings', { token: editorToken, body: { maxDailyCrawlRuns: 3, scheduleReservedRuns: 2 } });
+      const reserved = await call('POST', 'crawl-settings/trigger', { token: editorToken, body: {} });
+      expect(reserved.status).toBe(409);
+      expect(reserved.json.error.message).toContain('2 reserved for schedules');
+
+      const usage = await prisma.crawlRunUsage.findMany({ where: { tenantId } });
+      expect(usage).toHaveLength(1);
+      expect(usage[0]).toMatchObject({ runs: 1, scheduledRuns: 0 });
+      const jobs = await prisma.jobRun.count({ where: { tenantId, type: 'country_discovery' } });
+      expect(jobs).toBe(1);
+
+      const settings = await call('GET', 'crawl-settings', { token: editorToken });
+      expect(settings.json.settings).toMatchObject({ maxDailyCrawlRuns: 3, scheduleReservedRuns: 2, crawlMode: 'both' });
+      expect(settings.json.progress).toMatchObject({ crawlsRunToday: 1, scheduledRunsToday: 0 });
+      await call('PUT', 'crawl-settings', { token: editorToken, body: { maxDailyCrawlRuns: 10, scheduleReservedRuns: 0 } });
+    });
+
+    it('saves the crawl mode', async () => {
+      const res = await call('PUT', 'crawl-settings', { token: editorToken, body: { crawlMode: 'scheduled_only' } });
+      expect(res.json.settings.crawlMode).toBe('scheduled_only');
+      const bad = await call('PUT', 'crawl-settings', { token: editorToken, body: { crawlMode: 'sometimes' } });
+      expect(bad.status).toBe(400);
+      await call('PUT', 'crawl-settings', { token: editorToken, body: { crawlMode: 'both' } });
+    });
+
     it('switches the engine on its own and reflects it in the copy automation state', async () => {
       const on = await call('PUT', 'crawl-settings', { token: editorToken, body: { active: true } });
       expect(on.json.settings).toMatchObject({ active: true, crawlBatchSize: 45 });
@@ -235,6 +273,12 @@ describe.skipIf(!databaseUrl)('worker API (integration)', () => {
   });
 
   describe('schedules', () => {
+    it('lists skipped schedule slots (none for a new tenant)', async () => {
+      const res = await call('GET', 'schedules/skips', { token: editorToken });
+      expect(res.status).toBe(200);
+      expect(res.json.skips).toEqual([]);
+    });
+
     it('only lets editors add and delete schedules', async () => {
       const body = { country: 'Japan', time: '09:30', timezone: 'Asia/Tokyo' };
       expect((await call('POST', 'schedules', { body })).status).toBe(401);

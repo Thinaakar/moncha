@@ -134,6 +134,8 @@ model Tenant {
   coldEmails         ColdEmail[]
   coldEmailAutomation ColdEmailAutomationSettings?
   crawlPipelineSettings CrawlPipelineSettings?
+  crawlRunUsages     CrawlRunUsage[]
+  scheduleRunSkips   ScheduleRunSkip[]
 }
 
 model User {
@@ -600,6 +602,7 @@ model DiscoverySchedule {
   lastRunAt   DateTime?
   createdAt   DateTime  @default(now())
   tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  skips       ScheduleRunSkip[]
 
   @@unique([tenantId, countryCode, timeOfDay])
   @@index([enabled, nextRunAt])
@@ -858,6 +861,10 @@ model CrawlPipelineSettings {
   autoRecrawlEnabled          Boolean   @default(true)
   minQueueBuffer              Int       @default(5)
   maxDailyCrawlRuns           Int       @default(10)
+  /// both | scheduled_only | auto_only: which triggers may start crawls (manual runs are always allowed).
+  crawlMode                   String    @default("both")
+  /// Of maxDailyCrawlRuns, runs only schedules may use; auto-recrawl and manual runs share the rest.
+  scheduleReservedRuns        Int       @default(0)
 
   /// Dynamic Follow-up Scheduling
   followUpEnabled             Boolean   @default(true)
@@ -874,4 +881,41 @@ model CrawlPipelineSettings {
   createdAt                   DateTime  @default(now())
   updatedAt                   DateTime  @updatedAt
   tenant                      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+/// Country crawl runs claimed per tenant and UTC day (Max Daily Crawl Runs). Every country_discovery job is created in
+/// the same transaction as its claim; the first claim of a day seeds the row from jobs that already exist that day.
+model CrawlRunUsage {
+  tenantId      String
+  /// UTC day, YYYY-MM-DD.
+  day           String
+  runs          Int      @default(0)
+  /// Of `runs`, the ones started by a schedule (they may use the reserved runs).
+  scheduledRuns Int      @default(0)
+  updatedAt     DateTime @default(now())
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@id([tenantId, day])
+}
+
+/// A due schedule slot that did not run: engine off, crawl mode, daily run limit, invalid targets or a missed window.
+model ScheduleRunSkip {
+  id           String             @id @default(cuid())
+  tenantId     String
+  /// Null once the schedule is deleted; the skip stays in the run history.
+  scheduleId   String?
+  countryCode  String
+  timeOfDay    String
+  timezone     String
+  /// The slot (UTC) that was skipped.
+  scheduledFor DateTime
+  /// engine_paused | crawl_mode | daily_run_limit | invalid_targets | missed_window | unsupported_country
+  reason       String
+  detail       String?
+  createdAt    DateTime           @default(now())
+  tenant       Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  schedule     DiscoverySchedule? @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
+
+  @@unique([scheduleId, scheduledFor])
+  @@index([tenantId, createdAt])
 }

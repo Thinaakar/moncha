@@ -437,6 +437,48 @@ export interface DiscoveryIndustryRepo {
   archive(tenantId: string, id: string): Promise<boolean>;
 }
 
+/** Who starts a country crawl. Schedules may use the runs reserved for them; auto-recrawl and manual runs may not. */
+export type CrawlRunKind = 'schedule' | 'auto' | 'manual';
+
+/** One run of Max Daily Crawl Runs (UTC day), claimed in the same transaction that creates the crawl job. */
+export type CrawlRunClaim = {
+  kind: CrawlRunKind;
+  maxRuns: number;
+  /** Runs of `maxRuns` only schedules may use. */
+  reservedForSchedules: number;
+};
+
+/** A tenant's runs claimed on one UTC day. */
+export type CrawlRunUsage = { day: string; runs: number; scheduledRuns: number };
+
+export type ScheduleSkipReason =
+  | 'engine_paused'
+  | 'crawl_mode'
+  | 'daily_run_limit'
+  | 'invalid_targets'
+  | 'missed_window'
+  | 'unsupported_country';
+
+export type ScheduleSkipRecord = {
+  id: string;
+  tenantId: string;
+  scheduleId: string | null;
+  countryCode: string;
+  timeOfDay: string;
+  timezone: string;
+  scheduledFor: Date;
+  reason: ScheduleSkipReason;
+  detail: string | null;
+  createdAt: Date;
+};
+
+export type ScheduleAdvanceResult = {
+  advanced: boolean;
+  job: JobRunRecord | null;
+  /** The job was not created because the daily run claim failed (the slot is recorded as a daily_run_limit skip). */
+  limited?: boolean;
+};
+
 export interface DiscoveryScheduleRepo {
   /** Returns null when the tenant already has a schedule for this country at this time. */
   create(data: DiscoveryScheduleCreate): Promise<DiscoveryScheduleRecord | null>;
@@ -446,17 +488,22 @@ export interface DiscoveryScheduleRepo {
   /** Enabled schedules of every tenant with nextRunAt <= now, oldest first. */
   due(now: Date, limit: number): Promise<DiscoveryScheduleRecord[]>;
   /**
-   * Atomically moves nextRunAt from `expected` to `next` and, when `job` is given, creates that job
-   * unless its dedupeKey already exists. `advanced` is false when another scheduler got there first.
+   * In one transaction: moves nextRunAt from `schedule.nextRunAt` to `next` and, when `job` is given, creates that job
+   * unless its dedupeKey already exists. With `options.claim` the job is created only after a daily run is claimed
+   * (otherwise `limited`, and the slot is recorded as a daily_run_limit skip). With `options.skip` the slot is recorded
+   * as skipped. `advanced` is false when another scheduler got there first (nothing is written then).
    */
   advance(
     schedule: DiscoveryScheduleRecord,
     next: Date,
     ranAt: Date,
     job?: JobCreate,
-  ): Promise<{ advanced: boolean; job: JobRunRecord | null }>;
+    options?: { claim?: CrawlRunClaim; skip?: { reason: ScheduleSkipReason; detail?: string | null } },
+  ): Promise<ScheduleAdvanceResult>;
   /** Newest country_discovery jobs for the tenant (scheduled and manual). */
   recentRuns(tenantId: string, limit: number): Promise<JobRunRecord[]>;
+  /** Newest skipped schedule slots for the tenant. */
+  recentSkips?(tenantId: string, limit: number): Promise<ScheduleSkipRecord[]>;
 }
 
 export interface WebsiteAuditor {

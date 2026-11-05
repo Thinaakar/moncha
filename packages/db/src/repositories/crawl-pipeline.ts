@@ -1,10 +1,15 @@
 import type { PrismaClient, CrawlPipelineSettings as Row } from '@prisma/client';
 import type {
+  CrawlMode,
   CrawlPipelineCounters,
   CrawlPipelineSettingsPatch,
   CrawlPipelineSettingsRecord,
+  CrawlRunKind,
+  CrawlRunUsage,
+  JobCreate,
 } from '@moncha/domain';
-import { SITE_AUTOMATION_LOOKBACK_MS } from '@moncha/domain';
+import { CRAWL_MODES, crawlRunClaim, SITE_AUTOMATION_LOOKBACK_MS } from '@moncha/domain';
+import { createClaimedCrawlJob, crawlRunUsageToday, type ClaimedCrawlJob } from './crawl-run-usage';
 
 export type {
   CrawlPipelineCounters,
@@ -33,6 +38,8 @@ function mapRow(row: Row): CrawlPipelineSettingsRecord {
     autoRecrawlEnabled: row.autoRecrawlEnabled,
     minQueueBuffer: row.minQueueBuffer,
     maxDailyCrawlRuns: row.maxDailyCrawlRuns,
+    crawlMode: CRAWL_MODES.includes(row.crawlMode as CrawlMode) ? (row.crawlMode as CrawlMode) : 'both',
+    scheduleReservedRuns: row.scheduleReservedRuns,
     followUpEnabled: row.followUpEnabled,
     followUpDelayDays: row.followUpDelayDays,
     followUpMode: (row.followUpMode as 'business_days' | 'calendar_days') || 'business_days',
@@ -61,6 +68,8 @@ export function defaultSettings(tenantId: string): CrawlPipelineSettingsRecord {
     autoRecrawlEnabled: true,
     minQueueBuffer: 5,
     maxDailyCrawlRuns: 10,
+    crawlMode: 'both',
+    scheduleReservedRuns: 0,
     followUpEnabled: true,
     followUpDelayDays: 3,
     followUpMode: 'business_days',
@@ -121,6 +130,8 @@ export class PrismaCrawlPipelineRepository {
       ...(patch.autoRecrawlEnabled !== undefined ? { autoRecrawlEnabled: patch.autoRecrawlEnabled } : {}),
       ...(patch.minQueueBuffer !== undefined ? { minQueueBuffer: patch.minQueueBuffer } : {}),
       ...(patch.maxDailyCrawlRuns !== undefined ? { maxDailyCrawlRuns: patch.maxDailyCrawlRuns } : {}),
+      ...(patch.crawlMode !== undefined ? { crawlMode: patch.crawlMode } : {}),
+      ...(patch.scheduleReservedRuns !== undefined ? { scheduleReservedRuns: patch.scheduleReservedRuns } : {}),
       ...(patch.followUpEnabled !== undefined ? { followUpEnabled: patch.followUpEnabled } : {}),
       ...(patch.followUpDelayDays !== undefined ? { followUpDelayDays: patch.followUpDelayDays } : {}),
       ...(patch.followUpMode !== undefined ? { followUpMode: patch.followUpMode } : {}),
@@ -155,9 +166,28 @@ export class PrismaCrawlPipelineRepository {
     });
   }
 
-  /** Country crawls of any trigger created since `since`; what Max Daily Crawl Runs counts. */
+  /** Country crawls of any trigger created since `since`. */
   countCrawlsSince(tenantId: string, since: Date): Promise<number> {
     return this.db.jobRun.count({ where: { tenantId, type: 'country_discovery', createdAt: { gte: since } } });
+  }
+
+  /** Runs claimed today (UTC); before the first claim of the day, the country crawls already created today. */
+  runUsageToday(tenantId: string, now = new Date()): Promise<CrawlRunUsage> {
+    return crawlRunUsageToday(this.db, tenantId, now);
+  }
+
+  /**
+   * Claims one of today's runs (Max Daily Crawl Runs; auto-recrawl and manual runs never use the runs reserved for
+   * schedules) and creates the country_discovery job in the same transaction. `limited` when no run is left.
+   */
+  async createCrawlJob(input: {
+    job: JobCreate;
+    kind: Exclude<CrawlRunKind, 'schedule'>;
+    settings?: CrawlPipelineSettingsRecord;
+    now?: Date;
+  }): Promise<ClaimedCrawlJob> {
+    const settings = input.settings ?? (await this.get(input.job.tenantId));
+    return createClaimedCrawlJob(this.db, { job: input.job, claim: crawlRunClaim(settings, input.kind), now: input.now });
   }
 
   async getCountersToday(tenantId: string, now = new Date()): Promise<CrawlPipelineCounters> {
@@ -175,6 +205,7 @@ export class PrismaCrawlPipelineRepository {
       followUpsDueToday,
       followUpsOverdue,
       followUpsSentToday,
+      runUsage,
     ] = await Promise.all([
       // 1-2. Country crawls started today, with their found / duplicate totals
       this.db.jobRun.findMany({
@@ -259,6 +290,9 @@ export class PrismaCrawlPipelineRepository {
           followUpSentAt: { gte: dayStart },
         },
       }),
+
+      // 12. Daily runs claimed today (what Max Daily Crawl Runs counts)
+      crawlRunUsageToday(this.db, tenantId, now),
     ]);
 
     const totals = sumCrawlResults(crawlsToday.map((c) => c.result));
@@ -275,7 +309,8 @@ export class PrismaCrawlPipelineRepository {
       followUpsDueToday,
       followUpsOverdue,
       followUpsSentToday,
-      crawlsRunToday: crawlsToday.length,
+      crawlsRunToday: runUsage.runs,
+      scheduledRunsToday: runUsage.scheduledRuns,
     };
   }
 

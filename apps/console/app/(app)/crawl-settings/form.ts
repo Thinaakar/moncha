@@ -1,4 +1,4 @@
-import { CRAWL_SETTINGS_LIMITS, type CrawlSettingsNumberField } from '@moncha/contracts';
+import { CRAWL_SETTINGS_LIMITS, type CrawlModeView, type CrawlSettingsNumberField } from '@moncha/contracts';
 import type { CrawlPipelineSettingsUpdate, CrawlPipelineSettingsView } from '@/lib/types';
 
 /** Numeric settings edited as text, so a field can be cleared while typing. The hour is a select, not text. */
@@ -9,13 +9,33 @@ export const NUMBER_FIELDS = [
   'dailyCustomerReachLimit',
   'minQueueBuffer',
   'maxDailyCrawlRuns',
+  'scheduleReservedRuns',
   'followUpDelayDays',
 ] as const satisfies readonly CrawlSettingsNumberField[];
 
 export type NumberField = (typeof NUMBER_FIELDS)[number];
 
+export const CRAWL_MODE_OPTIONS: Array<{ value: CrawlModeView; label: string; description: string }> = [
+  {
+    value: 'both',
+    label: 'Schedules and auto-recrawl',
+    description: 'Target region schedules run at their times, and auto-recrawl fills the queue in between.',
+  },
+  {
+    value: 'scheduled_only',
+    label: 'Scheduled only',
+    description: 'Only Target region schedules start crawls. Auto-recrawl stays off. Most predictable cost.',
+  },
+  {
+    value: 'auto_only',
+    label: 'Auto-recrawl only',
+    description: 'Crawls start when the lead queue runs low. Due schedules are skipped and moved to their next time.',
+  },
+];
+
 /** Everything Save sends. The engine switch saves on its own and is not part of the form. */
 export type CrawlSettingsForm = Record<NumberField, string> & {
+  crawlMode: CrawlModeView;
   autoRecrawlEnabled: boolean;
   targetCountry: string;
   targetCities: string[];
@@ -37,7 +57,9 @@ export function formFromSettings(s: CrawlPipelineSettingsView): CrawlSettingsFor
     dailyCustomerReachLimit: String(s.dailyCustomerReachLimit),
     minQueueBuffer: String(s.minQueueBuffer),
     maxDailyCrawlRuns: String(s.maxDailyCrawlRuns),
+    scheduleReservedRuns: String(s.scheduleReservedRuns ?? 0),
     followUpDelayDays: String(Math.max(CRAWL_SETTINGS_LIMITS.followUpDelayDays.min, s.followUpDelayDays)),
+    crawlMode: s.crawlMode ?? 'both',
     autoRecrawlEnabled: s.autoRecrawlEnabled,
     targetCountry: s.targetCountry || 'SG',
     targetCities: s.targetCities ?? [],
@@ -67,6 +89,11 @@ export function validateForm(form: CrawlSettingsForm): FormErrors {
     const n = Number(raw);
     if (n < min || n > max) errors[field] = `Must be between ${min} and ${max}`;
   }
+  if (!errors.scheduleReservedRuns && !errors.maxDailyCrawlRuns) {
+    if (Number(form.scheduleReservedRuns) > Number(form.maxDailyCrawlRuns)) {
+      errors.scheduleReservedRuns = 'Cannot be more than the crawl runs per day';
+    }
+  }
   return errors;
 }
 
@@ -79,7 +106,9 @@ export function toPayload(form: CrawlSettingsForm): CrawlPipelineSettingsUpdate 
     dailyCustomerReachLimit: num('dailyCustomerReachLimit'),
     minQueueBuffer: num('minQueueBuffer'),
     maxDailyCrawlRuns: num('maxDailyCrawlRuns'),
+    scheduleReservedRuns: num('scheduleReservedRuns'),
     followUpDelayDays: num('followUpDelayDays'),
+    crawlMode: form.crawlMode,
     autoRecrawlEnabled: form.autoRecrawlEnabled,
     targetCountry: form.targetCountry,
     targetCities: form.targetCities,
@@ -106,6 +135,23 @@ export type FormState = { values: CrawlSettingsForm; baseline: CrawlSettingsForm
 export function syncFromServer(state: FormState | null, saved: CrawlSettingsForm): FormState {
   if (!state || sameForm(state.values, state.baseline)) return { values: saved, baseline: saved };
   return { values: state.values, baseline: saved };
+}
+
+/**
+ * Runs each trigger may still start today, as the backend claims them: schedules may use every run of the limit,
+ * auto-recrawl and Run crawl now only the unreserved ones.
+ */
+export function runsLeftToday(
+  settings: Pick<CrawlPipelineSettingsView, 'maxDailyCrawlRuns' | 'scheduleReservedRuns'>,
+  usage: { runs: number; scheduledRuns: number },
+): { schedules: number; unreserved: number } {
+  const max = settings.maxDailyCrawlRuns;
+  const reserved = Math.min(max, Math.max(0, settings.scheduleReservedRuns ?? 0));
+  const total = Math.max(0, max - usage.runs);
+  return {
+    schedules: total,
+    unreserved: Math.max(0, Math.min(total, max - reserved - (usage.runs - usage.scheduledRuns))),
+  };
 }
 
 /** Searches and the most Places calls one crawl run makes (each search is up to `maxPages` result pages). */

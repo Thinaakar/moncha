@@ -1,26 +1,49 @@
 import { describe, expect, it } from 'vitest';
-import type { DiscoveryScheduleRecord, DiscoveryScheduleRepo, JobCreate, JobRunRecord } from '../ports';
+import type {
+  CrawlRunClaim,
+  DiscoveryScheduleRecord,
+  DiscoveryScheduleRepo,
+  JobCreate,
+  JobRunRecord,
+  ScheduleSkipRecord,
+} from '../ports';
 import { createSilentLogger } from '../logger';
 import { computeNextRun, localDate, relativeDay } from '../discovery/schedule-time';
+import { canClaimCrawlRun } from './crawlPipeline';
 import {
   createSchedule,
   deleteCountrySchedules,
   deleteSchedule,
   enqueueDueSchedules,
   listScheduleRuns,
+  listScheduleSkips,
   listSchedules,
   ScheduleError,
   type ScheduleCrawlSettings,
   type ScheduleCrawlSettingsSource,
 } from './discoverySchedules';
 
-function memorySchedules(): DiscoveryScheduleRepo & { rows: DiscoveryScheduleRecord[]; jobs: JobRunRecord[] } {
+type MemorySchedules = DiscoveryScheduleRepo & {
+  rows: DiscoveryScheduleRecord[];
+  jobs: JobRunRecord[];
+  skips: ScheduleSkipRecord[];
+  claims: CrawlRunClaim[];
+  usage: { runs: number; scheduledRuns: number };
+};
+
+/** In memory, with the same claim rule the database applies atomically (claimCrawlRun). */
+function memorySchedules(usage = { runs: 0, scheduledRuns: 0 }): MemorySchedules {
   const rows: DiscoveryScheduleRecord[] = [];
   const jobs: JobRunRecord[] = [];
+  const skips: ScheduleSkipRecord[] = [];
+  const claims: CrawlRunClaim[] = [];
   let seq = 1;
   return {
     rows,
     jobs,
+    skips,
+    claims,
+    usage,
     async create(data) {
       const dup = rows.some(
         (r) => r.tenantId === data.tenantId && r.countryCode === data.countryCode && r.timeOfDay === data.timeOfDay,
@@ -51,15 +74,40 @@ function memorySchedules(): DiscoveryScheduleRepo & { rows: DiscoveryScheduleRec
         .slice(0, limit)
         .map((r) => ({ ...r }));
     },
-    async advance(schedule, next, ranAt, job?: JobCreate) {
+    async advance(schedule, next, ranAt, job?: JobCreate, options?) {
       const row = rows.find((r) => r.id === schedule.id);
       if (!row || +row.nextRunAt !== +schedule.nextRunAt) return { advanced: false, job: null };
+      const recordSkip = (reason: ScheduleSkipRecord['reason'], detail: string | null = null) =>
+        skips.push({
+          id: `k${skips.length + 1}`,
+          tenantId: schedule.tenantId,
+          scheduleId: schedule.id,
+          countryCode: schedule.countryCode,
+          timeOfDay: schedule.timeOfDay,
+          timezone: schedule.timezone,
+          scheduledFor: schedule.nextRunAt,
+          reason,
+          detail,
+          createdAt: ranAt,
+        });
       row.nextRunAt = next;
-      if (!job) return { advanced: true, job: null };
-      row.lastRunAt = ranAt;
+      if (!job) {
+        if (options?.skip) recordSkip(options.skip.reason, options.skip.detail ?? null);
+        return { advanced: true, job: null };
+      }
       if (jobs.some((j) => j.tenantId === job.tenantId && j.dedupeKey === job.dedupeKey)) {
         return { advanced: true, job: null };
       }
+      if (options?.claim) {
+        claims.push(options.claim);
+        if (!canClaimCrawlRun(usage, options.claim)) {
+          recordSkip('daily_run_limit');
+          return { advanced: true, job: null, limited: true };
+        }
+        usage.runs += 1;
+        if (options.claim.kind === 'schedule') usage.scheduledRuns += 1;
+      }
+      row.lastRunAt = ranAt;
       const created: JobRunRecord = {
         id: `j${jobs.length + 1}`,
         tenantId: job.tenantId,
@@ -77,6 +125,9 @@ function memorySchedules(): DiscoveryScheduleRepo & { rows: DiscoveryScheduleRec
     },
     async recentRuns(tenantId, limit) {
       return jobs.filter((j) => j.tenantId === tenantId).reverse().slice(0, limit);
+    },
+    async recentSkips(tenantId, limit) {
+      return skips.filter((k) => k.tenantId === tenantId).reverse().slice(0, limit);
     },
   };
 }
@@ -284,33 +335,30 @@ describe('scheduled runs follow the crawl settings', () => {
   const due = new Date('2026-09-29T02:00:05Z'); // just after 10:00 local
   const nextDayDue = new Date('2026-09-30T02:00:05Z');
 
-  function crawlSettings(over: Partial<ScheduleCrawlSettings> = {}, crawlsToday = 0) {
+  function crawlSettings(over: Partial<ScheduleCrawlSettings> = {}) {
     const state = {
       settings: {
         active: true,
+        crawlMode: 'both',
         crawlBatchSize: 20,
         maxPagesPerSearch: 3,
         maxDailyCrawlRuns: 10,
+        scheduleReservedRuns: 0,
         targetCountry: 'SG',
         targetCities: [],
         targetIndustries: [],
         ...over,
       } as ScheduleCrawlSettings,
-      crawlsToday,
-      sinceAsked: [] as Date[],
     };
-    const source: ScheduleCrawlSettingsSource = {
-      get: async () => state.settings,
-      crawlsSince: async (_tenantId, since) => {
-        state.sinceAsked.push(since);
-        return state.crawlsToday;
-      },
-    };
+    const source: ScheduleCrawlSettingsSource = { get: async () => state.settings };
     return { state, source };
   }
 
-  async function setup(countries: Array<{ country: string; industries?: string[] }>) {
-    const schedules = memorySchedules();
+  async function setup(
+    countries: Array<{ country: string; industries?: string[] }>,
+    usage = { runs: 0, scheduledRuns: 0 },
+  ) {
+    const schedules = memorySchedules(usage);
     for (const c of countries) {
       await createSchedule({ schedules, now: () => created }, { tenantId: 't1', time: '10:00', ...c });
     }
@@ -337,13 +385,61 @@ describe('scheduled runs follow the crawl settings', () => {
     expect(schedules.jobs.map((j) => j.dedupeKey)).toEqual([`schedule:${schedules.rows[0]!.id}:2026-09-30`]);
   });
 
-  it('skips the run once Max Daily Crawl Runs is used for the UTC day and moves it on', async () => {
-    const schedules = await setup([{ country: 'MY' }]);
-    const { state, source } = crawlSettings({ maxDailyCrawlRuns: 3 }, 3);
+  it('skips the run once the daily run claim fails, moves it on and records the skip', async () => {
+    const schedules = await setup([{ country: 'MY' }], { runs: 3, scheduledRuns: 0 });
+    const { source } = crawlSettings({ maxDailyCrawlRuns: 3 });
     const res = await enqueueDueSchedules({ schedules, now: () => due, crawlSettings: source });
     expect(res).toMatchObject({ enqueued: [], skipped: 1 });
     expect(schedules.rows[0]!.nextRunAt.toISOString()).toBe('2026-09-30T02:00:00.000Z');
-    expect(state.sinceAsked.map((d) => d.toISOString())).toEqual(['2026-09-29T00:00:00.000Z']);
+    expect(schedules.claims).toEqual([{ kind: 'schedule', maxRuns: 3, reservedForSchedules: 0 }]);
+    expect(schedules.skips.map((k) => k.reason)).toEqual(['daily_run_limit']);
+    expect(schedules.rows[0]!.lastRunAt).toBeNull();
+  });
+
+  it('lets schedules use the runs reserved for them after auto and manual runs used the rest', async () => {
+    // 10 runs a day, 4 reserved for schedules, and the 6 unreserved ones are used.
+    const schedules = await setup([{ country: 'MY' }], { runs: 6, scheduledRuns: 0 });
+    const { source } = crawlSettings({ maxDailyCrawlRuns: 10, scheduleReservedRuns: 4 });
+    const res = await enqueueDueSchedules({ schedules, now: () => due, crawlSettings: source });
+    expect(res.enqueued).toHaveLength(1);
+    expect(schedules.usage).toEqual({ runs: 7, scheduledRuns: 1 });
+  });
+
+  it('skips scheduled runs while the crawl mode is Auto-recrawl only', async () => {
+    const schedules = await setup([{ country: 'MY' }]);
+    const { source } = crawlSettings({ crawlMode: 'auto_only' });
+    const res = await enqueueDueSchedules({ schedules, now: () => due, crawlSettings: source });
+    expect(res).toMatchObject({ enqueued: [], skipped: 1 });
+    expect(schedules.skips.map((k) => k.reason)).toEqual(['crawl_mode']);
+    expect(schedules.claims).toHaveLength(0);
+  });
+
+  it('records engine-off, invalid-target and missed-window skips for the run history', async () => {
+    const schedules = await setup([{ country: 'MY' }]);
+    await enqueueDueSchedules({ schedules, now: () => due, crawlSettings: crawlSettings({ active: false }).source });
+    await enqueueDueSchedules({
+      schedules,
+      now: () => nextDayDue,
+      crawlSettings: crawlSettings({ targetCountry: 'MY', targetCities: ['Tampines'] }).source,
+    });
+    // Three days later, 5 hours after the slot: past the 2-hour grace window.
+    await enqueueDueSchedules({ schedules, now: () => new Date('2026-10-01T07:00:00Z') });
+    expect(schedules.skips.map((k) => k.reason)).toEqual(['engine_paused', 'invalid_targets', 'missed_window']);
+    expect(schedules.skips[1]!.detail).toBe('"Tampines" is not a search area in Malaysia');
+
+    const views = await listScheduleSkips({ schedules }, { tenantId: 't1' });
+    expect(views.map((v) => [v.day, v.time, v.country, v.reason])).toEqual([
+      ['2026-10-01', '10:00', 'Malaysia', 'missed_window'],
+      ['2026-09-30', '10:00', 'Malaysia', 'invalid_targets'],
+      ['2026-09-29', '10:00', 'Malaysia', 'engine_paused'],
+    ]);
+  });
+
+  it('links each scheduled run to its schedule in the run history', async () => {
+    const schedules = await setup([{ country: 'MY' }]);
+    await enqueueDueSchedules({ schedules, now: () => due, crawlSettings: crawlSettings().source });
+    const [run] = await listScheduleRuns({ schedules }, { tenantId: 't1' });
+    expect(run).toMatchObject({ scheduleId: schedules.rows[0]!.id, trigger: 'schedule', day: '2026-09-29' });
   });
 
   it('counts runs queued in the same tick against the daily limit', async () => {

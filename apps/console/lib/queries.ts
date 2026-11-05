@@ -18,6 +18,7 @@ import type {
   ReviewTask,
   ScheduleGroup,
   ScheduleRun,
+  ScheduleSkip,
   SiteAutomationCrawl,
   SiteAutomationState,
   SiteAutomationUpdate,
@@ -61,6 +62,7 @@ export const qk = {
   sourceImport: (id: string) => ['source-imports', id] as const,
   schedules: ['schedules'] as const,
   runs: (limit: number) => ['schedules', 'runs', limit] as const,
+  skips: (limit: number) => ['schedules', 'skips', limit] as const,
   options: ['discovery', 'options'] as const,
   worker: ['worker', 'health'] as const,
   health: ['health'] as const,
@@ -220,6 +222,22 @@ export function useScheduleRuns(limit = 50) {
     queryKey: qk.runs(limit),
     queryFn: async () => (await api<{ runs: ScheduleRun[] }>('schedules/runs', { query: { limit } })).runs,
     refetchInterval: (q) => (q.state.data?.some((r) => !isTerminal(r.status)) ? 5_000 : 30_000),
+  });
+}
+
+/** Skipped schedule slots; an older backend without the route returns none. */
+export function useScheduleSkips(limit = 50) {
+  return useQuery({
+    queryKey: qk.skips(limit),
+    queryFn: async () => {
+      try {
+        return (await api<{ skips: ScheduleSkip[] }>('schedules/skips', { query: { limit } })).skips;
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 404) return [];
+        throw error;
+      }
+    },
+    refetchInterval: 60_000,
   });
 }
 

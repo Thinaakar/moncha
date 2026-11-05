@@ -286,12 +286,14 @@ export type ScheduleGroup = {
 
 export type ScheduleRun = {
   id: string;
+  /** The schedule that started the run; null for auto-recrawl and manual runs (missing from older backends). */
+  scheduleId?: string | null;
   day: string;
   countryCode: string;
   country: string;
   time: string;
   timezone: string;
-  trigger: 'schedule' | 'manual';
+  trigger: 'schedule' | 'manual' | 'auto';
   status: JobStatus;
   found: number;
   saved: number;
@@ -300,6 +302,30 @@ export type ScheduleRun = {
   error: string | null;
   startedAt: string | null;
   finishedAt: string | null;
+};
+
+export type ScheduleSkipReason =
+  | 'engine_paused'
+  | 'crawl_mode'
+  | 'daily_run_limit'
+  | 'invalid_targets'
+  | 'missed_window'
+  | 'unsupported_country';
+
+/** A due schedule slot that did not run (`GET /api/v1/schedules/skips`). */
+export type ScheduleSkip = {
+  id: string;
+  scheduleId: string | null;
+  /** Local date of the slot in the schedule's time zone. */
+  day: string;
+  countryCode: string;
+  country: string;
+  time: string;
+  timezone: string;
+  scheduledFor: string;
+  reason: ScheduleSkipReason;
+  detail: string | null;
+  createdAt: string;
 };
 
 export type CsvImportResult = {

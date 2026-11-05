@@ -31,36 +31,57 @@ import {
   useCrawlPipeline,
   useDiscoveryOptions,
   useScheduleRuns,
+  useScheduleSkips,
   useSchedules,
   useSiteAutomationCrawls,
 } from '@/lib/queries';
 import { formatDateTime, formatDuration, formatNumber, formatRelative, humanize } from '@/lib/format';
-import type { CrawlPipelineSettingsView, Schedule, ScheduleGroup } from '@/lib/types';
+import type { CrawlPipelineSettingsView, Schedule, ScheduleGroup, ScheduleRun, ScheduleSkip } from '@/lib/types';
 import { cn } from '@/lib/utils';
+import { runsLeftToday } from '../crawl-settings/form';
 import { AddScheduleDialog } from './add-schedule-dialog';
+import { mergeHistory, SKIP_REASON_LABEL, slotPlanToday, type SlotPlan } from './today-plan';
 
 type PendingDelete = { kind: 'one'; schedule: Schedule } | { kind: 'country'; group: ScheduleGroup };
 
 /** How the central crawl settings shape every scheduled run (mirrors the worker's enqueueDueSchedules). */
-function CrawlSettingsNotice({ settings, countryNames }: { settings: CrawlPipelineSettingsView; countryNames: Map<string, string> }) {
+function CrawlSettingsNotice({
+  settings,
+  countryNames,
+  runsLeft,
+}: {
+  settings: CrawlPipelineSettingsView;
+  countryNames: Map<string, string>;
+  runsLeft: { schedules: number; unreserved: number } | null;
+}) {
   const searches = Math.max(1, Math.ceil((settings.crawlBatchSize || 20) / 20));
   const pages = Math.min(3, Math.max(1, settings.maxPagesPerSearch || 3));
   const target = countryNames.get(settings.targetCountry) ?? settings.targetCountry;
+  const autoOnly = settings.crawlMode === 'auto_only';
+  const reserved = settings.scheduleReservedRuns ?? 0;
   return (
     <InlineAlert
-      variant={settings.active ? 'info' : 'warning'}
+      variant={settings.active && !autoOnly ? 'info' : 'warning'}
       icon={SlidersHorizontal}
-      title={settings.active ? 'Crawl & Pipeline Settings control scheduled crawls' : 'Engine paused: scheduled crawls are skipped'}
+      title={
+        !settings.active
+          ? 'Engine paused: scheduled crawls are skipped'
+          : autoOnly
+            ? 'Crawl mode is Auto-recrawl only: scheduled crawls are skipped'
+            : 'Crawl & Pipeline Settings control scheduled crawls'
+      }
     >
       <ul className="mt-1 list-disc space-y-0.5 pl-4">
         <li>
-          {settings.active
+          {settings.active && !autoOnly
             ? 'Each schedule crawls its own country at its time while the engine is on.'
-            : 'While the engine is off, each due run is skipped and moves to its next time. Skipped runs are not made up later.'}
+            : 'Each due run is skipped and moves to its next time. Skipped runs are not made up later.'}
         </li>
         <li>
-          A run is skipped once today&apos;s Max Daily Crawl Runs ({formatNumber(settings.maxDailyCrawlRuns)}, UTC day,
-          every trigger counted) is used.
+          Daily crawl runs: {formatNumber(settings.maxDailyCrawlRuns)} per UTC day, every trigger counted
+          {reserved ? `, ${formatNumber(reserved)} reserved for schedules` : ''}.
+          {runsLeft ? ` ${formatNumber(runsLeft.schedules)} left today for schedules.` : ''} A run is skipped when none is
+          left.
         </li>
         <li>
           Size of each run: Crawl Batch Size {formatNumber(settings.crawlBatchSize)} ({searches} search
@@ -144,11 +165,9 @@ function ScheduleGroupCard({
               <Clock className="size-3.5 text-muted-foreground" />
               {s.time}
               <span className="text-xs font-normal text-muted-foreground">{s.timezone.split('/').pop()?.replace(/_/g, ' ')}</span>
-              {s.industries && s.industries.length > 0 && (
-                <span className="rounded border bg-background/80 px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground">
-                  {s.industries.length} industries
-                </span>
-              )}
+              <span className="rounded border bg-background/80 px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground">
+                {s.industries && s.industries.length > 0 ? `${s.industries.length} custom industries` : 'Crawl settings industries'}
+              </span>
               {canEdit && (
                 <button
                   type="button"
@@ -175,6 +194,147 @@ function ScheduleGroupCard({
   );
 }
 
+const zoneCity = (timezone: string) => timezone.split('/').pop()?.replace(/_/g, ' ');
+
+function RunHistoryRow({ run, copies }: { run: ScheduleRun; copies: Parameters<typeof CrawlCopiesCell>[0]['crawl'] }) {
+  return (
+    <TableRow>
+      <TableCell>
+        <div className="font-medium">{run.day}</div>
+        <div className="text-xs text-muted-foreground">
+          {run.time} {zoneCity(run.timezone)}
+        </div>
+      </TableCell>
+      <TableCell>{run.country || run.countryCode}</TableCell>
+      <TableCell>
+        <Badge variant={run.trigger === 'schedule' ? 'default' : 'secondary'}>
+          {run.trigger === 'auto' ? 'Auto-recrawl' : humanize(run.trigger)}
+        </Badge>
+      </TableCell>
+      <TableCell className="max-w-[220px]">
+        <JobStatusBadge status={run.status} />
+        {run.error && (
+          <Tooltip content={run.error}>
+            <span className="mt-1 block truncate text-xs text-destructive">{run.error}</span>
+          </Tooltip>
+        )}
+      </TableCell>
+      <TableCell className="text-right tabular-nums">{formatNumber(run.found)}</TableCell>
+      <TableCell className="text-right font-medium tabular-nums">{formatNumber(run.saved)}</TableCell>
+      <TableCell className="text-right tabular-nums text-muted-foreground">{formatNumber(run.skipped)}</TableCell>
+      <TableCell>
+        <CrawlCopiesCell crawl={copies} finished={run.status === 'done' || run.status === 'failed'} />
+      </TableCell>
+      <TableCell className="text-muted-foreground">
+        <Tooltip content={`Started ${formatDateTime(run.startedAt)}`}>
+          <span>{formatDuration(run.startedAt, run.finishedAt)}</span>
+        </Tooltip>
+      </TableCell>
+    </TableRow>
+  );
+}
+
+function SkipHistoryRow({ skip }: { skip: ScheduleSkip }) {
+  const label = SKIP_REASON_LABEL[skip.reason];
+  return (
+    <TableRow className="bg-muted/20">
+      <TableCell>
+        <div className="font-medium">{skip.day}</div>
+        <div className="text-xs text-muted-foreground">
+          {skip.time} {zoneCity(skip.timezone)}
+        </div>
+      </TableCell>
+      <TableCell>{skip.country || skip.countryCode}</TableCell>
+      <TableCell>
+        <Badge variant="default">Schedule</Badge>
+      </TableCell>
+      <TableCell className="max-w-[220px]">
+        <Badge variant="warning">Skipped</Badge>
+        <Tooltip content={skip.detail ?? label}>
+          <span className="mt-1 block truncate text-xs text-muted-foreground">{label}</span>
+        </Tooltip>
+      </TableCell>
+      {Array.from({ length: 5 }, (_, i) => (
+        <TableCell key={i} className={cn('text-muted-foreground', i < 3 && 'text-right')}>
+          —
+        </TableCell>
+      ))}
+    </TableRow>
+  );
+}
+
+const PLAN_BADGE: Record<SlotPlan['status'], { label: string; variant: 'success' | 'warning' | 'info' | 'muted' | 'default' }> = {
+  ran: { label: 'Ran', variant: 'success' },
+  skipped: { label: 'Skipped', variant: 'warning' },
+  will_run: { label: 'Will run', variant: 'info' },
+  will_skip: { label: 'Will be skipped', variant: 'warning' },
+  no_slot_today: { label: 'Next run tomorrow', variant: 'muted' },
+};
+
+/** Every schedule's slot today: ran, skipped (and why), or what will happen with the current settings. */
+function TodayPlan({
+  schedules,
+  runs,
+  skips,
+  settings,
+  scheduleRunsLeft,
+}: {
+  schedules: Schedule[];
+  runs: ScheduleRun[];
+  skips: ScheduleSkip[];
+  settings: CrawlPipelineSettingsView | undefined;
+  scheduleRunsLeft: number;
+}) {
+  if (!schedules.length) return null;
+  const rows = schedules
+    .map((schedule) => ({ schedule, plan: slotPlanToday({ schedule, runs, skips, settings, scheduleRunsLeft }) }))
+    .sort((a, b) => a.schedule.nextRunAt.localeCompare(b.schedule.nextRunAt));
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2">
+          <CalendarClock className="size-4 text-primary" /> Today&apos;s plan
+        </CardTitle>
+        <CardDescription>
+          Each schedule&apos;s slot today in its own time zone. Upcoming slots show what happens with the current Crawl
+          settings and today&apos;s run usage.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="pt-0">
+        <ul className="divide-y" aria-label="Today's plan">
+          {rows.map(({ schedule: s, plan }) => {
+            const badge = PLAN_BADGE[plan.status];
+            const why =
+              plan.status === 'skipped' || plan.status === 'will_skip'
+                ? SKIP_REASON_LABEL[plan.reason]
+                : plan.status === 'ran'
+                  ? humanize(plan.run.status)
+                  : plan.status === 'no_slot_today'
+                    ? `${humanize(s.nextRunDay)} at ${s.time}`
+                    : `at ${s.time}`;
+            return (
+              <li key={s.id} className="flex flex-wrap items-center justify-between gap-2 py-2.5 text-sm">
+                <span className="flex items-center gap-2">
+                  <span className="font-medium">{s.country}</span>
+                  <span className="tabular-nums text-muted-foreground">
+                    {s.time} {zoneCity(s.timezone)}
+                  </span>
+                </span>
+                <span className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground">{why}</span>
+                  <Badge variant={badge.variant} dot>
+                    {badge.label}
+                  </Badge>
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      </CardContent>
+    </Card>
+  );
+}
+
 export function SchedulesView() {
   const canEdit = useCanEdit();
   const schedules = useSchedules();
@@ -184,8 +344,15 @@ export function SchedulesView() {
   const options = useDiscoveryOptions();
   const countryNames = new Map((options.data?.countries ?? []).map((c) => [c.code, c.name]));
   const runs = useScheduleRuns(50);
+  const skips = useScheduleSkips(50);
   const crawls = useSiteAutomationCrawls(100);
   const copiesByRun = new Map((crawls.data ?? []).map((c) => [c.crawlJobId, c]));
+  const history = mergeHistory(runs.data ?? [], skips.data ?? []).slice(0, 50);
+  const progress = pipeline.data?.progress;
+  const runsLeft = crawlSettings
+    ? runsLeftToday(crawlSettings, { runs: progress?.crawlsRunToday ?? 0, scheduledRuns: progress?.scheduledRunsToday ?? 0 })
+    : null;
+  const allSchedules = (schedules.data ?? []).flatMap((g) => g.schedules);
   const [addOpen, setAddOpen] = useState(false);
   const [addCountry, setAddCountry] = useState<string | undefined>();
   const [pending, setPending] = useState<PendingDelete | null>(null);
@@ -242,7 +409,17 @@ export function SchedulesView() {
         className="pb-0"
       />
 
-      {crawlSettings && <CrawlSettingsNotice settings={crawlSettings} countryNames={countryNames} />}
+      {crawlSettings && (
+        <CrawlSettingsNotice settings={crawlSettings} countryNames={countryNames} runsLeft={runsLeft} />
+      )}
+
+      <TodayPlan
+        schedules={allSchedules}
+        runs={runs.data ?? []}
+        skips={skips.data ?? []}
+        settings={crawlSettings}
+        scheduleRunsLeft={runsLeft?.schedules ?? Number.POSITIVE_INFINITY}
+      />
 
       <section>
         {schedules.error ? (
@@ -291,13 +468,13 @@ export function SchedulesView() {
           <CardTitle className="flex items-center gap-2">
             <History className="size-4 text-primary" /> Run history
           </CardTitle>
-          <CardDescription>The last 50 scheduled and manual country crawls</CardDescription>
+          <CardDescription>The last 50 country crawls (scheduled, auto-recrawl and manual) and skipped schedule slots</CardDescription>
         </CardHeader>
         {runs.error ? (
           <ErrorState error={runs.error} onRetry={() => runs.refetch()} />
         ) : runs.isLoading ? (
           <TableSkeleton rows={5} columns={7} />
-        ) : !runs.data?.length ? (
+        ) : !history.length ? (
           <EmptyState icon={History} title="No runs yet" description="Runs appear here once a schedule fires or you start a crawl." />
         ) : (
           <Table>
@@ -319,39 +496,13 @@ export function SchedulesView() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {runs.data.map((run) => (
-                <TableRow key={run.id}>
-                  <TableCell>
-                    <div className="font-medium">{run.day}</div>
-                    <div className="text-xs text-muted-foreground">
-                      {run.time} {run.timezone.split('/').pop()?.replace(/_/g, ' ')}
-                    </div>
-                  </TableCell>
-                  <TableCell>{run.country || run.countryCode}</TableCell>
-                  <TableCell>
-                    <Badge variant={run.trigger === 'schedule' ? 'default' : 'secondary'}>{humanize(run.trigger)}</Badge>
-                  </TableCell>
-                  <TableCell className="max-w-[220px]">
-                    <JobStatusBadge status={run.status} />
-                    {run.error && (
-                      <Tooltip content={run.error}>
-                        <span className="mt-1 block truncate text-xs text-destructive">{run.error}</span>
-                      </Tooltip>
-                    )}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">{formatNumber(run.found)}</TableCell>
-                  <TableCell className="text-right font-medium tabular-nums">{formatNumber(run.saved)}</TableCell>
-                  <TableCell className="text-right tabular-nums text-muted-foreground">{formatNumber(run.skipped)}</TableCell>
-                  <TableCell>
-                    <CrawlCopiesCell crawl={copiesByRun.get(run.id)} finished={run.status === 'done' || run.status === 'failed'} />
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    <Tooltip content={`Started ${formatDateTime(run.startedAt)}`}>
-                      <span>{formatDuration(run.startedAt, run.finishedAt)}</span>
-                    </Tooltip>
-                  </TableCell>
-                </TableRow>
-              ))}
+              {history.map((entry) =>
+                entry.kind === 'skip' ? (
+                  <SkipHistoryRow key={`skip-${entry.skip.id}`} skip={entry.skip} />
+                ) : (
+                  <RunHistoryRow key={entry.run.id} run={entry.run} copies={copiesByRun.get(entry.run.id)} />
+                ),
+              )}
             </TableBody>
           </Table>
         )}
