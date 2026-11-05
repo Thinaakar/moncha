@@ -121,6 +121,11 @@ export const scheduleCreateSchema = z.object({
   industries: z.array(z.string().trim().min(1)).optional(),
 });
 
+/** A schedule's own industries; an empty list switches it back to the Crawl & Pipeline Settings industries. */
+export const scheduleIndustriesSchema = z.object({
+  industries: z.array(z.string().trim().min(1)).max(500),
+});
+
 export const industryCreateSchema = z.object({
   name: z.string().trim().min(2, 'Name must be at least 2 characters').max(100),
   category: z.string().trim().max(100).optional(),
@@ -336,6 +341,8 @@ export const siteSnapshotListQuerySchema = z.object({
   status: jobStatusSchema.optional(),
   search: z.string().trim().min(1).optional(),
   origin: siteCopyOriginSchema.optional(),
+  /** `complete`: only live copies (deployed and, with the chatbot, its live hostname in the bot's allowed domains). */
+  pipeline: z.enum(['complete']).optional(),
 });
 
 export const leadBotStatusSchema = z.enum(['pending', 'creating', 'created', 'failed']);
@@ -400,6 +407,7 @@ export type DiscoverInput = z.infer<typeof discoverPlacesSchema>;
 export type SourceImportInput = z.infer<typeof sourceImportSchema>;
 export type CountryDiscoveryRequest = z.infer<typeof countryDiscoverySchema>;
 export type ScheduleCreateRequest = z.infer<typeof scheduleCreateSchema>;
+export type ScheduleIndustriesRequest = z.infer<typeof scheduleIndustriesSchema>;
 export type ScheduleRunsQuery = z.infer<typeof scheduleRunsQuerySchema>;
 export type ManualLeadInput = z.infer<typeof manualLeadSchema>;
 export type LeadListQueryInput = z.infer<typeof leadListQuerySchema>;
@@ -522,8 +530,9 @@ export type SiteSnapshotSummary = {
 
 /**
  * Ordered steps of a website copy: queued, copying the website, reading its source code, building the files, adding
- * the MonCha chatbot, updating its GitHub repo, deploying its Worker URL, live. The Worker deploy starts only after
- * the GitHub push. `adding_chatbot` is new; older API versions never return it.
+ * the MonCha chatbot, updating its GitHub repo, deploying its Worker URL, adding the live hostname to the chatbot's
+ * allowed domains, live. The Worker deploy starts only after the GitHub push; live needs the domain when the copy has
+ * the chatbot. `adding_chatbot` and `adding_domain` are new; older API versions never return them.
  */
 export type SiteCopyStep =
   | 'queued'
@@ -533,6 +542,7 @@ export type SiteCopyStep =
   | 'adding_chatbot'
   | 'updating_git'
   | 'deploying_url'
+  | 'adding_domain'
   | 'live';
 
 /**

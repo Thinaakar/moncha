@@ -293,6 +293,43 @@ describe.skipIf(!databaseUrl)('worker API (integration)', () => {
       expect((await call('DELETE', 'schedules?country=JP', { token: viewerToken })).status).toBe(403);
       expect((await call('DELETE', `schedules/${created.json.id}`, { token: editorToken })).status).toBe(200);
     });
+
+    it('lists the crawl each schedule inherits and only lets editors switch its industries', async () => {
+      // Saved earlier: target country MY with Kuala Lumpur, batch size 45, 2 pages per search.
+      const created = await call('POST', 'schedules', { token: editorToken, body: { country: 'MY', time: '07:15' } });
+      expect(created.status).toBe(201);
+      const id = created.json.id as string;
+      const effectiveOf = async () => {
+        const list = await call('GET', 'schedules', { token: editorToken });
+        const group = list.json.countries.find((g: { countryCode: string }) => g.countryCode === 'MY');
+        return group.schedules.find((s: { id: string }) => s.id === id).effective;
+      };
+      expect(await effectiveOf()).toMatchObject({
+        industriesFrom: 'crawl_settings',
+        cities: ['Kuala Lumpur'],
+        batchSize: 45,
+        maxSearches: 3,
+        maxPages: 2,
+      });
+
+      await call('PUT', 'crawl-settings', { token: editorToken, body: { crawlBatchSize: 20, maxPagesPerSearch: 3 } });
+      expect(await effectiveOf()).toMatchObject({ batchSize: 20, maxSearches: 1, maxPages: 3 });
+
+      const body = { industries: ['Dentist', 'gym'] };
+      expect((await call('PATCH', `schedules/${id}`, { body })).status).toBe(401);
+      expect((await call('PATCH', `schedules/${id}`, { token: viewerToken, body })).status).toBe(403);
+      const custom = await call('PATCH', `schedules/${id}`, { token: editorToken, body });
+      expect(custom.status).toBe(200);
+      expect(custom.json).toMatchObject({ industries: ['dentist', 'gym'], effective: { industriesFrom: 'schedule' } });
+
+      const back = await call('PATCH', `schedules/${id}`, { token: editorToken, body: { industries: [] } });
+      expect(back.json.effective.industriesFrom).toBe('crawl_settings');
+      expect((await prisma.discoverySchedule.findUnique({ where: { id } }))?.industries).toEqual([]);
+
+      expect((await call('PATCH', 'schedules/missing', { token: editorToken, body })).status).toBe(404);
+      expect((await call('PATCH', `schedules/${id}`, { token: editorToken, body: { industries: 'gym' } })).status).toBe(400);
+      await call('DELETE', `schedules/${id}`, { token: editorToken });
+    });
   });
 
   it('exposes each country time zone in the discovery options', async () => {

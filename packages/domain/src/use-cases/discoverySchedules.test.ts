@@ -19,6 +19,7 @@ import {
   listScheduleSkips,
   listSchedules,
   ScheduleError,
+  updateScheduleIndustries,
   type ScheduleCrawlSettings,
   type ScheduleCrawlSettingsSource,
 } from './discoverySchedules';
@@ -66,6 +67,12 @@ function memorySchedules(usage = { runs: 0, scheduledRuns: 0 }): MemorySchedules
       const hit = rows.filter((r) => r.tenantId === tenantId && r.countryCode === countryCode);
       for (const r of hit) rows.splice(rows.indexOf(r), 1);
       return hit.length;
+    },
+    async setIndustries(tenantId, id, industries) {
+      const row = rows.find((r) => r.tenantId === tenantId && r.id === id);
+      if (!row) return null;
+      row.industries = industries;
+      return { ...row };
     },
     async due(now, limit) {
       return rows
@@ -487,5 +494,153 @@ describe('scheduled runs follow the crawl settings', () => {
     const res = await enqueueDueSchedules({ schedules, now: () => due, crawlSettings: source });
     expect(res).toMatchObject({ skipped: 1 });
     expect(payloads(schedules).map((p) => p.countryCode)).toEqual(['MY']);
+  });
+});
+
+describe('schedules inherit the latest crawl settings', () => {
+  const created = new Date('2026-09-29T01:00:00Z');
+  /** Just after 10:00 Malaysia/Singapore time, `n` days after the schedules were made. */
+  const dueOn = (n: number) => new Date(Date.UTC(2026, 8, 29 + n, 2, 0, 5));
+  const base: ScheduleCrawlSettings = {
+    active: true,
+    crawlMode: 'both',
+    crawlBatchSize: 20,
+    maxPagesPerSearch: 3,
+    maxDailyCrawlRuns: 10,
+    scheduleReservedRuns: 0,
+    targetCountry: 'MY',
+    targetCities: ['Kuala Lumpur'],
+    targetIndustries: ['gym'],
+  };
+
+  /** One Malaysia schedule on the crawl settings' industries, one Singapore schedule with its own. */
+  async function setup() {
+    const schedules = memorySchedules();
+    const deps = { schedules, now: () => created };
+    await createSchedule(deps, { tenantId: 't1', country: 'MY', time: '10:00' });
+    await createSchedule(deps, { tenantId: 't1', country: 'SG', time: '10:00', industries: ['dentist'] });
+    const state = { settings: { ...base } };
+    const crawlSettings: ScheduleCrawlSettingsSource = { get: async () => state.settings };
+    const runDay = (n: number) => enqueueDueSchedules({ schedules, now: () => dueOn(n), crawlSettings });
+    /** Job payloads by "country day". */
+    const runs = () =>
+      Object.fromEntries(
+        schedules.jobs.map((j) => {
+          const p = j.payload as Record<string, unknown>;
+          return [`${p.countryCode} ${String(p.scheduledFor).slice(0, 10)}`, p];
+        }),
+      );
+    return { schedules, state, crawlSettings, runDay, runs };
+  }
+
+  it('uses the settings saved before each run, without editing or recreating the schedules', async () => {
+    const { schedules, state, runDay, runs } = await setup();
+    await runDay(0);
+    state.settings = {
+      ...state.settings,
+      targetIndustries: ['spa', 'bakery'],
+      crawlBatchSize: 60,
+      maxPagesPerSearch: 1,
+      targetCities: ['Petaling Jaya'],
+    };
+    await runDay(1);
+
+    expect(runs()['MY 2026-09-29']).toMatchObject({ industries: ['gym'], cities: ['Kuala Lumpur'], maxSearches: 1, maxPages: 3 });
+    expect(runs()['MY 2026-09-30']).toMatchObject({
+      industries: ['spa', 'bakery'],
+      cities: ['Petaling Jaya'],
+      maxSearches: 3,
+      maxPages: 1,
+    });
+    // The custom industries stay; batch size and pages still follow the settings; no target cities outside MY.
+    expect(runs()['SG 2026-09-29']).toMatchObject({ industries: ['dentist'], maxSearches: 1, maxPages: 3 });
+    expect(runs()['SG 2026-09-30']).toMatchObject({ industries: ['dentist'], maxSearches: 3, maxPages: 1 });
+    expect(runs()['SG 2026-09-30']!.cities).toBeUndefined();
+
+    // Nothing from the settings was copied onto the schedules.
+    for (const row of schedules.rows) {
+      expect(Object.keys(row).sort()).toEqual(
+        ['countryCode', 'enabled', 'id', 'lastRunAt', 'nextRunAt', 'tenantId', 'timeOfDay', 'timezone', ...(row.industries ? ['industries'] : [])].sort(),
+      );
+    }
+    expect(schedules.rows.map((r) => r.industries)).toEqual([undefined, ['dentist']]);
+  });
+
+  it('follows engine, crawl mode and run limit changes on the next due run', async () => {
+    const { schedules, state, runDay, runs } = await setup();
+    state.settings = { ...state.settings, crawlMode: 'auto_only' };
+    await runDay(0);
+    state.settings = { ...state.settings, crawlMode: 'both', active: false };
+    await runDay(1);
+    state.settings = { ...state.settings, active: true, crawlMode: 'scheduled_only', maxDailyCrawlRuns: 4, scheduleReservedRuns: 2 };
+    await runDay(2);
+
+    expect(schedules.skips.map((k) => `${k.countryCode} ${k.reason}`)).toEqual([
+      'MY crawl_mode',
+      'SG crawl_mode',
+      'MY engine_paused',
+      'SG engine_paused',
+    ]);
+    expect(Object.keys(runs()).sort()).toEqual(['MY 2026-10-01', 'SG 2026-10-01']);
+    expect(schedules.claims).toEqual([
+      { kind: 'schedule', maxRuns: 4, reservedForSchedules: 2 },
+      { kind: 'schedule', maxRuns: 4, reservedForSchedules: 2 },
+    ]);
+  });
+
+  it('lists the crawl each schedule gets from the current settings', async () => {
+    const { schedules, state, crawlSettings } = await setup();
+    const list = async () =>
+      Object.fromEntries(
+        (await listSchedules({ schedules, crawlSettings, now: () => created }, { tenantId: 't1' })).map((g) => [
+          g.countryCode,
+          g.schedules[0]!.effective,
+        ]),
+      );
+
+    expect(await list()).toEqual({
+      MY: { industriesFrom: 'crawl_settings', industries: ['gym'], cities: ['Kuala Lumpur'], batchSize: 20, maxSearches: 1, maxPages: 3 },
+      SG: { industriesFrom: 'schedule', industries: ['dentist'], cities: [], batchSize: 20, maxSearches: 1, maxPages: 3 },
+    });
+
+    state.settings = { ...state.settings, targetCountry: 'SG', targetCities: ['Tampines'], targetIndustries: [], crawlBatchSize: 45 };
+    expect(await list()).toEqual({
+      MY: { industriesFrom: 'crawl_settings', industries: [], cities: [], batchSize: 45, maxSearches: 3, maxPages: 3 },
+      SG: { industriesFrom: 'schedule', industries: ['dentist'], cities: ['Tampines'], batchSize: 45, maxSearches: 3, maxPages: 3 },
+    });
+
+    // Without the settings (older callers) the list has no effective crawl.
+    const [plain] = await listSchedules({ schedules, now: () => created }, { tenantId: 't1' });
+    expect(plain!.schedules[0]!.effective).toBeUndefined();
+  });
+
+  it('switches a schedule between its own industries and the crawl settings industries', async () => {
+    const { schedules, state, crawlSettings, runDay, runs } = await setup();
+    const sg = schedules.rows.find((r) => r.countryCode === 'SG')!;
+    const my = schedules.rows.find((r) => r.countryCode === 'MY')!;
+
+    const toSettings = await updateScheduleIndustries({ schedules, crawlSettings }, { tenantId: 't1', id: sg.id, industries: [] });
+    expect(toSettings.industries).toBeUndefined();
+    expect(toSettings.effective).toMatchObject({ industriesFrom: 'crawl_settings', industries: ['gym'] });
+
+    const toCustom = await updateScheduleIndustries(
+      { schedules, crawlSettings },
+      { tenantId: 't1', id: my.id, industries: [' Spa', 'spa', 'Bakery '] },
+    );
+    expect(toCustom.industries).toEqual(['spa', 'bakery']);
+    expect(toCustom.effective).toMatchObject({ industriesFrom: 'schedule', industries: ['spa', 'bakery'] });
+
+    state.settings = { ...state.settings, targetIndustries: ['florist'] };
+    await runDay(0);
+    expect(runs()['SG 2026-09-29']).toMatchObject({ industries: ['florist'] });
+    expect(runs()['MY 2026-09-29']).toMatchObject({ industries: ['spa', 'bakery'] });
+
+    await expect(
+      updateScheduleIndustries({ schedules }, { tenantId: 't1', id: 'missing', industries: [] }),
+    ).rejects.toMatchObject({ code: 'not_found', status: 404 });
+    await expect(
+      updateScheduleIndustries({ schedules }, { tenantId: 't2', id: my.id, industries: [] }),
+    ).rejects.toMatchObject({ code: 'not_found' });
+    expect(schedules.rows.find((r) => r.id === my.id)!.industries).toEqual(['spa', 'bakery']);
   });
 });

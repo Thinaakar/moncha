@@ -68,3 +68,68 @@ describe('siteCopyProgress', () => {
     expect(p).toMatchObject({ step: 'updating_git', state: 'not_started' });
   });
 });
+
+describe('siteCopyProgress with the chatbot domain', () => {
+  const deployedAt = new Date('2026-10-09T10:03:00.000Z');
+  const domainAt = new Date('2026-10-09T10:03:05.000Z');
+  const withChatbot = { ...both, chatbotEnabled: true };
+  const deployed = siteSnapshotFixture({
+    chatbotStatus: 'installed',
+    githubStatus: 'pushed',
+    workerStatus: 'deployed',
+    workerUrl: 'https://acme-sg.x.workers.dev',
+    workerDeployedAt: deployedAt,
+  });
+
+  it('is live only once the live hostname is in the bot domains', () => {
+    const p = siteCopyProgress(deployed, {
+      ...withChatbot,
+      domains: { domains: ['ACME-sg.x.workers.dev'], configuredAt: domainAt },
+      now: new Date('2026-10-09T11:00:00.000Z'),
+    });
+    expect(p).toMatchObject({ step: 'live', state: 'done', since: domainAt });
+    expect(p.steps.map((s) => s.step)).toEqual([
+      'queued',
+      'copying',
+      'reading_source',
+      'building',
+      'adding_chatbot',
+      'updating_git',
+      'deploying_url',
+      'adding_domain',
+      'live',
+    ]);
+    expect(p.steps.every((s) => s.state === 'done')).toBe(true);
+  });
+
+  it('waits on Adding domain right after the deploy, then fails when the domain never came', () => {
+    const soon = siteCopyProgress(deployed, { ...withChatbot, domains: null, now: new Date('2026-10-09T10:04:00.000Z') });
+    expect(soon).toMatchObject({ step: 'adding_domain', state: 'waiting', error: null });
+    expect(states(soon)).toMatchObject({ deploying_url: 'done', adding_domain: 'waiting', live: 'not_started' });
+
+    const later = siteCopyProgress(deployed, {
+      ...withChatbot,
+      domains: { domains: [], configuredAt: null },
+      now: new Date('2026-10-09T10:30:00.000Z'),
+    });
+    expect(later).toMatchObject({ step: 'adding_domain', state: 'failed' });
+    expect(later.error).toMatch(/^domain_not_added: acme-sg\.x\.workers\.dev .*Redeploy/);
+  });
+
+  it('fails when the bot is locked to another hostname', () => {
+    const p = siteCopyProgress(deployed, {
+      ...withChatbot,
+      domains: { domains: ['old-acme.x.workers.dev'], configuredAt: domainAt },
+      now: new Date('2026-10-09T10:04:00.000Z'),
+    });
+    expect(p).toMatchObject({ step: 'adding_domain', state: 'failed' });
+    expect(p.error).toContain('domain_mismatch');
+  });
+
+  it('has no domain step for copies without the chatbot', () => {
+    const plain = siteSnapshotFixture({ githubStatus: 'pushed', workerStatus: 'deployed', workerUrl: 'https://acme-sg.x.workers.dev', workerDeployedAt: deployedAt });
+    const p = siteCopyProgress(plain, both);
+    expect(p).toMatchObject({ step: 'live', state: 'done', since: deployedAt });
+    expect(p.steps.map((s) => s.step)).not.toContain('adding_domain');
+  });
+});

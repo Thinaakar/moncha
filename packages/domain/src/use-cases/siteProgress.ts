@@ -9,6 +9,7 @@ export type SiteCopyStep =
   | 'adding_chatbot'
   | 'updating_git'
   | 'deploying_url'
+  | 'adding_domain'
   | 'live';
 
 /**
@@ -50,6 +51,7 @@ type Row = Pick<
   | 'workerNextAt'
   | 'workerError'
   | 'workerDeployedAt'
+  | 'workerUrl'
   | 'chatbotStatus'
   | 'chatbotAttempts'
   | 'chatbotNextAt'
@@ -99,14 +101,69 @@ function publishState(
   return attempts > 0 || error ? 'retrying' : 'waiting';
 }
 
+/** A deployed copy whose chatbot domain is still missing after this long is shown as failed (redeploy to fix it). */
+export const SITE_DOMAIN_GRACE_MS = 5 * 60_000;
+
+/** The MonCha bot's allowed domains (PUT domains), as saved on the lead's bot. */
+export type SiteChatbotDomains = { domains: string[] | null; configuredAt: Date | null };
+
+export function workerHostname(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).hostname.toLowerCase() || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Whether the bot is allowed on the copy's live Worker hostname. */
+export function chatbotDomainAdded(workerUrl: string | null | undefined, domains: SiteChatbotDomains | null | undefined): boolean {
+  const host = workerHostname(workerUrl);
+  return Boolean(host && domains?.domains?.some((d) => d.toLowerCase() === host));
+}
+
+function domainStep(row: Row, domains: SiteChatbotDomains | null | undefined, now: Date): StepInfo {
+  const base = { step: 'adding_domain' as const, nextAt: null };
+  if (row.workerStatus !== 'deployed') return { ...base, state: 'not_started', error: null, since: null };
+  if (chatbotDomainAdded(row.workerUrl, domains)) {
+    return { ...base, state: 'done', error: null, since: domains?.configuredAt ?? row.workerDeployedAt };
+  }
+  const host = workerHostname(row.workerUrl);
+  const others = domains?.domains?.length ? domains.domains.join(', ') : null;
+  if (others) {
+    return {
+      ...base,
+      state: 'failed',
+      error: `domain_mismatch: the chatbot is allowed on ${others}, not ${host ?? 'the live URL'}. Redeploy to fix it.`,
+      since: domains?.configuredAt ?? null,
+    };
+  }
+  const deployedAt = row.workerDeployedAt?.getTime() ?? now.getTime();
+  if (now.getTime() - deployedAt < SITE_DOMAIN_GRACE_MS) return { ...base, state: 'waiting', error: null, since: row.workerDeployedAt };
+  return {
+    ...base,
+    state: 'failed',
+    error: `domain_not_added: ${host ?? 'the live URL'} was not added to the chatbot's allowed domains. Redeploy to add it.`,
+    since: row.workerDeployedAt,
+  };
+}
+
 /**
  * Where a copy is on the way to its live URL: copy (copying, reading the source, building the files), then the MonCha
  * chatbot, then the GitHub push, then the Worker deploy, which only starts once the push is done when GitHub is
- * configured. Chatbot, GitHub and Worker steps appear when they are configured or the copy already has them.
+ * configured, then (with the chatbot) its live hostname added to the bot's allowed domains. Live only after all of
+ * them. Chatbot, GitHub and Worker steps appear when they are configured or the copy already has them; `domains` is
+ * the lead's bot domains (null when it has no bot).
  */
 export function siteCopyProgress(
   row: Row,
-  options: { githubEnabled: boolean; workerEnabled: boolean; chatbotEnabled?: boolean },
+  options: {
+    githubEnabled: boolean;
+    workerEnabled: boolean;
+    chatbotEnabled?: boolean;
+    domains?: SiteChatbotDomains | null;
+    now?: Date;
+  },
 ): SiteCopyProgress {
   const steps = copySteps(row);
   const copied = row.status === 'done';
@@ -144,8 +201,11 @@ export function siteCopyProgress(
       since: state === 'done' ? row.workerDeployedAt : null,
       nextAt: (state === 'waiting' || state === 'retrying') && gitDone ? row.workerNextAt : null,
     });
-    const live = row.workerStatus === 'deployed';
-    steps.push({ step: 'live', state: live ? 'done' : 'not_started', error: null, since: live ? row.workerDeployedAt : null, nextAt: null });
+    const domain = withChatbot ? domainStep(row, options.domains, options.now ?? new Date()) : null;
+    if (domain) steps.push(domain);
+    const live = row.workerStatus === 'deployed' && (!domain || domain.state === 'done');
+    const liveSince = domain?.since ?? row.workerDeployedAt;
+    steps.push({ step: 'live', state: live ? 'done' : 'not_started', error: null, since: live ? liveSince : null, nextAt: null });
   }
 
   const current = steps.find((s) => s.state !== 'done');

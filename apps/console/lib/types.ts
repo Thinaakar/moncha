@@ -275,6 +275,19 @@ export type Schedule = {
   nextRunDay: string;
   lastRunAt: string | null;
   industries?: string[];
+  /** The crawl the next run gets from the current Crawl & Pipeline Settings; missing from older backends. */
+  effective?: ScheduleEffectiveCrawl;
+};
+
+export type ScheduleEffectiveCrawl = {
+  industriesFrom: 'crawl_settings' | 'schedule';
+  /** Empty: every standard industry. */
+  industries: string[];
+  /** Empty: every city of the country. */
+  cities: string[];
+  batchSize: number;
+  maxSearches: number;
+  maxPages: number;
 };
 
 export type ScheduleGroup = {

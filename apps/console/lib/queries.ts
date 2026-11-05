@@ -265,7 +265,15 @@ export function useSystemHealth() {
   return useQuery({ queryKey: qk.health, queryFn: () => api<SystemHealth>('health'), refetchInterval: 60_000 });
 }
 
-export type SiteListParams = { page: number; pageSize: number; status?: JobStatus; search?: string; origin?: SiteCopyOrigin };
+export type SiteListParams = {
+  page: number;
+  pageSize: number;
+  status?: JobStatus;
+  search?: string;
+  origin?: SiteCopyOrigin;
+  /** `complete`: only live copies (deployed, chatbot allowed on the live URL). */
+  pipeline?: 'complete';
+};
 
 /** Paginated website copies; polls while any copy is still being made. */
 export function useSiteSnapshots(params: SiteListParams) {

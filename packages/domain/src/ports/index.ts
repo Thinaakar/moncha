@@ -485,6 +485,8 @@ export interface DiscoveryScheduleRepo {
   list(tenantId: string): Promise<DiscoveryScheduleRecord[]>;
   delete(tenantId: string, id: string): Promise<boolean>;
   deleteByCountry(tenantId: string, countryCode: string): Promise<number>;
+  /** Replaces the schedule's own industries ([] = use the crawl settings' industries); null when it does not exist. */
+  setIndustries?(tenantId: string, id: string, industries: string[]): Promise<DiscoveryScheduleRecord | null>;
   /** Enabled schedules of every tenant with nextRunAt <= now, oldest first. */
   due(now: Date, limit: number): Promise<DiscoveryScheduleRecord[]>;
   /**

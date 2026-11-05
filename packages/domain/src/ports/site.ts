@@ -369,6 +369,8 @@ export type SiteSnapshotListQuery = {
   status?: JobStatus;
   search?: string;
   origin?: SiteCopyOrigin;
+  /** `complete`: only copies that are live (see siteCopyProgress). */
+  pipeline?: 'complete';
 };
 
 export interface SiteSnapshotRepo {
@@ -388,9 +390,11 @@ export interface SiteSnapshotRepo {
   /** Pending or running snapshot for the lead, newest first. */
   findOpenForLead(tenantId: string, leadId: string): Promise<SiteSnapshotRecord | null>;
   listForLead(tenantId: string, leadId: string, limit: number): Promise<SiteSnapshotRecord[]>;
+  /** `options.chatbotEnabled`: copies without the chatbot step are live only when the chatbot is not configured. */
   list(
     tenantId: string,
     query: SiteSnapshotListQuery,
+    options?: { chatbotEnabled?: boolean },
   ): Promise<{ items: SiteSnapshotListItem[]; total: number; page: number; pageSize: number; totalPages: number }>;
   /** Pending and running copies in the order the worker claims them (runAfter, then createdAt). */
   queue(tenantId: string): Promise<SiteQueueEntry[]>;

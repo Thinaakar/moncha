@@ -20,6 +20,7 @@ import {
   reviewListQuerySchema,
   scheduleCreateSchema,
   scheduleDeleteCountrySchema,
+  scheduleIndustriesSchema,
   scheduleRunsQuerySchema,
   siteAutomationCrawlsQuerySchema,
   workerQueueUpdateSchema,
@@ -122,6 +123,7 @@ import {
   listReviewTasks,
   listScheduleRuns,
   listSchedules,
+  updateScheduleIndustries,
   omitChatbotSitesEnabled,
   resolveCountry,
   resolveReviewTask,
@@ -181,6 +183,7 @@ import {
   type ModelPriceRow,
   type SiteCostPricing as DomainSiteCostPricing,
   type SiteCostWebsiteRow,
+  type SiteChatbotDomains,
   type SiteSnapshotListItem,
   type SiteSnapshotRecord,
 } from '@moncha/domain';
@@ -289,8 +292,11 @@ route('GET', '/health', async ({ tenantId }) => {
 });
 
 // Daily schedules
+// Each schedule's `effective` crawl comes from the current Crawl & Pipeline Settings, like its next run.
+const scheduleCrawlSettings = { get: (tenantId: string) => crawlPipelineRepo.get(tenantId) };
+
 route('GET', '/api/v1/schedules', async ({ tenantId }) => ({
-  json: { countries: await listSchedules({ schedules }, { tenantId }) },
+  json: { countries: await listSchedules({ schedules, crawlSettings: scheduleCrawlSettings }, { tenantId }) },
 }));
 
 route('POST', '/api/v1/schedules', async ({ req, tenantId, body }) => {
@@ -314,6 +320,18 @@ route('GET', '/api/v1/schedules/runs', async ({ tenantId, url }) => {
 route('GET', '/api/v1/schedules/skips', async ({ tenantId, url }) => {
   const { limit } = scheduleRunsQuerySchema.parse(query(url, 'limit'));
   return { json: { skips: await listScheduleSkips({ schedules }, { tenantId, limit }) } };
+});
+
+// Only the schedule's industries can change: [] = follow the crawl settings, a list = this schedule's own.
+route('PATCH', '/api/v1/schedules/:id', async ({ req, tenantId, params, body }) => {
+  await requireEditor(req, tenantId, 'change schedules');
+  const { industries } = scheduleIndustriesSchema.parse(await body());
+  return {
+    json: await updateScheduleIndustries(
+      { schedules, crawlSettings: scheduleCrawlSettings },
+      { tenantId, id: params.id!, industries },
+    ),
+  };
 });
 
 route('DELETE', '/api/v1/schedules/:id', async ({ req, tenantId, params }) => {
@@ -659,21 +677,23 @@ route('POST', '/api/v1/crawl-pipeline/follow-up-preview', async ({ req, tenantId
 });
 
 /**
- * Fills `deploy.domains` (the lead's MonCha widget allowed hosts, set right after a deploy) on deployed copies, with one
- * lookup for the whole page. Copies whose lead has no created bot keep `domains` undefined.
+ * Summaries of a page of copies with their lead's MonCha widget allowed hosts (set right after a deploy), looked up once
+ * for the page: they fill `deploy.domains` and decide whether a deployed copy is live. Copies whose lead has no created
+ * bot keep `domains` undefined.
  */
-async function withDeployDomains(tenantId: string, summaries: SiteSnapshotSummary[]): Promise<SiteSnapshotSummary[]> {
-  const leadIds = summaries.filter((s) => s.deploy).map((s) => s.leadId);
-  if (!leadIds.length) return summaries;
-  const byLead = new Map((await leadBots.domainsForLeads(tenantId, leadIds)).map((b) => [b.leadId, b]));
-  return summaries.map((s) => {
-    const bot = s.deploy ? byLead.get(s.leadId) : undefined;
-    if (!s.deploy || !bot) return s;
-    return {
-      ...s,
-      deploy: { ...s.deploy, domains: bot.domains, domainsConfiguredAt: bot.domainsConfiguredAt?.toISOString() ?? null },
-    };
-  });
+async function summariesWithDomains(
+  tenantId: string,
+  snapshots: Array<SiteSnapshotRecord | SiteSnapshotListItem>,
+  options: { preview: boolean },
+): Promise<SiteSnapshotSummary[]> {
+  const leadIds = snapshots.filter((s) => s.workerStatus).map((s) => s.leadId);
+  const bots = leadIds.length ? await leadBots.domainsForLeads(tenantId, leadIds) : [];
+  const byLead = new Map(bots.map((b) => [b.leadId, { domains: b.domains, configuredAt: b.domainsConfiguredAt }]));
+  return Promise.all(
+    snapshots.map(async (s) =>
+      siteSummary(s, options.preview ? await previewBaseFor(s) : null, s.workerStatus ? (byLead.get(s.leadId) ?? null) : undefined),
+    ),
+  );
 }
 
 /** Adds `site` (the copy's summary: GitHub push, Worker deploy, live URL, progress) to website copy jobs. */
@@ -681,7 +701,7 @@ async function withSiteCopies<T extends { id: string; type: string }>(tenantId: 
   const ids = items.filter((j) => j.type === 'site_snapshot').map((j) => j.id);
   if (!ids.length) return items;
   const snapshots = await siteSnapshots.listByJobIds(tenantId, ids);
-  const summaries = await withDeployDomains(tenantId, snapshots.map((s) => siteSummary(s, null)));
+  const summaries = await summariesWithDomains(tenantId, snapshots, { preview: false });
   const byJob = new Map(summaries.map((s) => [s.jobId, s]));
   return items.map((j) => (j.type === 'site_snapshot' ? { ...j, site: byJob.get(j.id) ?? null } : j));
 }
@@ -886,9 +906,6 @@ async function previewBaseFor(snapshot: SiteSnapshotRecord): Promise<string | nu
   return `site-files/${token}/`;
 }
 
-const summarize = async (snapshot: SiteSnapshotRecord | SiteSnapshotListItem) =>
-  siteSummary(snapshot, await previewBaseFor(snapshot));
-
 /** The website's own Worker once deployed; otherwise the older shared Pages link (serves the copy's R2 files). */
 function publicUrlFor(snapshot: SiteSnapshotRecord | SiteSnapshotListItem): string | null {
   if (snapshot.status !== 'done') return null;
@@ -898,7 +915,15 @@ function publicUrlFor(snapshot: SiteSnapshotRecord | SiteSnapshotListItem): stri
   return publicSiteUrl(base, siteGithubDomain(snapshot), snapshot.id);
 }
 
-function siteSummary(snapshot: SiteSnapshotRecord | SiteSnapshotListItem, previewBase: string | null): SiteSnapshotSummary {
+/**
+ * `domains`: the lead's bot allowed hosts (null: no created bot; undefined: not looked up, for copies still in the queue
+ * or pipeline, which are not deployed yet).
+ */
+function siteSummary(
+  snapshot: SiteSnapshotRecord | SiteSnapshotListItem,
+  previewBase: string | null,
+  domains?: SiteChatbotDomains | null,
+): SiteSnapshotSummary {
   return {
     id: snapshot.id,
     leadId: snapshot.leadId,
@@ -951,6 +976,7 @@ function siteSummary(snapshot: SiteSnapshotRecord | SiteSnapshotListItem, previe
           url: snapshot.workerUrl,
           error: snapshot.workerError,
           deployedAt: snapshot.workerDeployedAt?.toISOString() ?? null,
+          ...(domains ? { domains: domains.domains, domainsConfiguredAt: domains.configuredAt?.toISOString() ?? null } : {}),
         }
       : null,
     chatbot: snapshot.chatbotStatus
@@ -964,15 +990,16 @@ function siteSummary(snapshot: SiteSnapshotRecord | SiteSnapshotListItem, previe
         }
       : null,
     publicUrl: publicUrlFor(snapshot),
-    progress: progressFor(snapshot),
+    progress: progressFor(snapshot, domains),
   };
 }
 
-function progressFor(snapshot: SiteSnapshotRecord): SiteCopyProgress {
+function progressFor(snapshot: SiteSnapshotRecord, domains?: SiteChatbotDomains | null): SiteCopyProgress {
   const progress = siteCopyProgress(snapshot, {
     githubEnabled: Boolean(siteGithubPublisher()),
     workerEnabled: Boolean(siteWorkerDeployer()),
     chatbotEnabled: Boolean(monchaInternalClient()),
+    domains,
   });
   return { ...progress, since: progress.since?.toISOString() ?? null, nextAt: progress.nextAt?.toISOString() ?? null };
 }
@@ -1018,13 +1045,13 @@ route('POST', '/api/v1/leads/:id/site-snapshots', async ({ req, tenantId, params
 
 route('GET', '/api/v1/leads/:id/site-snapshots', async ({ tenantId, params }) => {
   const items = await siteSnapshots.listForLead(tenantId, params.id!, 20);
-  return { json: { items: await withDeployDomains(tenantId, await Promise.all(items.map(summarize))) } };
+  return { json: { items: await summariesWithDomains(tenantId, items, { preview: true }) } };
 });
 
 route('GET', '/api/v1/site-snapshots', async ({ tenantId, url }) => {
-  const q = siteSnapshotListQuerySchema.parse(query(url, 'page', 'pageSize', 'status', 'search', 'origin'));
-  const page = await siteSnapshots.list(tenantId, q);
-  return { json: { ...page, items: await withDeployDomains(tenantId, await Promise.all(page.items.map(summarize))) } };
+  const q = siteSnapshotListQuerySchema.parse(query(url, 'page', 'pageSize', 'status', 'search', 'origin', 'pipeline'));
+  const page = await siteSnapshots.list(tenantId, q, { chatbotEnabled: Boolean(monchaInternalClient()) });
+  return { json: { ...page, items: await summariesWithDomains(tenantId, page.items, { preview: true }) } };
 });
 
 // Registered before /site-snapshots/:id so "queue" is not read as an id.
@@ -1801,15 +1828,12 @@ route('GET', '/api/v1/site-snapshots/:id', async ({ tenantId, params }) => {
     const bytes = await store.getBytes(`${snapshot.storagePrefix}manifest.json`);
     if (bytes) manifest = JSON.parse(Buffer.from(bytes).toString('utf8')) as SiteManifest;
   }
-  const summary = siteSummary(snapshot, previewBase);
   const bot = await leadBots.getForLead(tenantId, snapshot.leadId);
-  if (summary.deploy && bot) {
-    summary.deploy = {
-      ...summary.deploy,
-      domains: bot.domains,
-      domainsConfiguredAt: bot.domainsConfiguredAt?.toISOString() ?? null,
-    };
-  }
+  const summary = siteSummary(
+    snapshot,
+    previewBase,
+    bot ? { domains: bot.domains, configuredAt: bot.domainsConfiguredAt } : null,
+  );
   const json: SiteSnapshotDetail = {
     ...summary,
     brand: snapshot.brand,

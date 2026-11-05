@@ -9,6 +9,7 @@ import {
   Github,
   Hammer,
   Loader2,
+  Lock,
   MessageCircle,
   Radio,
   Rocket,
@@ -34,6 +35,11 @@ export const COPY_STEPS: Record<SiteCopyStep, { label: string; icon: LucideIcon;
   },
   updating_git: { label: 'Updating Git', icon: Github, active: 'Pushing the website to its own GitHub repository' },
   deploying_url: { label: 'Deploying URL', icon: Rocket, active: 'Deploying the website to its own Cloudflare Worker URL' },
+  adding_domain: {
+    label: 'Adding domain',
+    icon: Lock,
+    active: "Adding the live URL to the chatbot's allowed domains",
+  },
   live: { label: 'Live', icon: Radio, active: 'The website is live' },
 };
 
@@ -143,7 +149,9 @@ function headline(progress: SiteCopyProgress): string {
         ? 'Waiting in the queue to start copying'
         : progress.step === 'updating_git'
           ? 'Waiting to update Git; the URL is deployed right after'
-          : `Waiting for ${meta.label.toLowerCase()}`;
+          : progress.step === 'adding_domain'
+            ? "Deployed; adding the live URL to the chatbot's allowed domains"
+            : `Waiting for ${meta.label.toLowerCase()}`;
     default:
       return progress.step === 'updating_git'
         ? 'Git has not been updated for this copy yet'
@@ -153,7 +161,8 @@ function headline(progress: SiteCopyProgress): string {
 
 /**
  * Step tracker from the queue to the live URL: Queued, Copying website, Viewing source code, Building website,
- * Updating Git, Deploying URL, Live. The Worker deploy starts only after Git is updated.
+ * Adding chatbot, Updating Git, Deploying URL, Adding domain, Live. The Worker deploy starts only after Git is updated;
+ * the copy is live once the chatbot is allowed on its URL.
  */
 export function CopyProgressSteps({ progress, className }: { progress: SiteCopyProgress; className?: string }) {
   const steps = progress.steps;

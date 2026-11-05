@@ -2,7 +2,19 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Activity, ExternalLink, Github, Globe, ImageOff, ListOrdered, Loader2, ScanEye, SearchX, Workflow } from 'lucide-react';
+import {
+  Activity,
+  CheckCircle2,
+  ExternalLink,
+  Github,
+  Globe,
+  ImageOff,
+  ListOrdered,
+  Loader2,
+  ScanEye,
+  SearchX,
+  Workflow,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -39,13 +51,14 @@ const ORIGINS: Array<{ value: SiteCopyOrigin; label: string }> = [
   { value: 'manual', label: 'Manual' },
 ];
 
-type Tab = 'copies' | 'queue' | 'automation';
+type Tab = 'copies' | 'completed' | 'queue' | 'automation';
 
 export function SitesView() {
   const url = useUrlState();
-  const tab = (['queue', 'automation'].includes(url.get('tab')) ? url.get('tab') : 'copies') as Tab;
+  const tab = (['completed', 'queue', 'automation'].includes(url.get('tab')) ? url.get('tab') : 'copies') as Tab;
   const queue = useSiteQueue();
   const automation = useSiteAutomation();
+  const completed = useSiteSnapshots({ page: 1, pageSize: 1, pipeline: 'complete' });
   const queued = queue.data ? queue.data.running.length + queue.data.waiting.length : undefined;
 
   return (
@@ -78,26 +91,41 @@ export function SitesView() {
         onChange={(next) => url.set({ tab: next === 'copies' ? null : next, page: null, search: null, status: null, origin: null })}
         tabs={[
           { value: 'copies', label: 'All copies', icon: ScanEye },
+          { value: 'completed', label: 'Completed', icon: CheckCircle2, count: completed.data?.total || undefined },
           { value: 'queue', label: 'Queue', icon: ListOrdered, count: queued || undefined },
           { value: 'automation', label: 'Automation', icon: Workflow },
         ]}
         className="mb-6"
       />
 
-      {tab === 'queue' ? <QueuePanel /> : tab === 'automation' ? <AutomationPanel /> : <CopiesPanel />}
+      {tab === 'queue' ? (
+        <QueuePanel />
+      ) : tab === 'automation' ? (
+        <AutomationPanel />
+      ) : (
+        <CopiesPanel key={tab} completed={tab === 'completed'} />
+      )}
     </div>
   );
 }
 
-function CopiesPanel() {
+/** `completed`: only live copies (deployed, chatbot allowed on the live URL), so there is no status filter. */
+function CopiesPanel({ completed = false }: { completed?: boolean }) {
   const router = useRouter();
   const url = useUrlState();
   const page = url.getNumber('page', 1);
   const pageSize = url.getNumber('pageSize', 25);
   const search = url.get('search');
-  const status = (url.get('status') || undefined) as JobStatus | undefined;
+  const status = completed ? undefined : ((url.get('status') || undefined) as JobStatus | undefined);
   const origin = (url.get('origin') || undefined) as SiteCopyOrigin | undefined;
-  const sites = useSiteSnapshots({ page, pageSize, status, search: search || undefined, origin });
+  const sites = useSiteSnapshots({
+    page,
+    pageSize,
+    status,
+    search: search || undefined,
+    origin,
+    ...(completed ? { pipeline: 'complete' as const } : {}),
+  });
   const filtered = Boolean(search || status || origin);
   const anyOpen = sites.data?.items.some((s) => s.status === 'pending' || s.status === 'running');
   const clear = () => url.set({ search: null, status: null, origin: null }, { resetPage: true });
@@ -112,19 +140,21 @@ function CopiesPanel() {
             placeholder="Search company, domain or URL…"
             className="sm:max-w-sm sm:flex-1"
           />
-          <Select value={status ?? 'any'} onValueChange={(v) => url.set({ status: v === 'any' ? null : v }, { resetPage: true })}>
-            <SelectTrigger className="sm:w-44">
-              <SelectValue placeholder="Status" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="any">All statuses</SelectItem>
-              {STATUSES.map((s) => (
-                <SelectItem key={s.value} value={s.value}>
-                  {s.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          {!completed && (
+            <Select value={status ?? 'any'} onValueChange={(v) => url.set({ status: v === 'any' ? null : v }, { resetPage: true })}>
+              <SelectTrigger className="sm:w-44">
+                <SelectValue placeholder="Status" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="any">All statuses</SelectItem>
+                {STATUSES.map((s) => (
+                  <SelectItem key={s.value} value={s.value}>
+                    {s.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
           <Select value={origin ?? 'any'} onValueChange={(v) => url.set({ origin: v === 'any' ? null : v }, { resetPage: true })}>
             <SelectTrigger className="sm:w-44">
               <SelectValue placeholder="Started by" />
@@ -163,6 +193,17 @@ function CopiesPanel() {
               action={
                 <Button variant="outline" size="sm" onClick={clear}>
                   Clear filters
+                </Button>
+              }
+            />
+          ) : completed ? (
+            <EmptyState
+              icon={CheckCircle2}
+              title="No completed websites yet"
+              description="A copy shows here once it is deployed to its own URL and the chatbot is allowed on that URL. Copies still on their way are in All copies."
+              action={
+                <Button size="sm" variant="outline" onClick={() => url.set({ tab: null })}>
+                  View all copies
                 </Button>
               }
             />

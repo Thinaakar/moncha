@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { CalendarClock, CalendarPlus, Clock, History, Plus, SlidersHorizontal, Trash2 } from 'lucide-react';
+import { CalendarClock, CalendarPlus, Clock, History, Plus, SlidersHorizontal, Tags, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -29,6 +29,7 @@ import { CrawlCopiesCell } from '@/components/sites/automation';
 import {
   useApiMutation,
   useCrawlPipeline,
+  useDiscoveryIndustries,
   useDiscoveryOptions,
   useScheduleRuns,
   useScheduleSkips,
@@ -36,10 +37,18 @@ import {
   useSiteAutomationCrawls,
 } from '@/lib/queries';
 import { formatDateTime, formatDuration, formatNumber, formatRelative, humanize } from '@/lib/format';
-import type { CrawlPipelineSettingsView, Schedule, ScheduleGroup, ScheduleRun, ScheduleSkip } from '@/lib/types';
+import type {
+  CrawlPipelineSettingsView,
+  Schedule,
+  ScheduleEffectiveCrawl,
+  ScheduleGroup,
+  ScheduleRun,
+  ScheduleSkip,
+} from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { runsLeftToday } from '../crawl-settings/form';
 import { AddScheduleDialog } from './add-schedule-dialog';
+import { ScheduleIndustriesDialog } from './schedule-industries-dialog';
 import { mergeHistory, SKIP_REASON_LABEL, slotPlanToday, type SlotPlan } from './today-plan';
 
 type PendingDelete = { kind: 'one'; schedule: Schedule } | { kind: 'country'; group: ScheduleGroup };
@@ -103,18 +112,51 @@ function CrawlSettingsNotice({
   );
 }
 
+function listTooltip(names: string[]) {
+  return names.length > 12 ? `${names.slice(0, 12).join(', ')} and ${names.length - 12} more` : names.join(', ');
+}
+
+/** What the next run of one schedule crawls, worked out by the worker from the current Crawl settings. */
+function EffectiveCrawl({ effective, industryName }: { effective: ScheduleEffectiveCrawl; industryName: (slug: string) => string }) {
+  const fromSettings = effective.industriesFrom === 'crawl_settings';
+  const industries = effective.industries.length
+    ? `${formatNumber(effective.industries.length)} ${fromSettings ? 'target' : 'custom'} industr${effective.industries.length === 1 ? 'y' : 'ies'}`
+    : 'all standard industries';
+  const cities = effective.cities.length
+    ? `${formatNumber(effective.cities.length)} target cit${effective.cities.length === 1 ? 'y' : 'ies'}`
+    : 'all cities';
+  return (
+    <p className="text-xs text-muted-foreground" data-testid="effective-crawl">
+      <span className="font-medium text-foreground/80">Next run: </span>
+      <Tooltip content={effective.industries.length ? listTooltip(effective.industries.map(industryName)) : industries}>
+        <span className="underline decoration-dotted underline-offset-2">{industries}</span>
+      </Tooltip>
+      {fromSettings ? ' (Crawl settings)' : ' (this schedule)'} ·{' '}
+      <Tooltip content={effective.cities.length ? listTooltip(effective.cities) : cities}>
+        <span className="underline decoration-dotted underline-offset-2">{cities}</span>
+      </Tooltip>{' '}
+      · batch {formatNumber(effective.batchSize)} ({formatNumber(effective.maxSearches)} search
+      {effective.maxSearches === 1 ? '' : 'es'}, up to {effective.maxPages} page{effective.maxPages === 1 ? '' : 's'})
+    </p>
+  );
+}
+
 function ScheduleGroupCard({
   group,
   canEdit,
   paused,
+  industryName,
   onAdd,
   onDelete,
+  onEditIndustries,
 }: {
   group: ScheduleGroup;
   canEdit: boolean;
   paused: boolean;
+  industryName: (slug: string) => string;
   onAdd: () => void;
   onDelete: (target: PendingDelete) => void;
+  onEditIndustries: (schedule: Schedule) => void;
 }) {
   const next = [...group.schedules].sort((a, b) => a.nextRunAt.localeCompare(b.nextRunAt))[0];
   return (
@@ -156,31 +198,48 @@ function ScheduleGroupCard({
         )}
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="flex flex-wrap gap-2">
-          {group.schedules.map((s) => (
-            <span
-              key={s.id}
-              className="group inline-flex items-center gap-1.5 rounded-md border bg-muted/40 py-1 pr-1 pl-2.5 text-sm font-medium tabular-nums"
-            >
-              <Clock className="size-3.5 text-muted-foreground" />
-              {s.time}
-              <span className="text-xs font-normal text-muted-foreground">{s.timezone.split('/').pop()?.replace(/_/g, ' ')}</span>
-              <span className="rounded border bg-background/80 px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground">
-                {s.industries && s.industries.length > 0 ? `${s.industries.length} custom industries` : 'Crawl settings industries'}
-              </span>
-              {canEdit && (
-                <button
-                  type="button"
-                  onClick={() => onDelete({ kind: 'one', schedule: s })}
-                  className="rounded p-0.5 text-muted-foreground opacity-60 transition hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
-                  aria-label={`Delete ${s.time} schedule`}
-                >
-                  <Trash2 className="size-3.5" />
-                </button>
-              )}
-            </span>
-          ))}
-        </div>
+        <ul className="divide-y rounded-lg border" aria-label={`${group.country} schedules`}>
+          {group.schedules.map((s) => {
+            const custom = Boolean(s.industries && s.industries.length > 0);
+            return (
+              <li key={s.id} className="group space-y-1 px-3 py-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="inline-flex items-center gap-1.5 text-sm font-medium tabular-nums">
+                    <Clock className="size-3.5 text-muted-foreground" />
+                    {s.time}
+                    <span className="text-xs font-normal text-muted-foreground">{zoneCity(s.timezone)}</span>
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <Badge variant={custom ? 'secondary' : 'muted'} className="text-[10px]">
+                      {custom ? `${s.industries!.length} custom industries` : 'Crawl settings industries'}
+                    </Badge>
+                    {canEdit && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => onEditIndustries(s)}
+                          className="rounded p-0.5 text-muted-foreground opacity-60 transition hover:bg-muted hover:text-foreground group-hover:opacity-100"
+                          aria-label={`Change industries for ${s.time} schedule`}
+                        >
+                          <Tags className="size-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onDelete({ kind: 'one', schedule: s })}
+                          className="rounded p-0.5 text-muted-foreground opacity-60 transition hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
+                          aria-label={`Delete ${s.time} schedule`}
+                        >
+                          <Trash2 className="size-3.5" />
+                        </button>
+                      </>
+                    )}
+                  </span>
+                </div>
+                {s.effective && <EffectiveCrawl effective={s.effective} industryName={industryName} />}
+              </li>
+            );
+          })}
+        </ul>
         {next && (
           <div className="flex items-center justify-between rounded-lg bg-muted/40 px-3 py-2 text-xs">
             <span className="text-muted-foreground">{paused ? 'Next slot (skipped while paused)' : 'Next run'}</span>
@@ -356,6 +415,10 @@ export function SchedulesView() {
   const [addOpen, setAddOpen] = useState(false);
   const [addCountry, setAddCountry] = useState<string | undefined>();
   const [pending, setPending] = useState<PendingDelete | null>(null);
+  const [editing, setEditing] = useState<Schedule | null>(null);
+  const industries = useDiscoveryIndustries();
+  const industryNames = new Map((industries.data?.industries ?? []).map((i) => [i.slug, i.name]));
+  const industryName = (slug: string) => industryNames.get(slug) ?? slug;
 
   const remove = useApiMutation(
     (target: PendingDelete) =>
@@ -386,7 +449,7 @@ export function SchedulesView() {
     <div className="space-y-8">
       <PageHeader
         title="Target region schedule"
-        description="Daily country crawls at a fixed local time. Each run spends a capped number of API calls and picks up where the last one stopped."
+        description="Where and when to crawl: each schedule is a country and a daily local time. How each run crawls (engine, mode, run limits, batch size, pages, cities and industries) comes from Crawl & Pipeline Settings."
         actions={
           <div className="flex items-center gap-3">
             {crawlSettings &&
@@ -455,8 +518,10 @@ export function SchedulesView() {
                 group={group}
                 canEdit={canEdit}
                 paused={paused}
+                industryName={industryName}
                 onAdd={() => openAdd(group.countryCode)}
                 onDelete={setPending}
+                onEditIndustries={setEditing}
               />
             ))}
           </div>
@@ -509,6 +574,13 @@ export function SchedulesView() {
       </Card>
 
       <AddScheduleDialog open={addOpen} onOpenChange={setAddOpen} defaultCountry={addCountry} />
+
+      <ScheduleIndustriesDialog
+        key={editing?.id ?? 'closed'}
+        schedule={editing}
+        targetIndustries={crawlSettings?.targetIndustries ?? []}
+        onClose={() => setEditing(null)}
+      />
 
       <AlertDialog open={Boolean(pending)} onOpenChange={(o) => !o && setPending(null)}>
         <AlertDialogContent>

@@ -135,6 +135,8 @@ function setup(
     savedColor?: string;
     install?: Partial<typeof INSTALL> & { widgetUrl?: string | null };
     widget?: Record<string, unknown>;
+    /** Widget fields MonCha leaves out of what PUT widget saves. */
+    notSaved?: string[];
   } = {},
 ) {
   const snapshot = siteSnapshotFixture({
@@ -161,7 +163,8 @@ function setup(
     },
     updateWidget: async ({ config }) => {
       calls.push({ method: 'PUT widget', config });
-      const saved = { ...config, primaryColor: options.savedColor ?? config.primaryColor };
+      const saved: Record<string, unknown> = { ...config, primaryColor: options.savedColor ?? config.primaryColor };
+      for (const field of options.notSaved ?? []) delete saved[field];
       return { config: saved, response: { config: saved } };
     },
     install: async () => {
@@ -363,7 +366,7 @@ describe('setChatbotAvatarForLiveUrl', () => {
   const iconUrl = 'https://acclaim-sg.x.workers.dev/assets/acclaim.sg/apple-touch-icon.png';
   const input = { tenantId: 't1', leadId: 'lead1', workerUrl: 'https://acclaim-sg.x.workers.dev', manifest, brand: null };
 
-  it('sets botIconUrl, launcherIconUrl, and a white avatar background, keeping every other widget field', async () => {
+  it('sets the website logo on the avatar and the launcher button, both on white, keeping every other widget field', async () => {
     const t = setup();
     const result = await setChatbotAvatarForLiveUrl({ bots: t.deps.bots, api: t.deps.api, logger, now: () => NOW }, input);
     expect(result).toEqual({ botIconUrl: iconUrl, changed: true });
@@ -376,15 +379,39 @@ describe('setChatbotAvatarForLiveUrl', () => {
         botIconUrl: iconUrl,
         botAvatarBgColor: CHATBOT_AVATAR_BG,
         launcherIconUrl: iconUrl,
+        iconBgColor: CHATBOT_AVATAR_BG,
       },
     });
     expect(t.botPatches.at(-1)).toMatchObject({ widgetConfiguredAt: NOW });
   });
 
   it('does not PUT when the widget already shows it', async () => {
-    const t = setup({ widget: { botIconUrl: iconUrl, botAvatarBgColor: '#ffffff', launcherIconUrl: iconUrl } });
+    const t = setup({
+      widget: { botIconUrl: iconUrl, botAvatarBgColor: '#ffffff', launcherIconUrl: iconUrl, iconBgColor: '#ffffff' },
+    });
     expect(await setChatbotAvatarForLiveUrl({ bots: t.deps.bots, api: t.deps.api, logger }, input)).toEqual({ botIconUrl: iconUrl, changed: false });
     expect(t.calls.map((c) => c.method)).toEqual(['GET widget']);
+  });
+
+  it('updates a bot whose avatar is set but whose launcher still shows the chat bubble', async () => {
+    const t = setup({ widget: { botIconUrl: iconUrl, botAvatarBgColor: '#FFFFFF' } });
+    expect(await setChatbotAvatarForLiveUrl({ bots: t.deps.bots, api: t.deps.api, logger }, input)).toEqual({ botIconUrl: iconUrl, changed: true });
+    expect(t.calls.at(-1)).toMatchObject({ config: { launcherIconUrl: iconUrl, iconBgColor: CHATBOT_AVATAR_BG } });
+  });
+
+  it('turns a transparent launcher background white so the logo stays visible', async () => {
+    const t = setup({
+      widget: { botIconUrl: iconUrl, botAvatarBgColor: '#FFFFFF', launcherIconUrl: iconUrl, iconBgColor: '#FFFFFF', transparentIconBg: true },
+    });
+    expect(await setChatbotAvatarForLiveUrl({ bots: t.deps.bots, api: t.deps.api, logger }, input)).toEqual({ botIconUrl: iconUrl, changed: true });
+    expect(t.calls.at(-1)).toMatchObject({ config: { transparentIconBg: false, iconBgColor: CHATBOT_AVATAR_BG } });
+  });
+
+  it('fails when MonCha does not keep the launcher logo', async () => {
+    const t = setup({ notSaved: ['launcherIconUrl'] });
+    await expect(setChatbotAvatarForLiveUrl({ bots: t.deps.bots, api: t.deps.api, logger }, input)).rejects.toMatchObject({
+      code: 'widget_launcher_not_saved',
+    });
   });
 
   it('skips without a created bot', async () => {
@@ -400,6 +427,7 @@ describe('setChatbotAvatarForLiveUrl', () => {
         botIconUrl: 'https://acclaim-sg.x.workers.dev/assets/x/pfavico.ico',
         botAvatarBgColor: '#FFFFFF',
         launcherIconUrl: 'https://acclaim-sg.x.workers.dev/assets/x/pfavico.ico',
+        iconBgColor: '#FFFFFF',
       },
     });
     expect(await setChatbotAvatarForLiveUrl({ bots: ours.deps.bots, api: ours.deps.api, logger }, noImage)).toEqual({

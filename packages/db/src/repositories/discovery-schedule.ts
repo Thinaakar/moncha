@@ -67,6 +67,12 @@ export class PrismaDiscoveryScheduleRepository implements DiscoveryScheduleRepo 
     return res.count;
   }
 
+  async setIndustries(tenantId: string, id: string, industries: string[]) {
+    const res = await this.db.discoverySchedule.updateMany({ where: { tenantId, id }, data: { industries } });
+    if (!res.count) return null;
+    return this.db.discoverySchedule.findFirst({ where: { tenantId, id } });
+  }
+
   due(now: Date, limit: number) {
     return this.db.discoverySchedule.findMany({
       where: { enabled: true, nextRunAt: { lte: now } },

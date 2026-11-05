@@ -39,6 +39,8 @@ import { useCrawlSettingsForm } from './use-crawl-settings-form';
 const SAMPLE_COMPANY = 'Car Battery SG';
 const SAMPLE_DEMO_URL = 'https://carbattery-sg.vinothjv4-tech.workers.dev';
 const HOURS = Array.from({ length: 24 }, (_, h) => h);
+const HEADER_DESCRIPTION =
+  'The one place automation is controlled. These settings decide how every crawl runs: Target region schedules, auto-recrawl and Run crawl now. Schedules only choose the country and the time (and may keep their own industries).';
 
 function PageSkeleton() {
   return (
@@ -76,7 +78,7 @@ export function CrawlSettingsView() {
   const header = (
     <PageHeader
       title="Crawl & Pipeline Settings"
-      description="The one place automation is controlled: crawling, website copies, cold emails and follow-ups."
+      description={HEADER_DESCRIPTION}
     />
   );
 
@@ -167,7 +169,7 @@ export function CrawlSettingsView() {
     <div className="space-y-6 pb-12">
       <PageHeader
         title="Crawl & Pipeline Settings"
-        description="The one place automation is controlled: crawling, website copies, cold emails and follow-ups."
+        description={HEADER_DESCRIPTION}
         actions={
           <>
             {form.dirty && (

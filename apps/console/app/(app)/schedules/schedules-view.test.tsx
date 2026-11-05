@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { renderWithClient } from '@/test/render';
 import { crawlSettings, discoveryOptions, pipelineStatus, progress } from '@/test/fixtures';
-import type { CrawlPipelineSettingsView, ScheduleSkip } from '@/lib/types';
+import type { CrawlPipelineSettingsView, Schedule, ScheduleSkip } from '@/lib/types';
 
 const apiMock = vi.hoisted(() => vi.fn());
 
@@ -47,10 +47,16 @@ function backend(
     settings?: Partial<CrawlPipelineSettingsView>;
     skips?: ScheduleSkip[];
     usage?: { crawlsRunToday: number; scheduledRunsToday: number };
-    groups?: typeof scheduleGroups;
+    groups?: { countries: Array<{ countryCode: string; country: string; timesPerDay: number; schedules: Schedule[] }> };
+    industries?: Array<{ id: string; name: string; slug: string; category: string; isDefault: boolean }>;
   } = {},
 ) {
-  apiMock.mockImplementation(async (path: string) => {
+  const patches: Array<{ path: string; body: unknown }> = [];
+  apiMock.mockImplementation(async (path: string, init?: { method?: string; body?: unknown }) => {
+    if (init?.method === 'PATCH' && path.startsWith('schedules/')) {
+      patches.push({ path, body: init.body });
+      return { ...scheduleGroups.countries[0]!.schedules[0]!, ...(init.body as object) };
+    }
     if (path === 'schedules') return opts.groups ?? scheduleGroups;
     if (path === 'schedules/runs') return { runs: [] };
     if (path === 'schedules/skips') return { skips: opts.skips ?? [] };
@@ -67,9 +73,10 @@ function backend(
         progress(opts.usage ?? {}),
       );
     if (path === 'discovery/options') return discoveryOptions;
-    if (path === 'discovery/industries') return { industries: [] };
+    if (path === 'discovery/industries') return { industries: opts.industries ?? [] };
     throw new Error(`unexpected api call ${path}`);
   });
+  return { patches };
 }
 
 /** A Singapore slot later today, for the today's-plan checks. */
@@ -177,5 +184,85 @@ describe('Target region schedule page', () => {
     backend(true, { groups: todayGroups });
     renderWithClient(<SchedulesView />);
     expect(await screen.findByText('2 custom industries')).toBeTruthy();
+  });
+
+  it('shows the crawl each schedule inherits from the Crawl settings', async () => {
+    const schedule = scheduleGroups.countries[0]!.schedules[0]!;
+    backend(true, {
+      groups: {
+        countries: [
+          {
+            ...scheduleGroups.countries[0]!,
+            schedules: [
+              {
+                ...schedule,
+                effective: {
+                  industriesFrom: 'crawl_settings',
+                  industries: ['gym', 'spa', 'bakery'],
+                  cities: ['Kuala Lumpur'],
+                  batchSize: 45,
+                  maxSearches: 3,
+                  maxPages: 2,
+                },
+              },
+              {
+                ...schedule,
+                id: 's2',
+                time: '15:00',
+                industries: ['dentist'],
+                effective: { industriesFrom: 'schedule', industries: ['dentist'], cities: [], batchSize: 45, maxSearches: 3, maxPages: 2 },
+              },
+            ],
+          },
+        ],
+      },
+    });
+    renderWithClient(<SchedulesView />);
+    const [first, second] = await screen.findAllByTestId('effective-crawl');
+    expect(first!.textContent).toBe(
+      'Next run: 3 target industries (Crawl settings) · 1 target city · batch 45 (3 searches, up to 2 pages)',
+    );
+    expect(second!.textContent).toBe('Next run: 1 custom industry (this schedule) · all cities · batch 45 (3 searches, up to 2 pages)');
+  });
+
+  it('switches a schedule back to the Crawl settings industries', async () => {
+    const { patches } = backend(true, { groups: todayGroups });
+    renderWithClient(<SchedulesView />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Change industries for 23:59 schedule' }));
+    const custom = await screen.findByRole('radio', { name: /Custom industries for this schedule/ });
+    expect((custom as HTMLInputElement).checked).toBe(true);
+
+    fireEvent.click(screen.getByRole('radio', { name: /Use the industries from Crawl & Pipeline Settings/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(patches).toEqual([{ path: 'schedules/s9', body: { industries: [] } }]));
+  });
+
+  it('gives a schedule its own industries, starting from the Crawl settings picks', async () => {
+    const { patches } = backend(true, {
+      settings: { targetIndustries: ['dentist'] },
+      industries: [
+        { id: 'i1', name: 'Dentist', slug: 'dentist', category: 'Healthcare', isDefault: true },
+        { id: 'i2', name: 'Gym', slug: 'gym', category: 'Fitness', isDefault: true },
+      ],
+    });
+    renderWithClient(<SchedulesView />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Change industries for 10:00 schedule' }));
+    expect(((await screen.findByRole('radio', { name: /Use the industries from Crawl/ })) as HTMLInputElement).checked).toBe(true);
+
+    fireEvent.click(screen.getByRole('radio', { name: /Custom industries for this schedule/ }));
+    expect(((await screen.findByRole('checkbox', { name: 'Dentist' })) as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Gym' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(patches).toEqual([{ path: 'schedules/s1', body: { industries: ['dentist', 'gym'] } }]));
+  });
+
+  it('refuses an empty custom industry list', async () => {
+    const { patches } = backend(true);
+    renderWithClient(<SchedulesView />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Change industries for 10:00 schedule' }));
+    fireEvent.click(await screen.findByRole('radio', { name: /Custom industries for this schedule/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect((await screen.findByRole('alert')).textContent).toContain('Pick at least one industry');
+    expect(patches).toEqual([]);
   });
 });

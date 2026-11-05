@@ -472,7 +472,7 @@ export async function setChatbotDomainsForLiveUrl(
   return { domains: result.domains };
 }
 
-/** Background behind the bot's profile picture, so dark and transparent logos stay visible. */
+/** Background behind the bot's profile picture and the launcher button's logo, so dark and transparent logos stay visible. */
 export const CHATBOT_AVATAR_BG = '#FFFFFF';
 /** Site icons smaller than this (16/32 px favicons) turn blurry in the avatar. */
 export const AVATAR_MIN_ICON_PX = 48;
@@ -571,9 +571,10 @@ export type ChatbotAvatarDeps = {
 
 /**
  * After a Worker deploy: the bot's profile picture (botIconUrl) and launcher button (launcherIconUrl) become the website's
- * icon or logo as the live copy serves it, on a white background for the avatar. When the copy has no usable image,
- * a picture taken earlier from this same Worker is removed (initials again); one set by someone else is left alone.
- * Null when the lead has no created bot; `changed: false` when the widget already matches. Throws MonCha API errors.
+ * icon or logo as the live copy serves it, both on a white background (botAvatarBgColor, iconBgColor). When the copy has
+ * no usable image, a picture taken earlier from this same Worker is removed (initials and the chat bubble again); one set
+ * by someone else is left alone. Null when the lead has no created bot; `changed: false` when the widget already
+ * matches. Throws MonCha API errors, and when PUT widget does not keep the avatar or the launcher logo.
  */
 export async function setChatbotAvatarForLiveUrl(
   deps: ChatbotAvatarDeps,
@@ -597,16 +598,27 @@ export async function setChatbotAvatarForLiveUrl(
   const before = await deps.api.widget({ botId: bot.chatbotId, signal: input.signal });
   const current = typeof before.config.botIconUrl === 'string' ? before.config.botIconUrl : null;
   const currentLauncher = typeof before.config.launcherIconUrl === 'string' ? before.config.launcherIconUrl : null;
-  const bg = typeof before.config.botAvatarBgColor === 'string' ? before.config.botAvatarBgColor.toUpperCase() : null;
+  const color = (value: unknown) => (typeof value === 'string' ? value.toUpperCase() : null);
+  const bg = color(before.config.botAvatarBgColor);
+  const launcherBg = color(before.config.iconBgColor);
+  const transparentLauncher = before.config.transparentIconBg === true;
   let config: WidgetConfig;
   if (botIconUrl) {
-    if (current === botIconUrl && currentLauncher === botIconUrl && bg === CHATBOT_AVATAR_BG) {
+    if (
+      current === botIconUrl &&
+      currentLauncher === botIconUrl &&
+      bg === CHATBOT_AVATAR_BG &&
+      launcherBg === CHATBOT_AVATAR_BG &&
+      !transparentLauncher
+    ) {
       return { botIconUrl, changed: false };
     }
     config = widgetConfigWith(before.config, {
       botIconUrl,
       botAvatarBgColor: CHATBOT_AVATAR_BG,
       launcherIconUrl: botIconUrl,
+      iconBgColor: CHATBOT_AVATAR_BG,
+      ...(transparentLauncher ? { transparentIconBg: false } : {}),
     });
   } else {
     const origin = urlOrigin(input.workerUrl);
@@ -615,6 +627,7 @@ export async function setChatbotAvatarForLiveUrl(
     delete config.botIconUrl;
     delete config.botAvatarBgColor;
     delete config.launcherIconUrl;
+    delete config.iconBgColor;
   }
 
   const after = await deps.api.updateWidget({ botId: bot.chatbotId, config, signal: input.signal });
@@ -622,9 +635,17 @@ export async function setChatbotAvatarForLiveUrl(
     widgetConfig: after.response,
     widgetConfiguredAt: (deps.now ?? (() => new Date()))(),
   });
-  const saved = typeof after.config.botIconUrl === 'string' && after.config.botIconUrl ? after.config.botIconUrl : null;
+  const savedUrl = (value: unknown) => (typeof value === 'string' && value ? value : null);
+  const saved = savedUrl(after.config.botIconUrl);
   if (saved !== botIconUrl) {
     throw new SiteChatbotError('widget_icon_not_saved', `PUT widget answered botIconUrl ${saved ?? 'missing'} instead of ${botIconUrl ?? 'none'}`);
+  }
+  const savedLauncher = savedUrl(after.config.launcherIconUrl);
+  if (savedLauncher !== botIconUrl) {
+    throw new SiteChatbotError(
+      'widget_launcher_not_saved',
+      `PUT widget answered launcherIconUrl ${savedLauncher ?? 'missing'} instead of ${botIconUrl ?? 'none'}`,
+    );
   }
   deps.logger.info(botIconUrl ? 'site_chatbot_avatar_set' : 'site_chatbot_avatar_cleared', {
     tenantId: input.tenantId,

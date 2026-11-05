@@ -66,6 +66,23 @@ export type ScheduleView = {
   nextRunDay: string;
   lastRunAt: string | null;
   industries?: string[];
+  /** What the next run crawls with the current crawl settings; listed only when the settings are known. */
+  effective?: ScheduleEffectiveCrawl;
+};
+
+/**
+ * The crawl a schedule runs with the crawl settings: its own country, its own industries when it has them, everything
+ * else from the settings. Worked out again from the latest settings for every run, never stored on the schedule.
+ */
+export type ScheduleEffectiveCrawl = {
+  industriesFrom: 'crawl_settings' | 'schedule';
+  /** Empty: every standard industry. */
+  industries: string[];
+  /** Empty: every search area of the country (the target cities apply only to the target country). */
+  cities: string[];
+  batchSize: number;
+  maxSearches: number;
+  maxPages: number;
 };
 
 export type CountryScheduleGroup = {
@@ -110,7 +127,7 @@ function countryOrThrow(input: string) {
   return profile;
 }
 
-function toView(s: DiscoveryScheduleRecord, now: Date): ScheduleView {
+function toView(s: DiscoveryScheduleRecord, now: Date, settings?: ScheduleCrawlSettings | null): ScheduleView {
   return {
     id: s.id,
     countryCode: s.countryCode,
@@ -121,7 +138,19 @@ function toView(s: DiscoveryScheduleRecord, now: Date): ScheduleView {
     nextRunDay: relativeDay(s.nextRunAt, s.timezone, now),
     lastRunAt: s.lastRunAt?.toISOString() ?? null,
     industries: s.industries?.length ? s.industries : undefined,
+    ...(settings ? { effective: effectiveScheduleCrawl(s, settings) } : {}),
   };
+}
+
+/** Lower-case, trimmed and without repeats; the same rule for new schedules and edits. */
+function normalizeIndustries(industries: string[] | undefined): string[] {
+  return [...new Set((industries ?? []).map((i) => i.trim().toLowerCase()).filter(Boolean))];
+}
+
+type ScheduleSettingsDeps = ScheduleDeps & { crawlSettings?: ScheduleCrawlSettingsSource };
+
+async function settingsFor(deps: ScheduleSettingsDeps, tenantId: string) {
+  return deps.crawlSettings ? deps.crawlSettings.get(tenantId) : null;
 }
 
 export async function createSchedule(
@@ -134,7 +163,7 @@ export async function createSchedule(
   const timezone = input.timezone?.trim() || DEFAULT_SCHEDULE_TIMEZONE;
   if (!isValidTimeZone(timezone)) throw new ScheduleError('validation_error', `Unknown time zone "${timezone}"`);
 
-  const industries = input.industries?.map((i) => i.trim().toLowerCase()).filter(Boolean);
+  const industries = normalizeIndustries(input.industries);
 
   const now = deps.now?.() ?? new Date();
   const created = await deps.schedules.create({
@@ -143,17 +172,38 @@ export async function createSchedule(
     timeOfDay: time,
     timezone,
     nextRunAt: computeNextRun(time, timezone, now),
-    ...(industries && industries.length > 0 ? { industries } : {}),
+    ...(industries.length > 0 ? { industries } : {}),
   });
   if (!created) throw new ScheduleError('conflict', `${profile.name} is already scheduled at ${time}`);
   return toView(created, now);
 }
 
-export async function listSchedules(deps: ScheduleDeps, input: { tenantId: string }): Promise<CountryScheduleGroup[]> {
+/**
+ * Switches a schedule between the crawl settings' industries (`industries` empty) and its own list. Nothing else of the
+ * crawl is stored on the schedule, so this is the only crawl option a schedule can change.
+ */
+export async function updateScheduleIndustries(
+  deps: ScheduleSettingsDeps,
+  input: { tenantId: string; id: string; industries: string[] },
+): Promise<ScheduleView> {
+  if (!deps.schedules.setIndustries) {
+    throw new ScheduleError('validation_error', 'Changing schedule industries is not supported by this server');
+  }
+  const updated = await deps.schedules.setIndustries(input.tenantId, input.id, normalizeIndustries(input.industries));
+  if (!updated) throw new ScheduleError('not_found', 'Schedule not found');
+  return toView(updated, deps.now?.() ?? new Date(), await settingsFor(deps, input.tenantId));
+}
+
+/** With `crawlSettings`, each schedule also shows the crawl its next run gets from the current settings. */
+export async function listSchedules(
+  deps: ScheduleSettingsDeps,
+  input: { tenantId: string },
+): Promise<CountryScheduleGroup[]> {
   const now = deps.now?.() ?? new Date();
   const groups = new Map<string, CountryScheduleGroup>();
+  const settings = await settingsFor(deps, input.tenantId);
   for (const s of await deps.schedules.list(input.tenantId)) {
-    const view = toView(s, now);
+    const view = toView(s, now, settings);
     let group = groups.get(s.countryCode);
     if (!group) {
       group = { countryCode: s.countryCode, country: view.country, timesPerDay: 0, schedules: [] };
@@ -279,17 +329,31 @@ export async function listScheduleSkips(
   }));
 }
 
-/** Crawl shape of a scheduled run: the schedule's own country, the rest from the crawl settings. */
+export function effectiveScheduleCrawl(
+  schedule: Pick<DiscoveryScheduleRecord, 'countryCode' | 'industries'>,
+  settings: ScheduleCrawlSettings,
+): ScheduleEffectiveCrawl {
+  const own = schedule.industries?.length ? schedule.industries : null;
+  const countryCode = resolveCountry(schedule.countryCode)?.code ?? schedule.countryCode;
+  const sameCountry = resolveCountry(settings.targetCountry)?.code === countryCode;
+  return {
+    industriesFrom: own ? 'schedule' : 'crawl_settings',
+    industries: own ?? settings.targetIndustries,
+    cities: sameCountry ? settings.targetCities : [],
+    batchSize: settings.crawlBatchSize,
+    ...crawlBatchLimits(settings),
+  };
+}
+
+/** Job payload fields of a scheduled run, from effectiveScheduleCrawl. */
 function scheduledCrawlShape(
   schedule: DiscoveryScheduleRecord,
-  countryCode: string,
   settings: ScheduleCrawlSettings,
 ): Pick<CountryDiscoveryJobPayload, 'cities' | 'industries' | 'maxPages' | 'maxSearches'> {
-  const industries = schedule.industries?.length ? schedule.industries : settings.targetIndustries;
-  const sameCountry = resolveCountry(settings.targetCountry)?.code === countryCode;
-  const cities = sameCountry ? settings.targetCities : [];
+  const { industries, cities, maxSearches, maxPages } = effectiveScheduleCrawl(schedule, settings);
   return {
-    ...crawlBatchLimits(settings),
+    maxSearches,
+    maxPages,
     ...(industries.length ? { industries } : {}),
     ...(cities.length ? { cities } : {}),
   };
@@ -335,7 +399,7 @@ export async function enqueueDueSchedules(
           settings = await deps.crawlSettings.get(s.tenantId);
           settingsByTenant.set(s.tenantId, settings);
         }
-        shape = scheduledCrawlShape(s, profile.code, settings);
+        shape = scheduledCrawlShape({ ...s, countryCode: profile.code }, settings);
         const targetError = shape.cities ? crawlTargetError(profile.code, shape.cities) : null;
         const reason: ScheduleSkipReason | null = !settings.active
           ? 'engine_paused'

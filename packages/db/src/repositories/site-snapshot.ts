@@ -183,12 +183,39 @@ export class PrismaSiteSnapshotRepository implements SiteSnapshotRepo, SitePipel
     return rows.map(mapListItem);
   }
 
-  async list(tenantId: string, query: SiteSnapshotListQuery) {
+  /**
+   * Live copies (siteCopyProgress ends at `live`): done, GitHub pushed or not used, Worker deployed, and with the
+   * chatbot installed the live hostname is in the lead's bot domains. Without the chatbot step a deployed copy is live
+   * only when the chatbot is not configured.
+   */
+  private async liveIds(tenantId: string, chatbotEnabled: boolean): Promise<string[]> {
+    const rows = await this.db.$queryRaw<Array<{ id: string }>>`
+      SELECT s.id FROM "SiteSnapshot" s
+      LEFT JOIN "LeadBot" b ON b."leadId" = s."leadId" AND b.status = 'created'
+      WHERE s."tenantId" = ${tenantId}
+        AND s.status = 'done'
+        AND s."workerStatus" = 'deployed'
+        AND s."workerUrl" IS NOT NULL
+        AND (s."githubStatus" IS NULL OR s."githubStatus" = 'pushed')
+        AND (
+          (s."chatbotStatus" = 'installed'
+            AND jsonb_typeof(b.domains) = 'array'
+            AND EXISTS (
+              SELECT 1 FROM jsonb_array_elements_text(b.domains) d
+              WHERE lower(d) = lower(substring(s."workerUrl" from '^https?://([^/:?#]+)'))
+            ))
+          OR (s."chatbotStatus" IS NULL AND ${!chatbotEnabled})
+        )`;
+    return rows.map((r) => r.id);
+  }
+
+  async list(tenantId: string, query: SiteSnapshotListQuery, options: { chatbotEnabled?: boolean } = {}) {
     const page = clampPage(query.page);
     const pageSize = clampPageSize(query.pageSize);
     const search = query.search?.trim();
     const where: Prisma.SiteSnapshotWhereInput = {
       tenantId,
+      ...(query.pipeline === 'complete' ? { id: { in: await this.liveIds(tenantId, Boolean(options.chatbotEnabled)) } } : {}),
       ...(query.status ? { status: query.status } : {}),
       ...(query.origin ? { origin: query.origin } : {}),
       ...(search
