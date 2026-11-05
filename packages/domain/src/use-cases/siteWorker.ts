@@ -9,8 +9,11 @@ import {
   type SiteWorkerFile,
 } from '../ports';
 import {
+  CHATBOT_ICON_PATH,
   type ChatbotAvatarDeps,
   type ChatbotDomainsDeps,
+  chatbotIconPlan,
+  chatbotSquareIconSvg,
   setChatbotAvatarForLiveUrl,
   setChatbotDomainsForLiveUrl,
 } from './siteChatbot';
@@ -90,6 +93,19 @@ export async function deploySiteSnapshotToWorker(
       .filter((f) => f.bytes.byteLength > 0 && f.bytes.byteLength <= SITE_WORKER_MAX_FILE_BYTES)
       .map((f) => ({ path: f.path, bytes: f.bytes, contentType: f.contentType }));
 
+    // A picture that is not square is published as a padded square icon, so the round chatbot avatar shows all of it.
+    const bytesByPath = new Map(stored.map((f) => [f.key, f.bytes]));
+    const readAsset = async (asset: { storedPath: string }) => bytesByPath.get(asset.storedPath) ?? null;
+    const icon = deps.avatar ? await chatbotIconPlan(manifest, snapshot.brand, readAsset).catch(() => null) : null;
+    const publishedIcon = Boolean(icon?.padded && icon.bytes);
+    if (icon?.padded && icon.bytes) {
+      files.push({
+        path: `/${CHATBOT_ICON_PATH}`,
+        bytes: new TextEncoder().encode(chatbotSquareIconSvg(icon.bytes, icon.asset.contentType, icon.background)),
+        contentType: 'image/svg+xml',
+      });
+    }
+
     const result = await deps.deployer.deploy({ name, files, signal });
     await deps.snapshots.update(tenantId, snapshotId, {
       workerStatus: 'deployed',
@@ -124,14 +140,14 @@ export async function deploySiteSnapshotToWorker(
 
     if (deps.avatar) {
       try {
-        const bytesByPath = new Map(stored.map((f) => [f.key, f.bytes]));
         await setChatbotAvatarForLiveUrl(deps.avatar, {
           tenantId,
           leadId: snapshot.leadId,
           workerUrl: result.url,
           manifest,
           brand: snapshot.brand,
-          readAsset: async (asset) => bytesByPath.get(asset.storedPath) ?? null,
+          readAsset,
+          publishedIcon,
           signal,
         });
       } catch (error) {

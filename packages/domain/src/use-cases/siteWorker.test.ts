@@ -143,6 +143,47 @@ describe('site Worker deploy', () => {
     expect(patches[0]!.workerError).toContain('copy_files_missing');
   });
 
+  it('publishes a square chatbot icon for a wide logo and points the chatbot at it', async () => {
+    const logo = { ...asset('assets/ja.edu.sg/logo.png', 'image/png'), kind: 'image' as const, bytes: 4_000 };
+    const { deps, calls } = setup(ok, {
+      'sites/t1/snap1/manifest.json': JSON.stringify({ assets: [logo] }),
+      'sites/t1/snap1/index.html': '<html>',
+    });
+    const png = new Uint8Array(33);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    new DataView(png.buffer).setUint32(16, 300);
+    new DataView(png.buffer).setUint32(20, 100);
+    const getBytes = deps.store.getBytes;
+    deps.store.getBytes = async (key) => (key.endsWith('logo.png') ? png : getBytes(key));
+
+    const saved: Array<Record<string, unknown>> = [];
+    const avatar = {
+      bots: {
+        getForLead: async () => ({ id: 'bot1', status: 'created', chatbotId: 'mb-1' }),
+        update: async () => null,
+      } as never,
+      api: {
+        widget: async () => ({ config: {}, response: {} }),
+        updateWidget: async ({ config }: { config: Record<string, unknown> }) => {
+          saved.push(config);
+          return { config, response: { config } };
+        },
+      },
+      logger: createConsoleLogger(),
+    };
+    const brand = { logo: { assetId: logo.id } } as never;
+    const outcome = await deploySiteSnapshotToWorker({ ...deps, avatar }, snapshot({ workerStatus: 'deploying', workerAttempts: 1, brand }));
+
+    expect(outcome).toMatchObject({ status: 'deployed', files: 3 });
+    const icon = calls[0]!.files.find((f) => f.path === '/moncha-chatbot-icon.svg');
+    expect(icon?.contentType).toBe('image/svg+xml');
+    expect(new TextDecoder().decode(icon!.bytes)).toContain('href="data:image/png;base64,');
+    expect(saved[0]).toMatchObject({
+      botIconUrl: 'https://ja-edu-sg.vinothjv4-tech.workers.dev/moncha-chatbot-icon.svg',
+      launcherIconUrl: 'https://ja-edu-sg.vinothjv4-tech.workers.dev/moncha-chatbot-icon.svg',
+    });
+  });
+
   it('maps a deploy request that cannot run to an error', async () => {
     const busy = { requestWorkerDeploy: async () => 'busy' } as unknown as SiteSnapshotRepo;
     await expect(requestSiteWorkerDeploy({ snapshots: busy }, { tenantId: 't1', id: 'x' })).rejects.toBeInstanceOf(SiteWorkerRequestError);

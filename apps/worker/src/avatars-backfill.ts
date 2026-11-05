@@ -3,21 +3,28 @@
  * and the floating launcher bubble (launcherIconUrl) to the website's favicon (at least 48 px), else its logo,
  * as its Worker serves it, both on a white background. New deploys do this automatically; this covers copies deployed
  * before that, including bots whose avatar was set before the launcher logo was.
+ *
+ * A picture that is not square (a wide header logo) is shown whole only through the square icon a deploy publishes
+ * (moncha-chatbot-icon.svg). Those copies are listed as "needs redeploy"; --redeploy deploys them again now, which
+ * publishes the icon and sets it (and the allowed domain) on the chatbot. --force also redeploys copies whose chatbot
+ * already uses the square icon, to rebuild it.
  *   pnpm --filter @moncha/worker avatars:backfill -- --dry-run [--limit <n>]
- *   pnpm --filter @moncha/worker avatars:backfill [-- --tenant <id>] [-- --limit <n>] [-- --lead <id>]
+ *   pnpm --filter @moncha/worker avatars:backfill [-- --tenant <id>] [-- --limit <n>] [-- --lead <id>] [-- --redeploy [--force]]
  */
 import './env';
-import { prisma, PrismaLeadBotRepository } from '@moncha/db';
+import { prisma, PrismaLeadBotRepository, PrismaSiteSnapshotRepository } from '@moncha/db';
 import {
-  chatbotAvatarAsset,
-  chatbotIconSizes,
+  CHATBOT_ICON_PATH,
+  chatbotIconPlan,
   createConsoleLogger,
+  deploySiteSnapshotToWorker,
   liveAssetUrl,
   readSiteManifest,
   setChatbotAvatarForLiveUrl,
   type SiteBrand,
 } from '@moncha/domain';
 import { createMonchaInternalClientFromEnv, createR2SiteStoreFromEnv, MonchaInternalError } from '@moncha/integrations';
+import { siteWorkerDeployer } from './site-agent';
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(name);
@@ -32,6 +39,7 @@ type Candidate = {
   tenantId: string;
   leadId: string;
   chatbotId: string;
+  snapshotId: string;
   workerUrl: string;
   storagePrefix: string;
   brand: SiteBrand | null;
@@ -57,7 +65,7 @@ async function candidates(options: { tenantId?: string; leadId?: string; limit?:
             where: live,
             orderBy: [{ workerDeployedAt: 'desc' }, { createdAt: 'desc' }],
             take: 1,
-            select: { workerUrl: true, storagePrefix: true, brand: true },
+            select: { id: true, workerUrl: true, storagePrefix: true, brand: true },
           },
         },
       },
@@ -73,6 +81,7 @@ async function candidates(options: { tenantId?: string; leadId?: string; limit?:
         tenantId: bot.tenantId,
         leadId: bot.leadId,
         chatbotId: bot.chatbotId,
+        snapshotId: snap.id,
         workerUrl: snap.workerUrl,
         storagePrefix: snap.storagePrefix,
         brand: (snap.brand as SiteBrand | null) ?? null,
@@ -88,6 +97,10 @@ async function main() {
   if (!store) throw new Error('R2_* keys are not set in apps/worker/.env');
 
   const dryRun = process.argv.includes('--dry-run');
+  const redeploy = process.argv.includes('--redeploy');
+  const force = process.argv.includes('--force');
+  const deployer = redeploy ? siteWorkerDeployer() : null;
+  if (redeploy && !deployer) throw new Error('--redeploy needs CLOUDFLARE_API_TOKEN and the Workers settings in apps/worker/.env');
   const limitRaw = arg('--limit');
   const limit = limitRaw ? Math.max(1, Number(limitRaw)) : undefined;
   if (limitRaw && !Number.isFinite(limit)) throw new Error(`--limit must be a number (got ${limitRaw})`);
@@ -97,12 +110,16 @@ async function main() {
   if (!list.length) return;
 
   const bots = new PrismaLeadBotRepository(prisma);
+  const snapshots = new PrismaSiteSnapshotRepository(prisma);
   const logger = createConsoleLogger();
+  const avatarDeps = { bots, api: client, logger };
   const missing = () => new Error('manifest.json is not in R2');
   let ok = 0;
   let unchanged = 0;
   let skipped = 0;
   let failed = 0;
+  let needRedeploy = 0;
+  let redeployed = 0;
 
   for (const row of list) {
     let manifest;
@@ -117,24 +134,28 @@ async function main() {
     const readAsset = (asset: { storedPath: string }) => store.getBytes(`${row.storagePrefix}${asset.storedPath}`);
 
     if (dryRun) {
-      const sizes = await chatbotIconSizes(manifest, readAsset);
-      const asset = chatbotAvatarAsset(manifest, row.brand, sizes);
-      const url = asset ? liveAssetUrl(row.workerUrl, asset.storedPath) : null;
-      const size = asset ? sizes.get(asset.id) : undefined;
+      const plan = await chatbotIconPlan(manifest, row.brand, readAsset);
+      const url = plan ? liveAssetUrl(row.workerUrl, plan.asset.storedPath) : null;
       if (url) ok += 1;
       else skipped += 1;
+      if (plan?.padded) needRedeploy += 1;
+      const size = plan?.size ? ` ${plan.size.width}x${plan.size.height}` : '';
       console.log(
-        `${url ? 'would set' : 'no image'} lead=${row.leadId}${url ? ` ${asset!.kind === 'icon' ? 'favicon' : 'logo'}${size ? ` ${size.width}x${size.height}` : ''} ${url}` : ''}`,
+        `${url ? 'would set' : 'no image'} lead=${row.leadId}${url ? ` ${plan!.asset.kind === 'icon' ? 'favicon' : 'logo'}${size}${plan!.padded ? ' [square icon on redeploy]' : ''} ${url}` : ''}`,
       );
       continue;
     }
 
     for (let attempt = 0; attempt < 4; attempt++) {
       try {
-        const result = await setChatbotAvatarForLiveUrl(
-          { bots, api: client, logger },
-          { tenantId: row.tenantId, leadId: row.leadId, workerUrl: row.workerUrl, manifest, brand: row.brand, readAsset },
-        );
+        const result = await setChatbotAvatarForLiveUrl(avatarDeps, {
+          tenantId: row.tenantId,
+          leadId: row.leadId,
+          workerUrl: row.workerUrl,
+          manifest,
+          brand: row.brand,
+          readAsset,
+        });
         if (!result) {
           skipped += 1;
           console.log(`skip lead=${row.leadId} (no created bot)`);
@@ -147,6 +168,28 @@ async function main() {
         } else {
           ok += 1;
           console.log(`ok ${ok} lead=${row.leadId} ${result.botIconUrl}`);
+        }
+
+        const rebuild = force && Boolean(result?.botIconUrl?.endsWith(`/${CHATBOT_ICON_PATH}`));
+        if (result?.needsSquareIcon || rebuild) {
+          needRedeploy += 1;
+          if (!deployer) {
+            console.log(`needs redeploy lead=${row.leadId} (picture is not square; run again with --redeploy)`);
+          } else {
+            // Claimed like the poller does, so no other worker deploys this copy at the same time.
+            await prisma.siteSnapshot.update({
+              where: { id: row.snapshotId },
+              data: { workerStatus: 'deploying', workerAttempts: 1, workerLockedAt: new Date(), workerError: null },
+            });
+            const claimed = (await snapshots.get(row.tenantId, row.snapshotId))!;
+            const outcome = await deploySiteSnapshotToWorker(
+              { snapshots, store, deployer, logger, domains: { bots, api: client, logger }, avatar: avatarDeps },
+              claimed,
+            );
+            if (outcome.status === 'deployed') redeployed += 1;
+            else failed += 1;
+            console.log(`redeploy lead=${row.leadId} ${outcome.status}${'url' in outcome ? ` ${outcome.url}` : ''}${'error' in outcome ? ` ${outcome.error}` : ''}`);
+          }
         }
         break;
       } catch (error) {
@@ -165,7 +208,10 @@ async function main() {
     await sleep(150);
   }
 
-  console.log(`done: ${dryRun ? 'would_set' : 'set'}=${ok} unchanged=${unchanged} no_image=${skipped} failed=${failed}`);
+  console.log(
+    `done: ${dryRun ? 'would_set' : 'set'}=${ok} unchanged=${unchanged} no_image=${skipped} failed=${failed} ` +
+      `need_square_icon=${needRedeploy}${redeploy ? ` redeployed=${redeployed}` : ''}`,
+  );
   if (failed) process.exitCode = 1;
 }
 

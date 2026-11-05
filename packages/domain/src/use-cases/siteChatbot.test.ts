@@ -15,8 +15,11 @@ import {
   CHATBOT_AVATAR_BG,
   CHATBOT_EMBED_END,
   CHATBOT_EMBED_START,
+  CHATBOT_ICON_PATH,
   chatbotAvatarAsset,
   chatbotEmbed,
+  chatbotIconPlan,
+  chatbotSquareIconSvg,
   contrastWithWhite,
   embedValues,
   hostnameFromWorkerUrl,
@@ -442,5 +445,80 @@ describe('setChatbotAvatarForLiveUrl', () => {
       changed: false,
     });
     expect(theirs.calls.map((c) => c.method)).toEqual(['GET widget']);
+  });
+});
+
+/** A PNG header of the given pixel size (enough for imageSize). */
+function pngOf(width: number, height: number): Uint8Array {
+  const b = new Uint8Array(33);
+  b.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const v = new DataView(b.buffer);
+  v.setUint32(16, width);
+  v.setUint32(20, height);
+  return b;
+}
+
+describe('square chatbot icon for pictures that are not square', () => {
+  const wideLogo = asset('logo', 'assets/bh.sg/logo.png', 'image', 'image/png', 4_000);
+  const files: Record<string, Uint8Array> = { 'assets/bh.sg/logo.png': pngOf(115, 42) };
+  const readAsset = async (a: SiteManifestAsset) => files[a.storedPath] ?? null;
+  const manifest = { assets: [wideLogo] };
+  const brand = { logo: { assetId: 'logo' } };
+  const workerUrl = 'https://bh-sg.x.workers.dev';
+  const squareUrl = `${workerUrl}/${CHATBOT_ICON_PATH}`;
+  const logoUrl = `${workerUrl}/assets/bh.sg/logo.png`;
+
+  it('pads a wide or tall picture on a white square, and leaves square icons alone', async () => {
+    expect(await chatbotIconPlan(manifest, brand, readAsset)).toMatchObject({
+      padded: true,
+      background: CHATBOT_AVATAR_BG,
+      size: { width: 115, height: 42 },
+    });
+
+    const tall = asset('t', 'assets/bh.sg/white-logo.png', 'image', 'image/png', 4_000);
+    const tallPlan = await chatbotIconPlan({ assets: [tall] }, { logo: { assetId: 't' } }, async () => pngOf(400, 514));
+    expect(tallPlan).toMatchObject({ padded: true, background: CHATBOT_AVATAR_BG });
+
+    const touch = asset('touch', 'assets/bh.sg/apple-touch-icon.png', 'icon', 'image/png', 9_000);
+    expect(await chatbotIconPlan({ assets: [touch] }, null, async () => pngOf(180, 180))).toMatchObject({ padded: false });
+    // Without the file bytes nothing can be padded.
+    expect(await chatbotIconPlan(manifest, brand)).toMatchObject({ padded: false });
+  });
+
+  it('embeds the picture in a square SVG with its real type, scaled to fit', () => {
+    const avif = new Uint8Array(32);
+    avif.set([...'ftypavif'].map((c) => c.charCodeAt(0)), 4);
+    const svg = chatbotSquareIconSvg(avif, 'image/png', '#FFFFFF');
+    expect(svg).toContain('viewBox="0 0 512 512"');
+    expect(svg).toContain('<rect width="512" height="512" fill="#FFFFFF"/>');
+    expect(svg).toContain('preserveAspectRatio="xMidYMid meet"');
+    expect(svg).toContain('href="data:image/avif;base64,');
+  });
+
+  it('uses the square icon once the Worker serves it, and says when a redeploy is needed', async () => {
+    const input = { tenantId: 't1', leadId: 'lead1', workerUrl, manifest, brand, readAsset };
+
+    const published = setup();
+    expect(await setChatbotAvatarForLiveUrl({ bots: published.deps.bots, api: published.deps.api, logger }, { ...input, publishedIcon: true })).toEqual({
+      botIconUrl: squareUrl,
+      changed: true,
+    });
+    expect(published.calls.at(-1)).toMatchObject({ config: { botIconUrl: squareUrl, launcherIconUrl: squareUrl } });
+
+    const notYet = setup();
+    expect(await setChatbotAvatarForLiveUrl({ bots: notYet.deps.bots, api: notYet.deps.api, logger }, input)).toEqual({
+      botIconUrl: logoUrl,
+      changed: true,
+      needsSquareIcon: true,
+    });
+
+    // A later run without a deploy keeps the square icon already in use.
+    const kept = setup({
+      widget: { botIconUrl: squareUrl, launcherIconUrl: squareUrl, botAvatarBgColor: '#FFFFFF', iconBgColor: '#FFFFFF' },
+    });
+    expect(await setChatbotAvatarForLiveUrl({ bots: kept.deps.bots, api: kept.deps.api, logger }, input)).toEqual({
+      botIconUrl: squareUrl,
+      changed: false,
+    });
   });
 });

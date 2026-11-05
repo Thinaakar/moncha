@@ -57,7 +57,24 @@ describe('imageSize', () => {
     expect(imageSize(jpeg)).toEqual({ width: 400, height: 300 });
   });
 
-  it('returns null for SVG and unknown data', () => {
+  it('reads AVIF from its ispe box', () => {
+    const avif = bytes(64, (b, v) => {
+      put(b, 4, 'ftyp');
+      put(b, 8, 'avif');
+      put(b, 40, 'ispe');
+      v.setUint32(48, 115);
+      v.setUint32(52, 42);
+    });
+    expect(imageSize(avif)).toEqual({ width: 115, height: 42 });
+  });
+
+  it('reads SVG width/height or viewBox', () => {
+    const svg = (s: string) => imageSize(new TextEncoder().encode(s));
+    expect(svg('<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" width="200px" height="50">')).toEqual({ width: 200, height: 50 });
+    expect(svg('<svg viewBox="0 0 354 75" width="100%">')).toEqual({ width: 354, height: 75 });
+  });
+
+  it('returns null for an SVG without a size and unknown data', () => {
     expect(imageSize(new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg"/>'))).toBeNull();
     expect(imageSize(new Uint8Array([1, 2, 3]))).toBeNull();
   });

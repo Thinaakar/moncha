@@ -1,13 +1,47 @@
 export type ImageSize = { width: number; height: number };
 
+/** `ispe` (image spatial extent) box of an AVIF/HEIF file, searched in its header. */
+function avifSize(bytes: Uint8Array, view: DataView): ImageSize | null {
+  const end = Math.min(bytes.length - 20, 64 * 1024);
+  for (let o = 12; o < end; o++) {
+    if (bytes[o] === 0x69 && bytes[o + 1] === 0x73 && bytes[o + 2] === 0x70 && bytes[o + 3] === 0x65) {
+      const width = view.getUint32(o + 8);
+      const height = view.getUint32(o + 12);
+      return width && height ? { width, height } : null;
+    }
+  }
+  return null;
+}
+
+/** Root `<svg>` width/height in px (or plain numbers), else its viewBox. */
+function svgSize(bytes: Uint8Array): ImageSize | null {
+  const text = new TextDecoder().decode(bytes.subarray(0, 4096));
+  const tag = /<svg\b[^>]*>/i.exec(text)?.[0];
+  if (!tag) return null;
+  const attr = (name: string) => new RegExp(`\\s${name}\\s*=\\s*["']([^"']+)["']`, 'i').exec(tag)?.[1]?.trim();
+  const px = (value: string | undefined) => {
+    const m = value ? /^(\d+(?:\.\d+)?)(px)?$/i.exec(value) : null;
+    return m ? Number(m[1]) : null;
+  };
+  const width = px(attr('width'));
+  const height = px(attr('height'));
+  if (width && height) return { width, height };
+  const box = attr('viewBox')?.split(/[\s,]+/).map(Number);
+  if (box?.length === 4 && box[2]! > 0 && box[3]! > 0) return { width: box[2]!, height: box[3]! };
+  return null;
+}
+
 /**
- * Pixel size read from the file header: PNG, GIF, WebP, JPEG, and ICO (its largest entry). Null for SVG, AVIF and
- * anything unreadable.
+ * Pixel size read from the file header: PNG, GIF, WebP, JPEG, AVIF, ICO (its largest entry) and SVG (width/height
+ * or viewBox). Null for anything unreadable.
  */
 export function imageSize(bytes: Uint8Array): ImageSize | null {
   const n = bytes.length;
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const ascii = (offset: number, length: number) => String.fromCharCode(...bytes.subarray(offset, offset + length));
+
+  if (n >= 32 && ascii(4, 4) === 'ftyp' && /^(avif|avis|mif1|heic)$/.test(ascii(8, 4))) return avifSize(bytes, view);
+  if (n >= 4 && /<svg\b/i.test(new TextDecoder().decode(bytes.subarray(0, Math.min(n, 1024))))) return svgSize(bytes);
 
   if (n >= 24 && bytes[0] === 0x89 && ascii(1, 3) === 'PNG') {
     return { width: view.getUint32(16), height: view.getUint32(20) };

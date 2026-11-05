@@ -554,6 +554,77 @@ export function liveAssetUrl(workerUrl: string, storedPath: string): string | nu
   }
 }
 
+/** Square icon published with the website (a Worker static asset) when its picture is not square. */
+export const CHATBOT_ICON_PATH = 'moncha-chatbot-icon.svg';
+/** A picture more than this much wider than tall (or taller than wide) is padded into a square for the round avatar. */
+export const CHATBOT_ICON_MAX_RATIO = 1.25;
+
+export type ChatbotIconPlan = {
+  asset: SiteManifestAsset;
+  /** Pixel size, when it could be read from the file. */
+  size: ImageSize | null;
+  /**
+   * Not square: published as CHATBOT_ICON_PATH, the whole picture centred on a square of `background` (white, like
+   * the header the logo was taken from; file names such as "white-logo" proved unreliable for picking a dark one).
+   */
+  padded: boolean;
+  background: string;
+  bytes: Uint8Array | null;
+};
+
+/**
+ * The bot's picture (chatbotAvatarAsset) and whether it has to be padded into a square: when it is clearly wider or
+ * taller than square, or when it is a header logo whose size cannot be read. Needs the file bytes to pad it.
+ */
+export async function chatbotIconPlan(
+  manifest: Pick<SiteManifest, 'assets'>,
+  brand: Pick<SiteBrand, 'logo'> | null,
+  readAsset?: (asset: SiteManifestAsset) => Promise<Uint8Array | null>,
+): Promise<ChatbotIconPlan | null> {
+  const sizes = readAsset ? await chatbotIconSizes(manifest, readAsset) : undefined;
+  const asset = chatbotAvatarAsset(manifest, brand, sizes);
+  if (!asset) return null;
+  const bytes = readAsset ? await readAsset(asset).catch(() => null) : null;
+  const size = sizes?.get(asset.id) ?? (bytes ? imageSize(bytes) : null);
+  const ratio = size && size.width > 0 && size.height > 0 ? Math.max(size.width, size.height) / Math.min(size.width, size.height) : null;
+  const padded = Boolean(bytes) && (ratio !== null ? ratio > CHATBOT_ICON_MAX_RATIO : asset.kind !== 'icon');
+  return { asset, size, padded, background: CHATBOT_AVATAR_BG, bytes };
+}
+
+/** The image type from the file's first bytes (sites mislabel them, e.g. AVIF served as `.png`). */
+function sniffImageType(bytes: Uint8Array): string | null {
+  const ascii = (offset: number, length: number) => String.fromCharCode(...bytes.subarray(offset, offset + length));
+  if (bytes[0] === 0x89 && ascii(1, 3) === 'PNG') return 'image/png';
+  if (bytes[0] === 0xff && bytes[1] === 0xd8) return 'image/jpeg';
+  if (ascii(0, 3) === 'GIF') return 'image/gif';
+  if (ascii(0, 4) === 'RIFF' && ascii(8, 4) === 'WEBP') return 'image/webp';
+  if (ascii(4, 4) === 'ftyp') return 'image/avif';
+  if (bytes[0] === 0 && bytes[1] === 0 && bytes[2] === 1 && bytes[3] === 0) return 'image/x-icon';
+  if (/<svg\b/i.test(new TextDecoder().decode(bytes.subarray(0, 1024)))) return 'image/svg+xml';
+  return null;
+}
+
+function base64(bytes: Uint8Array): string {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+}
+
+/**
+ * A 512 px square SVG with the picture centred and scaled to fit (never cropped) inside a padding that keeps a wide
+ * logo within the round avatar. The picture is embedded, since an SVG shown as an image cannot load other files.
+ */
+export function chatbotSquareIconSvg(bytes: Uint8Array, contentType: string, background: string): string {
+  const type = sniffImageType(bytes) ?? (contentType.split(';')[0]!.trim().toLowerCase() || 'image/png');
+  const data = `data:${type};base64,${base64(bytes)}`;
+  return (
+    '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="512" height="512" viewBox="0 0 512 512">' +
+    `<rect width="512" height="512" fill="${background}"/>` +
+    `<image x="64" y="64" width="384" height="384" preserveAspectRatio="xMidYMid meet" href="${data}" xlink:href="${data}"/>` +
+    '</svg>'
+  );
+}
+
 function urlOrigin(url: string): string | null {
   try {
     return new URL(url).origin;
@@ -573,8 +644,10 @@ export type ChatbotAvatarDeps = {
  * After a Worker deploy: the bot's profile picture (botIconUrl) and launcher button (launcherIconUrl) become the website's
  * icon or logo as the live copy serves it, both on a white background (botAvatarBgColor, iconBgColor). When the copy has
  * no usable image, a picture taken earlier from this same Worker is removed (initials and the chat bubble again); one set
- * by someone else is left alone. Null when the lead has no created bot; `changed: false` when the widget already
- * matches. Throws MonCha API errors, and when PUT widget does not keep the avatar or the launcher logo.
+ * by someone else is left alone. A picture that is not square is used as the square CHATBOT_ICON_PATH once the Worker
+ * serves it (`publishedIcon`, or already in use); until then the picture itself is used and `needsSquareIcon` is true.
+ * Null when the lead has no created bot; `changed: false` when the widget already matches. Throws MonCha API errors,
+ * and when PUT widget does not keep the avatar or the launcher logo.
  */
 export async function setChatbotAvatarForLiveUrl(
   deps: ChatbotAvatarDeps,
@@ -584,19 +657,23 @@ export async function setChatbotAvatarForLiveUrl(
     workerUrl: string;
     manifest: Pick<SiteManifest, 'assets'>;
     brand: Pick<SiteBrand, 'logo'> | null;
-    /** The copy's file bytes, used to read the site icons' pixel sizes. */
+    /** The copy's file bytes, used to read the pictures' pixel sizes and to build the square icon. */
     readAsset?: (asset: SiteManifestAsset) => Promise<Uint8Array | null>;
+    /** This deploy published CHATBOT_ICON_PATH on the Worker. */
+    publishedIcon?: boolean;
     signal?: AbortSignal;
   },
-): Promise<{ botIconUrl: string | null; changed: boolean } | null> {
+): Promise<{ botIconUrl: string | null; changed: boolean; needsSquareIcon?: boolean } | null> {
   const bot = await deps.bots.getForLead(input.tenantId, input.leadId);
   if (!bot?.chatbotId || bot.status !== 'created') return null;
-  const sizes = input.readAsset ? await chatbotIconSizes(input.manifest, input.readAsset) : undefined;
-  const asset = chatbotAvatarAsset(input.manifest, input.brand, sizes);
-  const botIconUrl = asset ? liveAssetUrl(input.workerUrl, asset.storedPath) : null;
+  const plan = await chatbotIconPlan(input.manifest, input.brand, input.readAsset);
+  const squareUrl = plan?.padded ? liveAssetUrl(input.workerUrl, CHATBOT_ICON_PATH) : null;
 
   const before = await deps.api.widget({ botId: bot.chatbotId, signal: input.signal });
   const current = typeof before.config.botIconUrl === 'string' ? before.config.botIconUrl : null;
+  const squareLive = Boolean(squareUrl) && (Boolean(input.publishedIcon) || current === squareUrl);
+  const needsSquareIcon = Boolean(squareUrl) && !squareLive;
+  const botIconUrl = !plan ? null : squareLive ? squareUrl : liveAssetUrl(input.workerUrl, plan.asset.storedPath);
   const currentLauncher = typeof before.config.launcherIconUrl === 'string' ? before.config.launcherIconUrl : null;
   const color = (value: unknown) => (typeof value === 'string' ? value.toUpperCase() : null);
   const bg = color(before.config.botAvatarBgColor);
@@ -611,7 +688,7 @@ export async function setChatbotAvatarForLiveUrl(
       launcherBg === CHATBOT_AVATAR_BG &&
       !transparentLauncher
     ) {
-      return { botIconUrl, changed: false };
+      return { botIconUrl, changed: false, ...(needsSquareIcon ? { needsSquareIcon } : {}) };
     }
     config = widgetConfigWith(before.config, {
       botIconUrl,
@@ -652,7 +729,9 @@ export async function setChatbotAvatarForLiveUrl(
     leadId: input.leadId,
     chatbotId: bot.chatbotId,
     botIconUrl,
-    ...(asset ? { source: asset.kind === 'icon' ? 'site_icon' : 'logo' } : { removed: current }),
+    ...(plan
+      ? { source: plan.asset.kind === 'icon' ? 'site_icon' : 'logo', square: squareLive, ...(needsSquareIcon ? { needsSquareIcon } : {}) }
+      : { removed: current }),
   });
-  return { botIconUrl, changed: true };
+  return { botIconUrl, changed: true, ...(needsSquareIcon ? { needsSquareIcon } : {}) };
 }
