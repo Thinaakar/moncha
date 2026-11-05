@@ -2,18 +2,14 @@
 
 import Link from 'next/link';
 import { AlertTriangle, CalendarClock, CheckCircle2, Clock, Gauge, Radar, RotateCcw, ScanEye, Sparkles, Workflow } from 'lucide-react';
-import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
-import { Switch, Tooltip } from '@/components/ui/misc';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { EmptyState, ErrorState, InlineAlert, TableSkeleton } from '@/components/app/states';
-import { useCanEdit } from '@/components/app/user-context';
 import { CRAWL_COPY_STATUS } from '@/components/sites/automation';
-import { useSiteAutomation, useSiteAutomationCrawls, useSiteQueue, useUpdateSiteAutomation } from '@/lib/queries';
-import { errorMessage } from '@/lib/api';
+import { useSiteAutomation, useSiteAutomationCrawls, useSiteQueue } from '@/lib/queries';
 import { formatDateTime, formatNumber, formatRelative, humanize } from '@/lib/format';
 import type { SiteAutomationCrawl, SiteAutomationState } from '@/lib/types';
 import { cn } from '@/lib/utils';
@@ -23,8 +19,8 @@ const STEPS = [
   { icon: Clock, title: 'Its website audits finish', text: 'The automation waits for the audits the crawl started, for up to 3 hours.' },
   {
     icon: Sparkles,
-    title: 'Every qualified lead is queued',
-    text: 'All leads with no assistant and no earlier copy join the queue, first in, first out. There is no daily limit.',
+    title: 'Qualified leads are queued',
+    text: 'Leads with no assistant and no earlier copy join the queue, first in, first out, up to the daily website creation limit. The rest wait for the next day.',
   },
   {
     icon: RotateCcw,
@@ -37,8 +33,13 @@ function TodayCard({ state }: { state: SiteAutomationState }) {
   const queue = useSiteQueue();
   const waiting = queue.data?.waiting.filter((w) => w.origin === 'auto').length;
   const stats = [
-    { label: 'Queued today', value: formatNumber(state.today.used), hint: 'Automatic copies since 00:00 UTC' },
+    {
+      label: 'Queued today',
+      value: `${formatNumber(state.today.used)} / ${formatNumber(state.today.cap)}`,
+      hint: 'Automatic copies since 00:00 UTC, against the daily limit',
+    },
     { label: 'Waiting in the queue', value: formatNumber(waiting), hint: 'Automatic copies not started yet' },
+    { label: 'Held for a later day', value: formatNumber(state.carriedOver), hint: 'Qualified leads over the daily limit' },
     { label: 'Crawls waiting for audits', value: formatNumber(state.waitingCrawls), hint: 'Their leads are queued when audits finish' },
   ];
   return (
@@ -47,7 +48,9 @@ function TodayCard({ state }: { state: SiteAutomationState }) {
         <CardTitle className="flex items-center gap-2">
           <Gauge className="size-4 text-primary" /> Today
         </CardTitle>
-        <CardDescription>Every qualified lead from a finished crawl is queued; nothing waits for tomorrow.</CardDescription>
+        <CardDescription>
+          Up to {formatNumber(state.today.cap)} automatic copies a day; resets {formatRelative(state.today.resetsAt)}.
+        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
         {stats.map((s) => (
@@ -70,20 +73,6 @@ function TodayCard({ state }: { state: SiteAutomationState }) {
 }
 
 function SettingsCard({ state }: { state: SiteAutomationState }) {
-  const canEdit = useCanEdit();
-  const update = useUpdateSiteAutomation();
-
-  async function save(input: { enabled: boolean }) {
-    try {
-      const next = await update.mutateAsync(input);
-      toast.success(next.enabled ? 'Copy automation is on' : 'Copy automation is off', {
-        description: next.enabled ? 'Crawls that finish from now on will queue website copies.' : 'Copies already queued still run.',
-      });
-    } catch (e) {
-      toast.error('Could not save', { description: errorMessage(e) });
-    }
-  }
-
   const blocked = !state.agentReady || !state.workerEnabled;
 
   return (
@@ -107,18 +96,12 @@ function SettingsCard({ state }: { state: SiteAutomationState }) {
           </CardTitle>
           <CardDescription>
             After each country crawl, copy the homepages of its new qualified leads so copies are ready without clicking.
+            It runs while the engine in Crawl & Pipeline Settings is on, up to its daily website creation limit.
           </CardDescription>
         </div>
-        <Tooltip content={canEdit ? (state.enabled ? 'Turn off' : 'Turn on') : 'Viewers cannot change this'}>
-          <span>
-            <Switch
-              checked={state.enabled}
-              disabled={!canEdit || update.isPending}
-              onCheckedChange={(enabled) => void save({ enabled })}
-              aria-label="Automatic website copies"
-            />
-          </span>
-        </Tooltip>
+        <Button variant="outline" size="sm" asChild>
+          <Link href="/crawl-settings">Crawl settings</Link>
+        </Button>
       </CardHeader>
       <CardContent className="space-y-5">
         {!state.agentReady && (
@@ -128,7 +111,7 @@ function SettingsCard({ state }: { state: SiteAutomationState }) {
         )}
         {state.agentReady && !state.workerEnabled && (
           <InlineAlert variant="warning" icon={AlertTriangle} title="Turned off on the worker">
-            The worker runs with SITE_AUTO_COPY=false, so the automation is paused whatever this switch says.
+            The worker runs with SITE_AUTO_COPY=false, so the automation is paused even while the engine is on.
           </InlineAlert>
         )}
 

@@ -1,5 +1,7 @@
-import type { ColdEmailPayload, Mailer } from '../ports';
+import type { SiteAutomationSettingsRecord } from '../ports';
 import { resolveCountry } from '../discovery/countries';
+import { localCalendarDate, zonedTimeToUtc } from '../discovery/schedule-time';
+import type { ColdEmailAutomationSettings } from './coldEmails';
 
 export type CrawlPipelineSettingsRecord = {
   tenantId: string;
@@ -30,16 +32,26 @@ export type CrawlPipelineSettingsPatch = Partial<
   Omit<CrawlPipelineSettingsRecord, 'tenantId' | 'createdAt' | 'updatedAt'>
 >;
 
+/** Counts for the current UTC day (the day the daily limits reset on), except the queue and follow-up backlog. */
 export type CrawlPipelineCounters = {
+  /** Places today's country crawls found (from their results; a running crawl adds its total when it ends). */
   websitesCrawledToday: number;
+  /** Places today's crawls skipped because the company was already in the database. */
   duplicatesFilteredToday: number;
   auditsPendingToday: number;
+  /** Leads created today whose audit qualified them. */
   auditsQualifiedToday: number;
+  /** Automatic website copies queued today. */
   websitesCreatedToday: number;
+  /** Automatic cold emails created today, drafts included. */
   customersReachedToday: number;
   qualifiedWaitingInQueue: number;
   followUpsScheduled: number;
+  /** Scheduled follow-ups due before the end of today, overdue ones included. */
   followUpsDueToday: number;
+  /** Scheduled follow-ups whose due time has passed. */
+  followUpsOverdue: number;
+  followUpsSentToday: number;
   crawlsRunToday: number;
 };
 
@@ -49,37 +61,94 @@ export type CrawlPipelineDecision = {
   recommendedBatchSize?: number;
 };
 
+/** Places results per search page; a crawl batch of N websites gets ceil(N / 20) searches. */
+const RESULTS_PER_SEARCH = 20;
+/** Google Places returns at most 3 pages per search. */
+const MAX_PAGES_PER_SEARCH = 3;
+
+/** Search limits of one crawl run (auto-recrawl, manual trigger or schedule) from the crawl settings. */
+export function crawlBatchLimits(
+  settings: Pick<CrawlPipelineSettingsRecord, 'crawlBatchSize' | 'maxPagesPerSearch'>,
+  batchSize = settings.crawlBatchSize,
+): { maxSearches: number; maxPages: number } {
+  return {
+    maxSearches: Math.max(1, Math.ceil((batchSize || RESULTS_PER_SEARCH) / RESULTS_PER_SEARCH)),
+    maxPages: Math.min(MAX_PAGES_PER_SEARCH, Math.max(1, settings.maxPagesPerSearch || MAX_PAGES_PER_SEARCH)),
+  };
+}
+
 /**
- * Calculates a future due date for a follow-up email.
- * - In 'business_days' mode, skips Saturdays and Sundays.
- * - Sets the time to the tenant's preferred hour (local/UTC, defaults to 10:00).
+ * Copy automation as driven by the crawl settings: on while the engine is active, at most
+ * `dailyWebsiteCreationLimit` automatic copies per UTC day, for crawls that finished after the settings were created.
+ */
+export function copyAutomationFromCrawlSettings(settings: CrawlPipelineSettingsRecord): SiteAutomationSettingsRecord {
+  return {
+    tenantId: settings.tenantId,
+    enabled: settings.active,
+    dailyCap: settings.dailyWebsiteCreationLimit,
+    enabledAt: settings.createdAt,
+    updatedBy: settings.updatedBy,
+    updatedAt: settings.updatedAt,
+  };
+}
+
+/**
+ * Cold email automation as driven by the crawl settings: on while the engine is active, at most
+ * `dailyCustomerReachLimit` new businesses per UTC day, sent when the env gates allow it (drafts otherwise).
+ */
+export function outreachAutomationFromCrawlSettings(settings: CrawlPipelineSettingsRecord): ColdEmailAutomationSettings {
+  return {
+    tenantId: settings.tenantId,
+    enabled: settings.active,
+    mode: 'send',
+    dailyCap: settings.dailyCustomerReachLimit,
+    enabledAt: null,
+    updatedBy: settings.updatedBy,
+    updatedAt: settings.updatedAt,
+  };
+}
+
+/** Zone used when neither the lead's country nor the target country is known. */
+export const FOLLOW_UP_FALLBACK_TIMEZONE = 'UTC';
+
+/** Follow-ups go out on the business's clock: its own country, else the crawl settings' target country. */
+export function followUpTimezone(leadCountry: string | null | undefined, targetCountry?: string | null): string {
+  return (
+    (leadCountry && resolveCountry(leadCountry)?.timezone) ||
+    (targetCountry && resolveCountry(targetCountry)?.timezone) ||
+    FOLLOW_UP_FALLBACK_TIMEZONE
+  );
+}
+
+/**
+ * Calculates a future due date for a follow-up email, on the wall clock of `timezone`.
+ * - Days are counted on the zone's calendar, starting the day after `sentAt` there (at least 1 day).
+ * - In 'business_days' mode, local Saturdays and Sundays are skipped.
+ * - The time is `preferredHour`:00 local time.
  */
 export function calculateFollowUpDueDate(
   sentAt: Date,
   delayDays: number,
   mode: 'business_days' | 'calendar_days' = 'business_days',
   preferredHour = 10,
+  timezone: string = FOLLOW_UP_FALLBACK_TIMEZONE,
 ): Date {
-  const target = new Date(sentAt.getTime());
+  const start = localCalendarDate(sentAt, timezone);
+  const day = new Date(Date.UTC(start.year, start.month - 1, start.day));
   const days = Math.max(1, delayDays);
 
   if (mode === 'calendar_days') {
-    target.setUTCDate(target.getUTCDate() + days);
+    day.setUTCDate(day.getUTCDate() + days);
   } else {
-    // business_days: add days skipping weekends
     let added = 0;
     while (added < days) {
-      target.setUTCDate(target.getUTCDate() + 1);
-      const dayOfWeek = target.getUTCDay();
-      // 0 = Sunday, 6 = Saturday
-      if (dayOfWeek !== 0 && dayOfWeek !== 6) {
-        added += 1;
-      }
+      day.setUTCDate(day.getUTCDate() + 1);
+      const dayOfWeek = day.getUTCDay();
+      if (dayOfWeek !== 0 && dayOfWeek !== 6) added += 1;
     }
   }
 
-  target.setUTCHours(preferredHour, 0, 0, 0);
-  return target;
+  return zonedTimeToUtc(day.getUTCFullYear(), day.getUTCMonth() + 1, day.getUTCDate(), preferredHour, 0, timezone);
 }
 
 /**

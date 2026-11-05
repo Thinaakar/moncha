@@ -1,7 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { CalendarClock, CalendarPlus, Clock, History, Plus, Trash2 } from 'lucide-react';
+import Link from 'next/link';
+import { CalendarClock, CalendarPlus, Clock, History, Plus, SlidersHorizontal, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -20,26 +21,77 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { PageHeader } from '@/components/app/page-header';
-import { EmptyState, ErrorState, TableSkeleton } from '@/components/app/states';
+import { EmptyState, ErrorState, InlineAlert, TableSkeleton } from '@/components/app/states';
 import { JobStatusBadge } from '@/components/app/status';
 import { useCanEdit } from '@/components/app/user-context';
 import { api, errorMessage } from '@/lib/api';
 import { CrawlCopiesCell } from '@/components/sites/automation';
-import { useApiMutation, useScheduleRuns, useSchedules, useSiteAutomationCrawls } from '@/lib/queries';
+import {
+  useApiMutation,
+  useCrawlPipeline,
+  useDiscoveryOptions,
+  useScheduleRuns,
+  useSchedules,
+  useSiteAutomationCrawls,
+} from '@/lib/queries';
 import { formatDateTime, formatDuration, formatNumber, formatRelative, humanize } from '@/lib/format';
-import type { Schedule, ScheduleGroup } from '@/lib/types';
+import type { CrawlPipelineSettingsView, Schedule, ScheduleGroup } from '@/lib/types';
+import { cn } from '@/lib/utils';
 import { AddScheduleDialog } from './add-schedule-dialog';
 
 type PendingDelete = { kind: 'one'; schedule: Schedule } | { kind: 'country'; group: ScheduleGroup };
 
+/** How the central crawl settings shape every scheduled run (mirrors the worker's enqueueDueSchedules). */
+function CrawlSettingsNotice({ settings, countryNames }: { settings: CrawlPipelineSettingsView; countryNames: Map<string, string> }) {
+  const searches = Math.max(1, Math.ceil((settings.crawlBatchSize || 20) / 20));
+  const pages = Math.min(3, Math.max(1, settings.maxPagesPerSearch || 3));
+  const target = countryNames.get(settings.targetCountry) ?? settings.targetCountry;
+  return (
+    <InlineAlert
+      variant={settings.active ? 'info' : 'warning'}
+      icon={SlidersHorizontal}
+      title={settings.active ? 'Crawl & Pipeline Settings control scheduled crawls' : 'Engine paused: scheduled crawls are skipped'}
+    >
+      <ul className="mt-1 list-disc space-y-0.5 pl-4">
+        <li>
+          {settings.active
+            ? 'Each schedule crawls its own country at its time while the engine is on.'
+            : 'While the engine is off, each due run is skipped and moves to its next time. Skipped runs are not made up later.'}
+        </li>
+        <li>
+          A run is skipped once today&apos;s Max Daily Crawl Runs ({formatNumber(settings.maxDailyCrawlRuns)}, UTC day,
+          every trigger counted) is used.
+        </li>
+        <li>
+          Size of each run: Crawl Batch Size {formatNumber(settings.crawlBatchSize)} ({searches} search
+          {searches === 1 ? '' : 'es'}), up to {pages} page{pages === 1 ? '' : 's'} per search.
+        </li>
+        <li>
+          Industries: the schedule&apos;s own, otherwise{' '}
+          {settings.targetIndustries.length ? `the ${settings.targetIndustries.length} target industries` : 'all standard industries'}.
+        </li>
+        <li>
+          Cities: {settings.targetCities.length ? `the ${settings.targetCities.length} target cities` : 'all cities'} for{' '}
+          {target}; all cities for other countries.
+        </li>
+      </ul>
+      <Link href="/crawl-settings" className="mt-2 inline-block font-medium text-primary hover:underline">
+        Open Crawl & Pipeline Settings
+      </Link>
+    </InlineAlert>
+  );
+}
+
 function ScheduleGroupCard({
   group,
   canEdit,
+  paused,
   onAdd,
   onDelete,
 }: {
   group: ScheduleGroup;
   canEdit: boolean;
+  paused: boolean;
   onAdd: () => void;
   onDelete: (target: PendingDelete) => void;
 }) {
@@ -52,7 +104,14 @@ function ScheduleGroupCard({
             {group.countryCode}
           </span>
           <div className="space-y-1">
-            <CardTitle>{group.country}</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              {group.country}
+              {paused && (
+                <Badge variant="warning" dot>
+                  Paused
+                </Badge>
+              )}
+            </CardTitle>
             <CardDescription>
               {group.timesPerDay} run{group.timesPerDay === 1 ? '' : 's'} per day
             </CardDescription>
@@ -105,8 +164,8 @@ function ScheduleGroupCard({
         </div>
         {next && (
           <div className="flex items-center justify-between rounded-lg bg-muted/40 px-3 py-2 text-xs">
-            <span className="text-muted-foreground">Next run</span>
-            <span className="font-medium">
+            <span className="text-muted-foreground">{paused ? 'Next slot (skipped while paused)' : 'Next run'}</span>
+            <span className={cn('font-medium', paused && 'text-muted-foreground line-through')}>
               {humanize(next.nextRunDay)} at {next.time} · {formatRelative(next.nextRunAt)}
             </span>
           </div>
@@ -119,6 +178,11 @@ function ScheduleGroupCard({
 export function SchedulesView() {
   const canEdit = useCanEdit();
   const schedules = useSchedules();
+  const pipeline = useCrawlPipeline();
+  const crawlSettings = pipeline.data?.settings;
+  const paused = crawlSettings ? !crawlSettings.active : false;
+  const options = useDiscoveryOptions();
+  const countryNames = new Map((options.data?.countries ?? []).map((c) => [c.code, c.name]));
   const runs = useScheduleRuns(50);
   const crawls = useSiteAutomationCrawls(100);
   const copiesByRun = new Map((crawls.data ?? []).map((c) => [c.crawlJobId, c]));
@@ -157,14 +221,28 @@ export function SchedulesView() {
         title="Target region schedule"
         description="Daily country crawls at a fixed local time. Each run spends a capped number of API calls and picks up where the last one stopped."
         actions={
-          canEdit && (
-            <Button onClick={() => openAdd()}>
-              <CalendarPlus /> Add schedule
-            </Button>
-          )
+          <div className="flex items-center gap-3">
+            {crawlSettings &&
+              (paused ? (
+                <Badge variant="warning" dot>
+                  Engine paused
+                </Badge>
+              ) : (
+                <Badge variant="success" dot>
+                  Engine on
+                </Badge>
+              ))}
+            {canEdit && (
+              <Button onClick={() => openAdd()}>
+                <CalendarPlus /> Add schedule
+              </Button>
+            )}
+          </div>
         }
         className="pb-0"
       />
+
+      {crawlSettings && <CrawlSettingsNotice settings={crawlSettings} countryNames={countryNames} />}
 
       <section>
         {schedules.error ? (
@@ -199,6 +277,7 @@ export function SchedulesView() {
                 key={group.countryCode}
                 group={group}
                 canEdit={canEdit}
+                paused={paused}
                 onAdd={() => openAdd(group.countryCode)}
                 onDelete={setPending}
               />

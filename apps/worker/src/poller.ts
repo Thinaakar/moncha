@@ -9,7 +9,6 @@ import { WORKER_HEARTBEAT_MS } from './worker-health';
 import {
   prisma,
   PrismaAuditLogRepository,
-  PrismaColdEmailAutomationRepository,
   PrismaColdEmailRepository,
   PrismaDiscoveryScheduleRepository,
   PrismaHostAuditCacheRepository,
@@ -46,7 +45,12 @@ import {
   sweepAllSiteAutomation,
   websiteAuditJobLeadId,
   calculateFollowUpDueDate,
+  copyAutomationFromCrawlSettings,
+  crawlBatchLimits,
+  crawlTargetError,
   evaluateAutoRecrawl,
+  followUpTimezone,
+  outreachAutomationFromCrawlSettings,
   buildFollowUpContent,
   type CountryDiscoveryJobPayload,
   type JobRunRecord,
@@ -208,19 +212,32 @@ async function tick() {
   );
 }
 
+/** Scheduled runs follow the crawl settings (engine, daily run limit, batch size, industries, cities). */
+const scheduleCrawlSettings = {
+  get: (tenantId: string) => crawlPipelineRepo.get(tenantId),
+  crawlsSince: (tenantId: string, since: Date) => crawlPipelineRepo.countCrawlsSince(tenantId, since),
+};
+
 async function schedulerTick() {
   try {
-    await withDbRetry(() => enqueueDueSchedules({ schedules, logger }));
+    await withDbRetry(() => enqueueDueSchedules({ schedules, logger, crawlSettings: scheduleCrawlSettings }));
   } finally {
     await siteAutomationTick();
   }
 }
 
-/** Queues website copies for qualified leads from finished crawls (tenants with automation on). */
+/** Queues website copies for qualified leads from finished crawls (tenants whose crawl engine is active). */
 async function siteAutomationTick() {
   if (!siteAgent.ready || !siteAutoCopyEnabled() || crawlAbort.signal.aborted) return;
   if (await isQueuePaused()) return;
-  await withDbRetry(() => sweepAllSiteAutomation({ automation: siteAutomation, snapshots: siteSnapshots, logger }));
+  const tenants = await withDbRetry(() => crawlPipelineRepo.listActive());
+  if (!tenants.length) return;
+  await withDbRetry(() =>
+    sweepAllSiteAutomation(
+      { automation: siteAutomation, snapshots: siteSnapshots, logger },
+      tenants.map(copyAutomationFromCrawlSettings),
+    ),
+  );
 }
 
 /** GET /api/v1/worker/health reports the worker offline when this row stops updating. */
@@ -428,12 +445,12 @@ function copySite(job: JobRunRecord, store: SiteStore) {
 }
 
 /**
- * Cold email automation, per tenant with it switched on: drafts for fully ready demos within the daily cap. `send` mode
- * also sends, but only to addresses COLD_EMAIL_SENDING_ENABLED + COLD_EMAIL_ALLOWLIST allow; the rest stay drafts.
+ * Cold email automation, per tenant whose crawl engine is active: emails for fully ready demos within the daily customer
+ * reach limit, sent only to addresses COLD_EMAIL_SENDING_ENABLED + COLD_EMAIL_ALLOWLIST allow (never in dev mode); the
+ * rest stay drafts.
  */
 const COLD_EMAIL_TICK_MS = 5 * 60_000;
 const coldEmailRepo = new PrismaColdEmailRepository(prisma);
-const coldEmailAutomationRepo = new PrismaColdEmailAutomationRepository(prisma);
 const coldEmailAutomationDeps = {
   coldEmails: coldEmailRepo,
   mailer: createResendMailerFromEnv(process.env),
@@ -447,20 +464,24 @@ const coldEmailAutomationDeps = {
 
 async function coldEmailTick() {
   if (crawlAbort.signal.aborted || (await isQueuePaused())) return;
-  const tenants = await withDbRetry(() => coldEmailAutomationRepo.listEnabled());
+  const tenants = await withDbRetry(() => crawlPipelineRepo.listActive());
   for (const settings of tenants) {
-    await runColdEmailAutomation(coldEmailAutomationDeps, settings);
+    await runColdEmailAutomation(coldEmailAutomationDeps, outreachAutomationFromCrawlSettings(settings));
   }
 }
 
 /**
- * Unified Crawl Pipeline tick:
- * 1. Evaluates queue health vs. daily website creation & customer reach limits.
- *    If auto-recrawl is enabled and queue is depleted, automatically triggers another crawl slice.
- * 2. Evaluates scheduled follow-up emails whose dueDate has arrived and safely processes them.
+ * Unified Crawl Pipeline tick, per tenant whose engine is active:
+ * 1. Evaluates queue health vs. the daily website creation limit.
+ *    If auto-recrawl is enabled and the queue is depleted, triggers another crawl slice.
+ * 2. Schedules follow-ups for sent first emails and sends the due ones.
  */
 const CRAWL_PIPELINE_TICK_MS = 60_000;
+/** A follow-up still `sending` after this was interrupted (a send takes seconds). */
+const FOLLOW_UP_STUCK_MS = 15 * 60_000;
 const crawlPipelineRepo = new PrismaCrawlPipelineRepository(prisma);
+/** Last invalid-target message logged per tenant, so a bad target is logged once rather than every tick. */
+const loggedTargetErrors = new Map<string, string>();
 
 async function crawlPipelineTick() {
   if (crawlAbort.signal.aborted || (await isQueuePaused())) return;
@@ -474,14 +495,21 @@ async function crawlPipelineTick() {
 
       // 1. Automatic recrawl replenishment
       if (decision.shouldRecrawl) {
-        const countryCode = settings.targetCountry || 'SG';
-        const profile = resolveCountry(countryCode);
+        const targetError = crawlTargetError(settings.targetCountry || 'SG', settings.targetCities);
+        if (targetError) {
+          if (loggedTargetErrors.get(settings.tenantId) !== targetError) {
+            loggedTargetErrors.set(settings.tenantId, targetError);
+            logger.error('crawl_pipeline.invalid_targets', { tenantId: settings.tenantId, error: targetError });
+          }
+        } else {
+          loggedTargetErrors.delete(settings.tenantId);
+        }
+        const profile = targetError ? null : resolveCountry(settings.targetCountry || 'SG');
         if (profile) {
           const live = await liveCountryCrawls(settings.tenantId, profile.name);
           if (!live.length) {
             const batchSize = decision.recommendedBatchSize || settings.crawlBatchSize || 20;
-            const maxPages = Math.min(settings.maxPagesPerSearch, 3);
-            const maxSearches = Math.max(1, Math.ceil(batchSize / 20));
+            const { maxPages, maxSearches } = crawlBatchLimits(settings, batchSize);
 
             const payload: CountryDiscoveryJobPayload = {
               mode: 'country',
@@ -526,17 +554,20 @@ async function crawlPipelineTick() {
               demoUrl: { not: null },
               OR: [{ followUpStatus: 'none' }, { followUpStatus: null }],
             },
+            include: { lead: { select: { company: { select: { country: true } } } } },
             take: 20,
           }),
         );
 
         for (const initial of unassignedSent) {
           if (!initial.sentAt) continue;
+          const timezone = followUpTimezone(initial.lead?.company.country, settings.targetCountry);
           const dueDate = calculateFollowUpDueDate(
             initial.sentAt,
             settings.followUpDelayDays,
             settings.followUpMode,
             settings.followUpPreferredHour,
+            timezone,
           );
           await coldEmailRepo.update(settings.tenantId, initial.id, {
             followUpStatus: 'scheduled',
@@ -547,119 +578,111 @@ async function crawlPipelineTick() {
             tenantId: settings.tenantId,
             emailId: initial.id,
             dueDate: dueDate.toISOString(),
+            timezone,
           });
         }
 
-        // Step 2B: Dispatch due follow-up reminder emails
+        // Step 2B: Dispatch due follow-up reminder emails. They go to businesses the daily reach limit already
+        // counted, so that limit does not hold them back.
         const now = new Date();
+        const stuck = await withDbRetry(() =>
+          coldEmailRepo.failStuckFollowUps(settings.tenantId, new Date(now.getTime() - FOLLOW_UP_STUCK_MS)),
+        );
+        if (stuck) logger.error('crawl_pipeline.follow_ups_interrupted', { tenantId: settings.tenantId, count: stuck });
         const dueList = await withDbRetry(() => coldEmailRepo.listDueFollowUps(settings.tenantId, now, 5));
-        if (dueList.length) {
-          // Respect daily customer reach limit
-          if (counters.customersReachedToday >= settings.dailyCustomerReachLimit) {
-            logger.info('crawl_pipeline.follow_ups_deferred_limit_reached', {
-              tenantId: settings.tenantId,
-              customersReachedToday: counters.customersReachedToday,
-              dailyCustomerReachLimit: settings.dailyCustomerReachLimit,
+        const devMode = isColdEmailDevMode(process.env as Record<string, unknown>);
+        for (const email of dueList) {
+          if (!(await coldEmailRepo.claimFollowUp(settings.tenantId, email.id))) continue;
+
+          if (!email.demoUrl) {
+            await coldEmailRepo.update(settings.tenantId, email.id, {
+              followUpStatus: 'failed',
+              followUpError: 'Initial email had no demo URL',
             });
-          } else {
-            const devMode = isColdEmailDevMode(process.env as Record<string, unknown>);
-            for (const email of dueList) {
-              if (!email.demoUrl) {
-                await coldEmailRepo.update(settings.tenantId, email.id, {
-                  followUpStatus: 'failed',
-                  followUpError: 'Initial email had no demo URL',
-                });
-                continue;
-              }
+            continue;
+          }
 
-              // Ineligibility check: cancel follow-up if lead was disqualified, unsubscribed, or archived
-              if (email.leadId) {
-                const lead = await withDbRetry(() =>
-                  prisma.lead.findUnique({
-                    where: { id: email.leadId! },
-                    select: { queue: true, qualificationReason: true },
-                  }),
-                );
-                if (lead && lead.queue !== 'QUALIFIED') {
-                  await coldEmailRepo.update(settings.tenantId, email.id, {
-                    followUpStatus: 'cancelled',
-                    followUpError: `Lead became ineligible: ${lead.qualificationReason || lead.queue}`,
-                  });
-                  logger.info('crawl_pipeline.follow_up_cancelled_ineligible_lead', {
-                    tenantId: settings.tenantId,
-                    emailId: email.id,
-                    leadId: email.leadId,
-                    queue: lead.queue,
-                  });
-                  continue;
-                }
-              }
-
-              // Concurrency protection: atomically mark 'sending' to prevent duplicate execution across workers
+          // Ineligibility check: cancel follow-up if lead was disqualified, unsubscribed, or archived
+          if (email.leadId) {
+            const lead = await withDbRetry(() =>
+              prisma.lead.findUnique({
+                where: { id: email.leadId! },
+                select: { queue: true, qualificationReason: true },
+              }),
+            );
+            if (lead && lead.queue !== 'QUALIFIED') {
               await coldEmailRepo.update(settings.tenantId, email.id, {
-                followUpStatus: 'sending',
+                followUpStatus: 'cancelled',
+                followUpError: `Lead became ineligible: ${lead.qualificationReason || lead.queue}`,
               });
-
-              const content = buildFollowUpContent({
-                companyName: email.companyName,
-                demoUrl: email.demoUrl,
-                customSubject: settings.followUpSubject,
-                customTemplate: settings.followUpBodyTemplate,
+              logger.info('crawl_pipeline.follow_up_cancelled_ineligible_lead', {
+                tenantId: settings.tenantId,
+                emailId: email.id,
+                leadId: email.leadId,
+                queue: lead.queue,
               });
-
-              // DEVELOPMENT MODE SAFETY: Strictly NEVER email customers in dev mode.
-              if (devMode) {
-                logger.info('crawl_pipeline.follow_up_held_in_dev_mode', {
-                  tenantId: settings.tenantId,
-                  emailId: email.id,
-                  recipient: email.toEmail,
-                  reason: 'Customer follow-up delivery disabled in dev mode',
-                });
-                await coldEmailRepo.update(settings.tenantId, email.id, {
-                  followUpStatus: 'draft',
-                  followUpError: 'Held in development mode for safety',
-                });
-                continue;
-              }
-
-              const mailer = createResendMailerFromEnv(process.env);
-              if (!mailer || !isColdEmailRecipientAllowed(email.toEmail, process.env as Record<string, unknown>)) {
-                await coldEmailRepo.update(settings.tenantId, email.id, {
-                  followUpStatus: 'suppressed',
-                  followUpError: 'Sending disabled or address not allowlisted',
-                });
-                continue;
-              }
-
-              try {
-                const payload: ColdEmailPayload = {
-                  to: [email.toEmail],
-                  companyName: email.companyName,
-                  demoUrl: email.demoUrl,
-                  subject: content.subject,
-                  text: content.text,
-                  html: content.html,
-                };
-                const result = await mailer.sendColdEmail(payload, process.env as Record<string, unknown>);
-                await coldEmailRepo.update(settings.tenantId, email.id, {
-                  followUpStatus: 'sent',
-                  followUpSentAt: new Date(),
-                  followUpResendId: result.id || null,
-                  followUpError: null,
-                });
-                logger.info('crawl_pipeline.follow_up_sent', {
-                  tenantId: settings.tenantId,
-                  emailId: email.id,
-                  resendId: result.id,
-                });
-              } catch (err) {
-                const msg = err instanceof Error ? err.message : String(err);
-                await coldEmailRepo.update(settings.tenantId, email.id, {
-                  followUpStatus: 'failed',
-                  followUpError: msg.slice(0, 500),
-                });
-              }
+              continue;
             }
+          }
+
+          const content = buildFollowUpContent({
+            companyName: email.companyName,
+            demoUrl: email.demoUrl,
+            customSubject: settings.followUpSubject,
+            customTemplate: settings.followUpBodyTemplate,
+          });
+
+          // DEVELOPMENT MODE SAFETY: Strictly NEVER email customers in dev mode.
+          if (devMode) {
+            logger.info('crawl_pipeline.follow_up_held_in_dev_mode', {
+              tenantId: settings.tenantId,
+              emailId: email.id,
+              recipient: email.toEmail,
+              reason: 'Customer follow-up delivery disabled in dev mode',
+            });
+            await coldEmailRepo.update(settings.tenantId, email.id, {
+              followUpStatus: 'draft',
+              followUpError: 'Held in development mode for safety',
+            });
+            continue;
+          }
+
+          const mailer = createResendMailerFromEnv(process.env);
+          if (!mailer || !isColdEmailRecipientAllowed(email.toEmail, process.env as Record<string, unknown>)) {
+            await coldEmailRepo.update(settings.tenantId, email.id, {
+              followUpStatus: 'suppressed',
+              followUpError: 'Sending disabled or address not allowlisted',
+            });
+            continue;
+          }
+
+          try {
+            const payload: ColdEmailPayload = {
+              to: [email.toEmail],
+              companyName: email.companyName,
+              demoUrl: email.demoUrl,
+              subject: content.subject,
+              text: content.text,
+              html: content.html,
+            };
+            const result = await mailer.sendColdEmail(payload, process.env as Record<string, unknown>);
+            await coldEmailRepo.update(settings.tenantId, email.id, {
+              followUpStatus: 'sent',
+              followUpSentAt: new Date(),
+              followUpResendId: result.id || null,
+              followUpError: null,
+            });
+            logger.info('crawl_pipeline.follow_up_sent', {
+              tenantId: settings.tenantId,
+              emailId: email.id,
+              resendId: result.id,
+            });
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            await coldEmailRepo.update(settings.tenantId, email.id, {
+              followUpStatus: 'failed',
+              followUpError: msg.slice(0, 500),
+            });
           }
         }
       }

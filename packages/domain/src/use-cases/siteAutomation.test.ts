@@ -133,23 +133,41 @@ describe('sweepSiteAutomation', () => {
     expect(t.crawls.get('c1')).toMatchObject({ status: 'complete', queued: 2, qualified: 2, carriedOver: 0 });
   });
 
-  it('queues every lead with no daily cap, oldest crawl first', async () => {
+  it('queues oldest crawl first up to the daily cap and keeps the rest for a later day', async () => {
     const t = setup({
       crawls: [crawl('newer', HOUR), crawl('older', 2 * HOUR)],
       candidates: { older: [lead('o1'), lead('o2')], newer: [lead('n1'), lead('n2')] },
       usedToday: 17,
-      cap: 1,
+      cap: 20,
     });
     const result = await t.run();
-    expect(t.created.map((c) => c.leadId)).toEqual(['o1', 'o2', 'n1', 'n2']);
-    expect(result).toMatchObject({ queued: 4 });
+    expect(t.created.map((c) => c.leadId)).toEqual(['o1', 'o2', 'n1']);
+    expect(result).toMatchObject({ queued: 3 });
     expect(t.crawls.get('older')).toMatchObject({ status: 'complete', queued: 2 });
-    expect(t.crawls.get('newer')).toMatchObject({ status: 'complete', queued: 2, qualified: 2, carriedOver: 0 });
+    expect(t.crawls.get('newer')).toMatchObject({ status: 'queuing', queued: 1, carriedOver: 1 });
+  });
+
+  it('queues nothing once the daily cap is used, leaving finished crawls open', async () => {
+    const t = setup({ crawls: [crawl('c1', HOUR)], candidates: { c1: [lead('a')] }, usedToday: 5, cap: 5 });
+    const result = await t.run();
+    expect(result.queued).toBe(0);
+    expect(t.crawls.get('c1')).toMatchObject({ status: 'queuing' });
+  });
+
+  it('does not let leads without a website use up the cap', async () => {
+    const t = setup({
+      crawls: [crawl('c1', HOUR)],
+      candidates: { c1: [lead('x', null), lead('y', null), lead('a'), lead('b')] },
+      cap: 1,
+    });
+    await t.run();
+    expect(t.created.map((c) => c.leadId)).toEqual(['a']);
+    expect(t.crawls.get('c1')).toMatchObject({ status: 'queuing', carriedOver: 1 });
   });
 
   it('keeps a crawl open while a full batch of leads was found', async () => {
     const many = Array.from({ length: SITE_AUTOMATION_BATCH }, (_, i) => lead(`l${String(i).padStart(4, '0')}`));
-    const t = setup({ crawls: [crawl('c1', HOUR)], candidates: { c1: many } });
+    const t = setup({ crawls: [crawl('c1', HOUR)], candidates: { c1: many }, cap: 2 * SITE_AUTOMATION_BATCH });
     await t.run();
     expect(t.created).toHaveLength(SITE_AUTOMATION_BATCH);
     expect(t.crawls.get('c1')).toMatchObject({ status: 'queuing', queued: SITE_AUTOMATION_BATCH });

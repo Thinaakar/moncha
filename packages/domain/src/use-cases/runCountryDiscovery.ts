@@ -224,15 +224,37 @@ export async function runCountryDiscovery(
   return result;
 }
 
-function pickCities(known: readonly string[], requested: string[], countryName: string): string[] {
+function cityMatcher(known: readonly string[]) {
   const byLower = new Map(known.map((c) => [c.toLowerCase(), c]));
   const byName = new Map(known.map((c) => [c.split(',')[0]!.trim().toLowerCase(), c]));
+  return (raw: string) => {
+    const key = raw.trim().toLowerCase();
+    return byLower.get(key) ?? byName.get(key);
+  };
+}
+
+function pickCities(known: readonly string[], requested: string[], countryName: string): string[] {
+  const match = cityMatcher(known);
   const out: string[] = [];
   for (const raw of requested) {
-    const key = raw.trim().toLowerCase();
-    const match = byLower.get(key) ?? byName.get(key);
-    if (!match) throw new Error(`Unknown search area "${raw}" for ${countryName}`);
-    if (!out.includes(match)) out.push(match);
+    const city = match(raw);
+    if (!city) throw new Error(`Unknown search area "${raw}" for ${countryName}`);
+    if (!out.includes(city)) out.push(city);
   }
   return out;
+}
+
+/**
+ * Checks a crawl target before it is saved or queued, with the same matching the crawl uses.
+ * Returns null when the country is supported and every city belongs to it, else a message for the user.
+ */
+export function crawlTargetError(country: string, cities: readonly string[]): string | null {
+  const profile = resolveCountry(country);
+  if (!profile) return `Unsupported country "${country}". Supported: ${supportedCountries().join(', ')}`;
+  const match = cityMatcher(profile.cities);
+  const unknown = cities.filter((c) => !match(c));
+  if (unknown.length) {
+    return `${unknown.map((c) => `"${c}"`).join(', ')} ${unknown.length === 1 ? 'is not a search area' : 'are not search areas'} in ${profile.name}`;
+  }
+  return null;
 }

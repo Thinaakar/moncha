@@ -44,8 +44,14 @@ function zoneOffset(at: Date, timezone: string): number {
   return asUtc - Math.floor(at.getTime() / 1000) * 1000;
 }
 
+/** Calendar date in the zone as numbers (month 1-12). */
+export function localCalendarDate(at: Date, timezone: string): { year: number; month: number; day: number } {
+  const p = localParts(at, timezone);
+  return { year: p.year, month: p.month, day: p.day };
+}
+
 /** The instant when the zone's wall clock shows this date and time. */
-function zonedTimeToUtc(year: number, month: number, day: number, hour: number, minute: number, timezone: string): Date {
+export function zonedTimeToUtc(year: number, month: number, day: number, hour: number, minute: number, timezone: string): Date {
   const wall = Date.UTC(year, month - 1, day, hour, minute);
   const first = wall - zoneOffset(new Date(wall), timezone);
   const second = wall - zoneOffset(new Date(first), timezone);

@@ -212,6 +212,27 @@ export class PrismaColdEmailRepository implements ColdEmailRepo {
     return rows.map(mapRow);
   }
 
+  /** Moves a scheduled follow-up to `sending`. False when another worker claimed it first. */
+  async claimFollowUp(tenantId: string, id: string): Promise<boolean> {
+    const { count } = await this.db.coldEmail.updateMany({
+      where: { id, tenantId, followUpStatus: 'scheduled' },
+      data: { followUpStatus: 'sending' },
+    });
+    return count === 1;
+  }
+
+  /**
+   * Follow-ups left in `sending` (the worker stopped mid-send) are marked failed rather than retried: Resend may
+   * already have delivered them.
+   */
+  async failStuckFollowUps(tenantId: string, stuckBefore: Date): Promise<number> {
+    const { count } = await this.db.coldEmail.updateMany({
+      where: { tenantId, followUpStatus: 'sending', updatedAt: { lt: stuckBefore } },
+      data: { followUpStatus: 'failed', followUpError: 'Interrupted while sending; check Resend before sending again' },
+    });
+    return count;
+  }
+
   async listCandidates(tenantId: string, opts?: { page?: number; pageSize?: number; readyOnly?: boolean }) {
     const page = clampPage(opts?.page);
     const pageSize = clampPageSize(opts?.pageSize);

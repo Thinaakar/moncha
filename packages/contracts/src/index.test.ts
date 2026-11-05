@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CRAWL_SETTINGS_LIMITS,
+  crawlPipelineSettingsUpdateSchema,
+  crawlPipelineTriggerSchema,
   countryDiscoverySchema,
   isLeadQualified,
   leadListQuerySchema,
@@ -129,5 +132,32 @@ describe('API validation', () => {
         evidenceRefs: ['e1'],
       }).success,
     ).toBe(true);
+  });
+});
+
+describe('crawl settings limits', () => {
+  const fields = Object.keys(CRAWL_SETTINGS_LIMITS) as Array<keyof typeof CRAWL_SETTINGS_LIMITS>;
+
+  it('accepts every numeric setting at its minimum and maximum', () => {
+    for (const field of fields) {
+      const { min, max } = CRAWL_SETTINGS_LIMITS[field];
+      expect(crawlPipelineSettingsUpdateSchema.safeParse({ [field]: min }).success, `${field}=${min}`).toBe(true);
+      expect(crawlPipelineSettingsUpdateSchema.safeParse({ [field]: max }).success, `${field}=${max}`).toBe(true);
+    }
+  });
+
+  it('rejects values outside the range and fractions', () => {
+    for (const field of fields) {
+      const { min, max } = CRAWL_SETTINGS_LIMITS[field];
+      expect(crawlPipelineSettingsUpdateSchema.safeParse({ [field]: min - 1 }).success, `${field}=${min - 1}`).toBe(false);
+      expect(crawlPipelineSettingsUpdateSchema.safeParse({ [field]: max + 1 }).success, `${field}=${max + 1}`).toBe(false);
+      expect(crawlPipelineSettingsUpdateSchema.safeParse({ [field]: min + 0.5 }).success, `${field}=${min + 0.5}`).toBe(false);
+    }
+  });
+
+  it('limits the manual trigger batch size like the crawl batch size', () => {
+    expect(crawlPipelineTriggerSchema.safeParse({ batchSize: CRAWL_SETTINGS_LIMITS.crawlBatchSize.max }).success).toBe(true);
+    expect(crawlPipelineTriggerSchema.safeParse({ batchSize: CRAWL_SETTINGS_LIMITS.crawlBatchSize.max + 1 }).success).toBe(false);
+    expect(crawlPipelineTriggerSchema.safeParse({ batchSize: 0 }).success).toBe(false);
   });
 });

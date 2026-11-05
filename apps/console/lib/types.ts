@@ -259,7 +259,8 @@ export type CountryDiscoveryResult = {
 };
 
 export type DiscoveryOptions = {
-  countries: Array<{ code: string; name: string; cities: string[] }>;
+  /** `timezone`: the country's IANA zone (follow-ups go out on its clock); missing from older backends. */
+  countries: Array<{ code: string; name: string; cities: string[]; timezone?: string }>;
   industries: string[];
   defaults: { source: string; maxPages: number; timezone: string };
 };

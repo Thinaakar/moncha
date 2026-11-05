@@ -903,15 +903,16 @@ export type SiteAutomationCrawlStatus = 'waiting_audits' | 'queuing' | 'complete
 
 /** `GET /api/v1/site-automation`. */
 export type SiteAutomationState = {
+  /** The crawl engine is active (Crawl & Pipeline Settings). */
   enabled: boolean;
-  /** @deprecated No longer enforced: every qualified lead of a crawl is queued. */
+  /** Automatic copies per UTC day: the crawl settings' daily website creation limit. */
   dailyCap: number;
   enabledAt: string | null;
   updatedAt: string | null;
   updatedBy: string | null;
-  /** `used` = automatic copies queued this UTC day. `cap` and `remaining` are deprecated and not enforced. */
+  /** `used` = automatic copies queued this UTC day; the sweep stops at `cap`. */
   today: { day: string; used: number; cap: number; remaining: number; resetsAt: string };
-  /** @deprecated Always 0 now that copies are not capped. */
+  /** Qualified leads held back by the daily cap, queued on a later day. */
   carriedOver: number;
   /** Finished crawls whose website audits are still running. */
   waitingCrawls: number;
@@ -919,6 +920,8 @@ export type SiteAutomationState = {
   agentReady: boolean;
   /** False when the worker has automation switched off with SITE_AUTO_COPY=false. */
   workerEnabled: boolean;
+  /** Set when these values come from the crawl settings; this endpoint's PUT is then refused. */
+  controlledBy?: 'crawl_settings';
 };
 
 /** One crawl followed by the copy automation (`GET /api/v1/site-automation/crawls`). */
@@ -1156,6 +1159,8 @@ export type ColdEmailAutomationView = {
   usedToday: number;
   /** Leads ready right now: trained bot, chatbot on the live demo, domain locked, company email, never emailed. */
   readyNow: number;
+  /** Set when these values come from the crawl settings; this endpoint's PUT is then refused. */
+  controlledBy?: 'crawl_settings';
 };
 
 export type ColdEmailCandidateView = {
@@ -1210,28 +1215,45 @@ export type ColdEmailCandidatePage = {
 // Crawl & Pipeline Settings
 // ---------------------------------------------------------------------------
 
+/** Allowed range of every numeric crawl setting; the API and the console form use the same values. */
+export const CRAWL_SETTINGS_LIMITS = {
+  crawlBatchSize: { min: 1, max: 500 },
+  maxPagesPerSearch: { min: 1, max: 3 },
+  dailyWebsiteCreationLimit: { min: 0, max: 500 },
+  dailyCustomerReachLimit: { min: 0, max: 500 },
+  minQueueBuffer: { min: 0, max: 1000 },
+  maxDailyCrawlRuns: { min: 1, max: 100 },
+  followUpDelayDays: { min: 1, max: 30 },
+  followUpPreferredHour: { min: 0, max: 23 },
+} as const;
+
+export type CrawlSettingsNumberField = keyof typeof CRAWL_SETTINGS_LIMITS;
+
+const limited = (field: CrawlSettingsNumberField) =>
+  z.number().int().min(CRAWL_SETTINGS_LIMITS[field].min).max(CRAWL_SETTINGS_LIMITS[field].max);
+
 export const crawlPipelineSettingsUpdateSchema = z.object({
   active: z.boolean().optional(),
-  crawlBatchSize: z.number().int().min(1).optional(),
+  crawlBatchSize: limited('crawlBatchSize').optional(),
   targetCountry: z.string().trim().min(2).max(10).optional(),
   targetCities: z.array(z.string().trim()).optional(),
   targetIndustries: z.array(z.string().trim()).optional(),
-  maxPagesPerSearch: z.number().int().min(1).max(20).optional(),
-  dailyWebsiteCreationLimit: z.number().int().min(0).optional(),
-  dailyCustomerReachLimit: z.number().int().min(0).optional(),
+  maxPagesPerSearch: limited('maxPagesPerSearch').optional(),
+  dailyWebsiteCreationLimit: limited('dailyWebsiteCreationLimit').optional(),
+  dailyCustomerReachLimit: limited('dailyCustomerReachLimit').optional(),
   autoRecrawlEnabled: z.boolean().optional(),
-  minQueueBuffer: z.number().int().min(0).optional(),
-  maxDailyCrawlRuns: z.number().int().min(1).optional(),
+  minQueueBuffer: limited('minQueueBuffer').optional(),
+  maxDailyCrawlRuns: limited('maxDailyCrawlRuns').optional(),
   followUpEnabled: z.boolean().optional(),
-  followUpDelayDays: z.number().int().min(0).optional(),
+  followUpDelayDays: limited('followUpDelayDays').optional(),
   followUpMode: z.enum(['business_days', 'calendar_days']).optional(),
-  followUpPreferredHour: z.number().int().min(0).max(23).optional(),
+  followUpPreferredHour: limited('followUpPreferredHour').optional(),
   followUpSubject: z.string().trim().max(200).optional().nullable(),
   followUpBodyTemplate: z.string().trim().max(10000).optional().nullable(),
 });
 
 export const crawlPipelineTriggerSchema = z.object({
-  batchSize: z.number().int().min(1).optional(),
+  batchSize: limited('crawlBatchSize').optional(),
   country: z.string().trim().min(2).max(10).optional(),
   forceRecrawl: z.boolean().optional(),
 });
@@ -1271,7 +1293,11 @@ export type CrawlPipelineProgressView = {
   customersReachedToday: number;
   qualifiedWaitingInQueue: number;
   followUpsScheduled: number;
+  /** Scheduled follow-ups due before the end of the UTC day, overdue ones included. */
   followUpsDueToday: number;
+  /** Scheduled follow-ups whose due time has passed. */
+  followUpsOverdue?: number;
+  followUpsSentToday?: number;
   crawlsRunToday: number;
   recrawlNeeded: boolean;
   recrawlReason?: string;

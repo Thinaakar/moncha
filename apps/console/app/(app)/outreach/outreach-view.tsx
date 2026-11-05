@@ -1,15 +1,12 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { ExternalLink, Mail, ShieldAlert, Workflow } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Switch } from '@/components/ui/misc';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { PageHeader } from '@/components/app/page-header';
 import { Pagination } from '@/components/app/pagination';
@@ -24,7 +21,6 @@ import {
   usePreviewColdEmail,
   useSendColdEmail,
   useSendColdEmailDraft,
-  useUpdateColdEmailAutomation,
 } from '@/lib/queries';
 import { errorMessage } from '@/lib/api';
 import { formatDateTime, formatNumber, formatRelative } from '@/lib/format';
@@ -50,31 +46,15 @@ function canDeliverTo(gate: { allowlist: string[]; allowlistOpen: boolean; sendi
 
 function AutomationCard({ gate }: { gate: ColdEmailGate | undefined }) {
   const automation = useColdEmailAutomation();
-  const update = useUpdateColdEmailAutomation();
-  const canEdit = useCanEdit();
-  const [cap, setCap] = useState('');
   const data = automation.data;
-  useEffect(() => {
-    if (data) setCap(String(data.dailyCap));
-  }, [data?.dailyCap]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function save(input: Parameters<typeof update.mutateAsync>[0], done: string) {
-    try {
-      await update.mutateAsync(input);
-      toast.success(done);
-    } catch (e) {
-      toast.error(errorMessage(e));
-    }
-  }
-
-  const sendBlockedNote =
-    data?.mode === 'send'
-      ? gate?.sendingEnabled
-        ? gate.allowlistOpen
-          ? 'Send mode with an open allowlist emails every ready business.'
-          : 'Send mode, but only allowlisted addresses are sent; every company address stays a draft.'
-        : 'Send mode, but sending is off on the backend, so everything stays a draft.'
-      : 'Draft mode: drafts wait in the Outbox for you to approve. Nothing is sent.';
+  const sendBlockedNote = gate?.isDevMode
+    ? 'Development mode: automated emails stay drafts in the Outbox. Nothing reaches a business.'
+    : gate?.sendingEnabled
+      ? gate.allowlistOpen
+        ? 'Sending is on with an open allowlist, so every ready business is emailed.'
+        : 'Only allowlisted addresses are sent; every other company address stays a draft.'
+      : 'Sending is off on the backend, so everything stays a draft.';
 
   return (
     <Card>
@@ -88,7 +68,7 @@ function AutomationCard({ gate }: { gate: ColdEmailGate | undefined }) {
             {data &&
               (data.enabled ? (
                 <Badge variant="success" dot>
-                  On · {data.mode === 'send' ? 'Send' : 'Draft only'}
+                  On
                 </Badge>
               ) : (
                 <Badge variant="muted" dot>
@@ -98,17 +78,13 @@ function AutomationCard({ gate }: { gate: ColdEmailGate | undefined }) {
           </CardTitle>
           <CardDescription>
             Every 5 minutes, each lead whose demo is fully ready (bot trained, chatbot on the live site, domain locked,
-            company email known) and that was never emailed gets an email, up to the daily cap.
+            company email known) and that was never emailed gets an email, up to the daily customer reach limit. It runs
+            while the engine in Crawl & Pipeline Settings is on.
           </CardDescription>
         </div>
-        {data && (
-          <Switch
-            checked={data.enabled}
-            disabled={!canEdit || update.isPending}
-            onCheckedChange={(enabled) => void save({ enabled }, enabled ? 'Automation on' : 'Automation off')}
-            aria-label="Cold email automation"
-          />
-        )}
+        <Button variant="outline" size="sm" asChild>
+          <Link href="/crawl-settings">Crawl settings</Link>
+        </Button>
       </CardHeader>
       <CardContent className="space-y-4">
         {automation.isError ? (
@@ -117,55 +93,16 @@ function AutomationCard({ gate }: { gate: ColdEmailGate | undefined }) {
           <TableSkeleton rows={2} columns={3} />
         ) : (
           <>
-            <div className="grid gap-3 sm:grid-cols-4">
+            <div className="grid gap-3 sm:grid-cols-2">
               <div className="rounded-lg border bg-muted/30 px-3 py-2">
                 <p className="text-xs text-muted-foreground">Ready now</p>
                 <p className="text-lg font-semibold tabular-nums">{formatNumber(data.readyNow)}</p>
               </div>
               <div className="rounded-lg border bg-muted/30 px-3 py-2">
-                <p className="text-xs text-muted-foreground">Today</p>
+                <p className="text-xs text-muted-foreground">Today (daily customer reach limit)</p>
                 <p className="text-lg font-semibold tabular-nums">
                   {formatNumber(data.usedToday)} <span className="text-sm font-normal text-muted-foreground">/ {formatNumber(data.dailyCap)}</span>
                 </p>
-              </div>
-              <div className="space-y-1">
-                <p className="text-xs text-muted-foreground">Mode</p>
-                <Select
-                  value={data.mode}
-                  disabled={!canEdit || update.isPending}
-                  onValueChange={(mode) => void save({ mode: mode as 'draft' | 'send' }, `Mode: ${mode}`)}
-                >
-                  <SelectTrigger className="h-9">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="draft">Draft only</SelectItem>
-                    <SelectItem value="send">Send (allowlist only)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1">
-                <p className="text-xs text-muted-foreground">Daily cap</p>
-                <div className="flex gap-2">
-                  <Input
-                    type="number"
-                    min={0}
-                    max={500}
-                    value={cap}
-                    disabled={!canEdit}
-                    onChange={(e) => setCap(e.target.value)}
-                    className="h-9"
-                  />
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    disabled={!canEdit || update.isPending || Number(cap) === data.dailyCap || !/^\d+$/.test(cap) || Number(cap) > 500}
-                    onClick={() => void save({ dailyCap: Number(cap) }, 'Daily cap saved')}
-                  >
-                    Save
-                  </Button>
-                </div>
               </div>
             </div>
             <p className="text-xs text-muted-foreground">

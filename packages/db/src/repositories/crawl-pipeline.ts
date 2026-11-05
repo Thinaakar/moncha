@@ -4,6 +4,7 @@ import type {
   CrawlPipelineSettingsPatch,
   CrawlPipelineSettingsRecord,
 } from '@moncha/domain';
+import { SITE_AUTOMATION_LOOKBACK_MS } from '@moncha/domain';
 
 export type {
   CrawlPipelineCounters,
@@ -71,6 +72,19 @@ export function defaultSettings(tenantId: string): CrawlPipelineSettingsRecord {
     createdAt: now,
     updatedAt: now,
   };
+}
+
+/** Sums `found` and `duplicates` over country crawl results; crawls still running have no result yet. */
+export function sumCrawlResults(results: unknown[]): { found: number; duplicates: number } {
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+  let found = 0;
+  let duplicates = 0;
+  for (const r of results) {
+    if (!r || typeof r !== 'object') continue;
+    found += num((r as { found?: unknown }).found);
+    duplicates += num((r as { duplicates?: unknown }).duplicates);
+  }
+  return { found, duplicates };
 }
 
 function startOfUtcDay(now: Date): Date {
@@ -141,12 +155,17 @@ export class PrismaCrawlPipelineRepository {
     });
   }
 
+  /** Country crawls of any trigger created since `since`; what Max Daily Crawl Runs counts. */
+  countCrawlsSince(tenantId: string, since: Date): Promise<number> {
+    return this.db.jobRun.count({ where: { tenantId, type: 'country_discovery', createdAt: { gte: since } } });
+  }
+
   async getCountersToday(tenantId: string, now = new Date()): Promise<CrawlPipelineCounters> {
     const dayStart = startOfUtcDay(now);
+    const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60_000);
 
     const [
       crawlsToday,
-      sourcesCreatedToday,
       auditsPending,
       auditsQualifiedToday,
       websitesCreatedToday,
@@ -154,22 +173,17 @@ export class PrismaCrawlPipelineRepository {
       qualifiedWaitingInQueue,
       followUpsScheduled,
       followUpsDueToday,
+      followUpsOverdue,
+      followUpsSentToday,
     ] = await Promise.all([
-      // 1. Crawl job runs started today
-      this.db.jobRun.count({
+      // 1-2. Country crawls started today, with their found / duplicate totals
+      this.db.jobRun.findMany({
         where: {
           tenantId,
           type: 'country_discovery',
           createdAt: { gte: dayStart },
         },
-      }),
-
-      // 2. Raw discovered sources saved today
-      this.db.sourceRecord.count({
-        where: {
-          tenantId,
-          createdAt: { gte: dayStart },
-        },
+        select: { result: true },
       }),
 
       // 3. Website audits currently in progress / pending
@@ -190,32 +204,26 @@ export class PrismaCrawlPipelineRepository {
         },
       }),
 
-      // 5. Websites created (snapshots done) today
+      // 5. Automatic website copies queued today (what the daily website creation limit caps)
       this.db.siteSnapshot.count({
         where: {
           tenantId,
-          status: 'done',
+          origin: 'auto',
           createdAt: { gte: dayStart },
         },
       }),
 
-      // 6. Customers reached (cold emails sent) today
+      // 6. Automatic cold emails today, drafts included (what the daily customer reach limit caps)
       this.db.coldEmail.count({
         where: {
           tenantId,
-          status: 'sent',
-          sentAt: { gte: dayStart },
+          origin: 'auto',
+          createdAt: { gte: dayStart },
         },
       }),
 
-      // 7. Qualified leads waiting in queue without a website copy yet
-      this.db.lead.count({
-        where: {
-          tenantId,
-          queue: 'QUALIFIED',
-          siteSnapshots: { none: {} },
-        },
-      }),
+      // 7. Qualified leads without a copy that copy automation can still pick up (from recent crawls)
+      this.countCopyCandidates(tenantId, new Date(now.getTime() - SITE_AUTOMATION_LOOKBACK_MS)),
 
       // 8. Total scheduled follow-ups
       this.db.coldEmail.count({
@@ -225,7 +233,16 @@ export class PrismaCrawlPipelineRepository {
         },
       }),
 
-      // 9. Follow-ups due right now (followUpDueDate <= now)
+      // 9. Follow-ups due before the end of today, overdue ones included
+      this.db.coldEmail.count({
+        where: {
+          tenantId,
+          followUpStatus: 'scheduled',
+          followUpDueDate: { lt: dayEnd },
+        },
+      }),
+
+      // 10. Follow-ups whose due time has passed
       this.db.coldEmail.count({
         where: {
           tenantId,
@@ -233,14 +250,22 @@ export class PrismaCrawlPipelineRepository {
           followUpDueDate: { lte: now },
         },
       }),
+
+      // 11. Follow-ups sent today
+      this.db.coldEmail.count({
+        where: {
+          tenantId,
+          followUpStatus: 'sent',
+          followUpSentAt: { gte: dayStart },
+        },
+      }),
     ]);
 
-    // Approximate duplicates from discovery target records if available
-    const duplicates = Math.max(0, sourcesCreatedToday - auditsQualifiedToday);
+    const totals = sumCrawlResults(crawlsToday.map((c) => c.result));
 
     return {
-      websitesCrawledToday: sourcesCreatedToday,
-      duplicatesFilteredToday: duplicates,
+      websitesCrawledToday: totals.found,
+      duplicatesFilteredToday: totals.duplicates,
       auditsPendingToday: auditsPending,
       auditsQualifiedToday,
       websitesCreatedToday,
@@ -248,7 +273,22 @@ export class PrismaCrawlPipelineRepository {
       qualifiedWaitingInQueue,
       followUpsScheduled,
       followUpsDueToday,
-      crawlsRunToday: crawlsToday,
+      followUpsOverdue,
+      followUpsSentToday,
+      crawlsRunToday: crawlsToday.length,
     };
+  }
+
+  /** Same pool as the copy sweep's candidates: audited by a country crawl started since `since`. */
+  private async countCopyCandidates(tenantId: string, since: Date): Promise<number> {
+    const rows = await this.db.$queryRaw<Array<{ n: number }>>`
+      SELECT COUNT(DISTINCT l.id)::int AS n
+      FROM "Lead" l
+      JOIN "JobRun" a ON a."leadId" = l.id AND a."tenantId" = ${tenantId} AND a.type = 'website_audit'
+      JOIN "JobRun" c ON c.id = a."crawlJobId" AND c.type = 'country_discovery' AND c."createdAt" >= ${since}
+      WHERE l."tenantId" = ${tenantId}
+        AND l.queue = 'QUALIFIED'
+        AND NOT EXISTS (SELECT 1 FROM "SiteSnapshot" s WHERE s."leadId" = l.id)`;
+    return Number(rows[0]?.n ?? 0);
   }
 }

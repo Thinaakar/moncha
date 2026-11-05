@@ -144,15 +144,15 @@ function CrawlCopiesStrip({ crawlJobId, finishedAt }: { crawlJobId: string; fini
   } else if (enabled) {
     text = 'Website copies: the automation picks this crawl up within a minute.';
   } else {
-    text = 'Website copies are not queued automatically because the copy automation is off.';
+    text = 'Website copies are not queued automatically because the engine in Crawl settings is off.';
   }
 
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
       <ScanEye className="size-3.5 text-primary" />
       <span className="inline-flex items-center gap-1">{text}</span>
-      <Link href={crawl ? '/sites?tab=queue' : '/sites?tab=automation'} className="ml-auto font-medium text-primary hover:underline">
-        {crawl ? 'Open queue' : 'Automation settings'}
+      <Link href={crawl ? '/sites?tab=queue' : '/crawl-settings'} className="ml-auto font-medium text-primary hover:underline">
+        {crawl ? 'Open queue' : 'Crawl settings'}
       </Link>
     </div>
   );

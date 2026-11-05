@@ -10,6 +10,8 @@ import {
   listScheduleRuns,
   listSchedules,
   ScheduleError,
+  type ScheduleCrawlSettings,
+  type ScheduleCrawlSettingsSource,
 } from './discoverySchedules';
 
 function memorySchedules(): DiscoveryScheduleRepo & { rows: DiscoveryScheduleRecord[]; jobs: JobRunRecord[] } {
@@ -250,6 +252,17 @@ describe('schedule use cases', () => {
     expect(jobPayload.industries).toEqual(['dentist', 'medical clinic']);
   });
 
+  it('keeps the old payload when no crawl settings are given', async () => {
+    const schedules = memorySchedules();
+    await createSchedule({ schedules, now: () => now }, { tenantId: 't1', country: 'MY', time: '10:00' });
+    const res = await enqueueDueSchedules({ schedules, now: () => new Date('2026-09-29T02:00:05Z') });
+    expect(res).toMatchObject({ skipped: 0 });
+    const payload = schedules.jobs[0]!.payload as Record<string, unknown>;
+    expect(payload.maxSearches).toBeUndefined();
+    expect(payload.maxPages).toBeUndefined();
+    expect(payload.cities).toBeUndefined();
+  });
+
   it('omits industries from job payload when schedule was created with empty/no industries (defaults to all)', async () => {
     const schedules = memorySchedules();
     const created = await createSchedule(
@@ -263,5 +276,120 @@ describe('schedule use cases', () => {
     expect(schedules.jobs).toHaveLength(1);
     const jobPayload = schedules.jobs[0]!.payload as any;
     expect(jobPayload.industries).toBeUndefined();
+  });
+});
+
+describe('scheduled runs follow the crawl settings', () => {
+  const created = new Date('2026-09-29T01:00:00Z'); // 09:00 Malaysia and Singapore
+  const due = new Date('2026-09-29T02:00:05Z'); // just after 10:00 local
+  const nextDayDue = new Date('2026-09-30T02:00:05Z');
+
+  function crawlSettings(over: Partial<ScheduleCrawlSettings> = {}, crawlsToday = 0) {
+    const state = {
+      settings: {
+        active: true,
+        crawlBatchSize: 20,
+        maxPagesPerSearch: 3,
+        maxDailyCrawlRuns: 10,
+        targetCountry: 'SG',
+        targetCities: [],
+        targetIndustries: [],
+        ...over,
+      } as ScheduleCrawlSettings,
+      crawlsToday,
+      sinceAsked: [] as Date[],
+    };
+    const source: ScheduleCrawlSettingsSource = {
+      get: async () => state.settings,
+      crawlsSince: async (_tenantId, since) => {
+        state.sinceAsked.push(since);
+        return state.crawlsToday;
+      },
+    };
+    return { state, source };
+  }
+
+  async function setup(countries: Array<{ country: string; industries?: string[] }>) {
+    const schedules = memorySchedules();
+    for (const c of countries) {
+      await createSchedule({ schedules, now: () => created }, { tenantId: 't1', time: '10:00', ...c });
+    }
+    return schedules;
+  }
+
+  const payloads = (schedules: ReturnType<typeof memorySchedules>) =>
+    schedules.jobs.map((j) => j.payload as Record<string, unknown>);
+
+  it('skips the run while the engine is off, moves it to the next day and never makes it up', async () => {
+    const schedules = await setup([{ country: 'MY' }]);
+    const { state, source } = crawlSettings({ active: false });
+
+    const paused = await enqueueDueSchedules({ schedules, now: () => due, crawlSettings: source });
+    expect(paused).toMatchObject({ enqueued: [], skipped: 1, missed: 0 });
+    expect(schedules.jobs).toHaveLength(0);
+    expect(schedules.rows[0]!.nextRunAt.toISOString()).toBe('2026-09-30T02:00:00.000Z');
+    expect(schedules.rows[0]!.lastRunAt).toBeNull();
+
+    state.settings = { ...state.settings, active: true };
+    expect((await enqueueDueSchedules({ schedules, now: () => due, crawlSettings: source })).enqueued).toHaveLength(0);
+    const resumed = await enqueueDueSchedules({ schedules, now: () => nextDayDue, crawlSettings: source });
+    expect(resumed.enqueued).toHaveLength(1);
+    expect(schedules.jobs.map((j) => j.dedupeKey)).toEqual([`schedule:${schedules.rows[0]!.id}:2026-09-30`]);
+  });
+
+  it('skips the run once Max Daily Crawl Runs is used for the UTC day and moves it on', async () => {
+    const schedules = await setup([{ country: 'MY' }]);
+    const { state, source } = crawlSettings({ maxDailyCrawlRuns: 3 }, 3);
+    const res = await enqueueDueSchedules({ schedules, now: () => due, crawlSettings: source });
+    expect(res).toMatchObject({ enqueued: [], skipped: 1 });
+    expect(schedules.rows[0]!.nextRunAt.toISOString()).toBe('2026-09-30T02:00:00.000Z');
+    expect(state.sinceAsked.map((d) => d.toISOString())).toEqual(['2026-09-29T00:00:00.000Z']);
+  });
+
+  it('counts runs queued in the same tick against the daily limit', async () => {
+    const schedules = await setup([{ country: 'MY' }, { country: 'SG' }]);
+    const { source } = crawlSettings({ maxDailyCrawlRuns: 1 });
+    const res = await enqueueDueSchedules({ schedules, now: () => due, crawlSettings: source });
+    expect(res).toMatchObject({ skipped: 1 });
+    expect(res.enqueued).toHaveLength(1);
+    expect(schedules.rows.every((r) => r.nextRunAt.toISOString() === '2026-09-30T02:00:00.000Z')).toBe(true);
+  });
+
+  it('takes batch size and pages per search (at most 3) from the crawl settings', async () => {
+    const schedules = await setup([{ country: 'MY' }]);
+    const { source } = crawlSettings({ crawlBatchSize: 45, maxPagesPerSearch: 2 });
+    await enqueueDueSchedules({ schedules, now: () => due, crawlSettings: source });
+    expect(payloads(schedules)[0]).toMatchObject({ maxSearches: 3, maxPages: 2 });
+
+    const capped = await setup([{ country: 'MY' }]);
+    await enqueueDueSchedules({ schedules: capped, now: () => due, crawlSettings: crawlSettings({ maxPagesPerSearch: 20 }).source });
+    expect(payloads(capped)[0]).toMatchObject({ maxSearches: 1, maxPages: 3 });
+  });
+
+  it("uses the target industries unless the schedule has its own", async () => {
+    const schedules = await setup([{ country: 'MY' }, { country: 'SG', industries: ['dentist'] }]);
+    const { source } = crawlSettings({ targetIndustries: ['gym', 'spa'] });
+    await enqueueDueSchedules({ schedules, now: () => due, crawlSettings: source });
+    const byCountry = Object.fromEntries(payloads(schedules).map((p) => [p.countryCode, p.industries]));
+    expect(byCountry).toEqual({ MY: ['gym', 'spa'], SG: ['dentist'] });
+  });
+
+  it('crawls each schedule in its own country, with the target cities only for the target country', async () => {
+    const schedules = await setup([{ country: 'MY' }, { country: 'SG' }]);
+    const { source } = crawlSettings({ targetCountry: 'MY', targetCities: ['Kuala Lumpur'] });
+    const res = await enqueueDueSchedules({ schedules, now: () => due, crawlSettings: source });
+    expect(res.enqueued).toHaveLength(2);
+    const byCountry = Object.fromEntries(payloads(schedules).map((p) => [p.countryCode, p]));
+    expect(byCountry.MY).toMatchObject({ country: 'Malaysia', cities: ['Kuala Lumpur'] });
+    expect(byCountry.SG).toMatchObject({ country: 'Singapore' });
+    expect(byCountry.SG!.cities).toBeUndefined();
+  });
+
+  it('skips a target-country run whose saved cities do not belong to it, leaving other countries alone', async () => {
+    const schedules = await setup([{ country: 'SG' }, { country: 'MY' }]);
+    const { source } = crawlSettings({ targetCountry: 'SG', targetCities: ['Kuala Lumpur'] });
+    const res = await enqueueDueSchedules({ schedules, now: () => due, crawlSettings: source });
+    expect(res).toMatchObject({ skipped: 1 });
+    expect(payloads(schedules).map((p) => p.countryCode)).toEqual(['MY']);
   });
 });

@@ -6,6 +6,8 @@ export type CountryProfile = {
   aliases: readonly string[];
   regionCode: string;
   languageCode: string;
+  /** IANA time zone businesses in the country keep (follow-up emails go out on their local clock). */
+  timezone: string;
   /** Search areas, largest first. Each is appended to the country in the provider query. */
   cities: readonly string[];
 };
@@ -46,6 +48,7 @@ export const COUNTRY_PROFILES: readonly CountryProfile[] = [
     aliases: ['sg', 'sgp', 'singapore'],
     regionCode: 'SG',
     languageCode: 'en',
+    timezone: 'Asia/Singapore',
     cities: SG_PLANNING_AREAS,
   },
   {
@@ -54,6 +57,7 @@ export const COUNTRY_PROFILES: readonly CountryProfile[] = [
     aliases: ['my', 'mys', 'malaysia'],
     regionCode: 'MY',
     languageCode: 'en',
+    timezone: 'Asia/Kuala_Lumpur',
     cities: MY_CITIES,
   },
   {
@@ -62,6 +66,7 @@ export const COUNTRY_PROFILES: readonly CountryProfile[] = [
     aliases: ['jp', 'jpn', 'japan', 'nippon', 'nihon'],
     regionCode: 'JP',
     languageCode: 'ja',
+    timezone: 'Asia/Tokyo',
     cities: uniqueCities(['Tokyo'], TOKYO_SPECIAL_WARDS, JP_CITIES),
   },
 ];

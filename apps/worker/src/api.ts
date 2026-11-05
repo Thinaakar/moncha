@@ -2,7 +2,6 @@ import './env';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { neon } from '@neondatabase/serverless';
 import {
-  coldEmailAutomationUpdateSchema,
   coldEmailCandidatesQuerySchema,
   coldEmailDraftSchema,
   coldEmailDraftSendSchema,
@@ -23,7 +22,6 @@ import {
   scheduleDeleteCountrySchema,
   scheduleRunsQuerySchema,
   siteAutomationCrawlsQuerySchema,
-  siteAutomationUpdateSchema,
   workerQueueUpdateSchema,
   siteCostSummaryQuerySchema,
   siteCostWebsitesQuerySchema,
@@ -76,7 +74,6 @@ import {
   prisma,
   PrismaAuditLogRepository,
   PrismaAuthUserRepository,
-  PrismaColdEmailAutomationRepository,
   PrismaColdEmailRepository,
   PrismaCompanyRepository,
   PrismaDiscoveryIndustryRepository,
@@ -133,6 +130,10 @@ import {
   supportedCountries,
   evaluateAutoRecrawl,
   buildFollowUpContent,
+  copyAutomationFromCrawlSettings,
+  crawlBatchLimits,
+  crawlTargetError,
+  outreachAutomationFromCrawlSettings,
   websiteAuditDedupeKey,
   normalizeSiteFilePath,
   cancelSiteSnapshot,
@@ -142,7 +143,6 @@ import {
   getWorkerQueueState,
   setWorkerQueuePaused,
   queueSiteSnapshot,
-  SiteAutomationError,
   SiteCancelError,
   requestSiteChatbotInstall,
   requestSiteGithubPush,
@@ -154,7 +154,6 @@ import {
   siteCopyProgress,
   SiteGithubRequestError,
   SiteWorkerRequestError,
-  updateSiteAutomationSettings,
   publicSiteUrl,
   signPreviewToken,
   siteGithubDomain,
@@ -289,12 +288,14 @@ route('GET', '/api/v1/schedules', async ({ tenantId }) => ({
   json: { countries: await listSchedules({ schedules }, { tenantId }) },
 }));
 
-route('POST', '/api/v1/schedules', async ({ tenantId, body }) => {
+route('POST', '/api/v1/schedules', async ({ req, tenantId, body }) => {
+  await requireEditor(req, tenantId, 'add schedules');
   const input = scheduleCreateSchema.parse(await body());
   return { status: 201, json: await createSchedule({ schedules }, { ...input, tenantId }) };
 });
 
-route('DELETE', '/api/v1/schedules', async ({ tenantId, url }) => {
+route('DELETE', '/api/v1/schedules', async ({ req, tenantId, url }) => {
+  await requireEditor(req, tenantId, 'delete schedules');
   const { country } = scheduleDeleteCountrySchema.parse(query(url, 'country'));
   return { json: await deleteCountrySchedules({ schedules }, { tenantId, country }) };
 });
@@ -304,9 +305,10 @@ route('GET', '/api/v1/schedules/runs', async ({ tenantId, url }) => {
   return { json: { runs: await listScheduleRuns({ schedules }, { tenantId, limit }) } };
 });
 
-route('DELETE', '/api/v1/schedules/:id', async ({ tenantId, params }) => ({
-  json: await deleteSchedule({ schedules }, { tenantId, id: params.id! }),
-}));
+route('DELETE', '/api/v1/schedules/:id', async ({ req, tenantId, params }) => {
+  await requireEditor(req, tenantId, 'delete schedules');
+  return { json: await deleteSchedule({ schedules }, { tenantId, id: params.id! }) };
+});
 
 // Country crawl: queued now, run by the worker (pnpm --filter @moncha/worker start).
 route('POST', '/api/v1/discovery/country', async ({ tenantId, body }) => {
@@ -453,7 +455,7 @@ route('GET', '/api/v1/discovery/options', async ({ tenantId }) => {
   }
   return {
     json: {
-      countries: COUNTRY_PROFILES.map((p) => ({ code: p.code, name: p.name, cities: [...p.cities] })),
+      countries: COUNTRY_PROFILES.map((p) => ({ code: p.code, name: p.name, cities: [...p.cities], timezone: p.timezone })),
       industries: industrySlugs,
       defaults: { source: 'google_places', maxPages: 3, timezone: DEFAULT_SCHEDULE_TIMEZONE },
     },
@@ -508,6 +510,14 @@ route('GET', '/api/v1/crawl-settings', async ({ tenantId }) => {
 route('PUT', '/api/v1/crawl-settings', async ({ req, tenantId, body }) => {
   const user = await requireEditor(req, tenantId, 'update crawl settings');
   const patch = crawlPipelineSettingsUpdateSchema.parse(await body());
+  if (patch.targetCountry !== undefined || patch.targetCities !== undefined) {
+    const current = await crawlPipelineRepo.get(tenantId);
+    const targetError = crawlTargetError(
+      patch.targetCountry ?? current.targetCountry,
+      patch.targetCities ?? current.targetCities,
+    );
+    if (targetError) throw new HttpError(400, 'validation_error', targetError);
+  }
   const updated = await crawlPipelineRepo.save(tenantId, patch, user.email);
 
   const settingsView: CrawlPipelineSettingsView = {
@@ -542,10 +552,9 @@ route('POST', '/api/v1/crawl-settings/trigger', async ({ req, tenantId, body }) 
   const input = crawlPipelineTriggerSchema.parse(await body());
   const settings = await crawlPipelineRepo.get(tenantId);
   const countryCode = input.country || settings.targetCountry || 'SG';
-  const profile = resolveCountry(countryCode);
-  if (!profile) {
-    throw new HttpError(400, 'validation_error', `Unsupported country "${countryCode}".`);
-  }
+  const targetError = crawlTargetError(countryCode, settings.targetCities);
+  if (targetError) throw new HttpError(400, 'validation_error', targetError);
+  const profile = resolveCountry(countryCode)!;
 
   const live = await liveCountryCrawls(tenantId, profile.name);
   if (live.length && !input.forceRecrawl) {
@@ -553,8 +562,7 @@ route('POST', '/api/v1/crawl-settings/trigger', async ({ req, tenantId, body }) 
   }
 
   const batchSize = input.batchSize || settings.crawlBatchSize || 20;
-  const maxPages = Math.min(settings.maxPagesPerSearch, 3);
-  const maxSearches = Math.max(1, Math.ceil(batchSize / 20));
+  const { maxPages, maxSearches } = crawlBatchLimits(settings, batchSize);
 
   const payload: CountryDiscoveryJobPayload = {
     mode: 'country',
@@ -1177,38 +1185,37 @@ route('GET', '/api/v1/costs/websites/:leadId', async ({ tenantId, params }) => {
 // Copy automation: after each country crawl, its new qualified leads are queued for website copies.
 const siteAutomation = new PrismaSiteAutomationRepository(prisma);
 
+const managedByCrawlSettings = (what: string) =>
+  new HttpError(
+    409,
+    'managed_by_crawl_settings',
+    `${what} follows Crawl & Pipeline Settings: turn the engine on and set the daily limits there.`,
+  );
+
 async function automationState(tenantId: string): Promise<SiteAutomationState> {
-  const status = await getSiteAutomationStatus({ automation: siteAutomation }, { tenantId });
+  const pipeline = await crawlPipelineRepo.get(tenantId);
+  const settings = copyAutomationFromCrawlSettings(pipeline);
+  const status = await getSiteAutomationStatus({ automation: siteAutomation }, { tenantId, settings });
   return {
-    enabled: status.settings.enabled,
-    dailyCap: status.settings.dailyCap,
-    enabledAt: status.settings.enabledAt?.toISOString() ?? null,
-    updatedAt: status.settings.updatedAt?.toISOString() ?? null,
-    updatedBy: status.settings.updatedBy,
+    enabled: settings.enabled,
+    dailyCap: settings.dailyCap,
+    enabledAt: null,
+    updatedAt: pipeline.updatedAt.toISOString(),
+    updatedBy: pipeline.updatedBy,
     today: { ...status.today, resetsAt: status.today.resetsAt.toISOString() },
     carriedOver: status.carriedOver,
     waitingCrawls: status.waitingCrawls,
     agentReady: siteAgentConfig().ready,
     workerEnabled: siteAutoCopyEnabled(),
+    controlledBy: 'crawl_settings',
   };
 }
 
 route('GET', '/api/v1/site-automation', async ({ tenantId }) => ({ json: await automationState(tenantId) }));
 
-route('PUT', '/api/v1/site-automation', async ({ req, tenantId, body }) => {
-  const user = await requireEditor(req, tenantId, 'change copy automation');
-  const input = siteAutomationUpdateSchema.parse(await body());
-  try {
-    await updateSiteAutomationSettings(
-      { automation: siteAutomation },
-      { tenantId, enabled: input.enabled, dailyCap: input.dailyCap, updatedBy: user.email },
-    );
-  } catch (error) {
-    if (error instanceof SiteAutomationError) throw new HttpError(400, error.code, error.message);
-    throw error;
-  }
-  logger.info('site_automation.settings_updated', { tenantId, userId: user.id, ...input });
-  return { json: await automationState(tenantId) };
+route('PUT', '/api/v1/site-automation', async ({ req, tenantId }) => {
+  await requireEditor(req, tenantId, 'change copy automation');
+  throw managedByCrawlSettings('Copy automation');
 });
 
 // GitHub connectivity: the token is valid and can see the account the site repos go to. Nothing is created.
@@ -1327,25 +1334,25 @@ function coldEmailView(row: ColdEmailRecord): ColdEmailView {
   };
 }
 
-const coldEmailAutomation = new PrismaColdEmailAutomationRepository(prisma);
-
 async function coldEmailAutomationView(tenantId: string): Promise<ColdEmailAutomationView> {
   const now = new Date();
   const dayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-  const [settings, usedToday, ready] = await Promise.all([
-    coldEmailAutomation.get(tenantId),
+  const [pipeline, usedToday, ready] = await Promise.all([
+    crawlPipelineRepo.get(tenantId),
     coldEmails.countOriginSince(tenantId, 'auto', dayStart),
     coldEmails.listAutoReady(tenantId, COLD_EMAIL_AUTOMATION_MAX_DAILY_CAP),
   ]);
+  const settings = outreachAutomationFromCrawlSettings(pipeline);
   return {
     enabled: settings.enabled,
     mode: settings.mode,
     dailyCap: settings.dailyCap,
-    enabledAt: settings.enabledAt?.toISOString() ?? null,
+    enabledAt: null,
     updatedBy: settings.updatedBy,
     updatedAt: settings.updatedAt?.toISOString() ?? null,
     usedToday,
     readyNow: ready.length,
+    controlledBy: 'crawl_settings',
   };
 }
 
@@ -1371,12 +1378,9 @@ route('GET', '/api/v1/cold-emails/automation', async ({ req, tenantId }) => {
   return { json: await coldEmailAutomationView(tenantId) };
 });
 
-route('PUT', '/api/v1/cold-emails/automation', async ({ req, tenantId, body }) => {
-  const user = await requireEditor(req, tenantId, 'change cold email automation');
-  const input = coldEmailAutomationUpdateSchema.parse(await body());
-  await coldEmailAutomation.update(tenantId, input, user.email, new Date());
-  logger.info('cold_email.automation_updated', { tenantId, by: user.email, ...input });
-  return { json: await coldEmailAutomationView(tenantId) };
+route('PUT', '/api/v1/cold-emails/automation', async ({ req, tenantId }) => {
+  await requireEditor(req, tenantId, 'change cold email automation');
+  throw managedByCrawlSettings('Cold email automation');
 });
 
 // Approve a draft: sends it to its own company address, or deliverToOverride if provided.

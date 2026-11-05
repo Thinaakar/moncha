@@ -2,10 +2,15 @@ import { describe, expect, it } from 'vitest';
 import {
   buildFollowUpContent,
   calculateFollowUpDueDate,
+  copyAutomationFromCrawlSettings,
+  crawlBatchLimits,
   evaluateAutoRecrawl,
+  followUpTimezone,
+  outreachAutomationFromCrawlSettings,
   type CrawlPipelineCounters,
   type CrawlPipelineSettingsRecord,
 } from './crawlPipeline';
+import { crawlTargetError } from './runCountryDiscovery';
 
 describe('calculateFollowUpDueDate', () => {
   it('adds calendar days correctly', () => {
@@ -32,6 +37,49 @@ describe('calculateFollowUpDueDate', () => {
     // Friday + 3 business days = Wednesday 2026-10-28
     const dueWed = calculateFollowUpDueDate(friday, 3, 'business_days', 14);
     expect(dueWed.toISOString()).toBe('2026-10-28T14:00:00.000Z');
+  });
+
+  it('sends at the preferred hour on the business clock', () => {
+    // Thursday 2026-10-22 03:00 UTC = 11:00 Singapore, 12:00 Tokyo
+    const sentAt = new Date('2026-10-22T03:00:00Z');
+    expect(calculateFollowUpDueDate(sentAt, 1, 'business_days', 10, 'Asia/Singapore').toISOString()).toBe(
+      '2026-10-23T02:00:00.000Z',
+    );
+    expect(calculateFollowUpDueDate(sentAt, 1, 'business_days', 10, 'Asia/Tokyo').toISOString()).toBe(
+      '2026-10-23T01:00:00.000Z',
+    );
+  });
+
+  it('counts days and skips weekends on the local calendar, not the UTC one', () => {
+    // Friday 2026-10-23 17:00 UTC is already Saturday 01:00 in Singapore.
+    const sentAt = new Date('2026-10-23T17:00:00Z');
+    // Next local business day is Monday 26 Oct, 10:00 Singapore = 02:00 UTC.
+    expect(calculateFollowUpDueDate(sentAt, 1, 'business_days', 10, 'Asia/Singapore').toISOString()).toBe(
+      '2026-10-26T02:00:00.000Z',
+    );
+    // One local calendar day later is Sunday 25 Oct.
+    expect(calculateFollowUpDueDate(sentAt, 1, 'calendar_days', 10, 'Asia/Singapore').toISOString()).toBe(
+      '2026-10-25T02:00:00.000Z',
+    );
+    // In UTC the same email was sent on Friday, so +1 business day is Monday 10:00 UTC.
+    expect(calculateFollowUpDueDate(sentAt, 1, 'business_days', 10).toISOString()).toBe('2026-10-26T10:00:00.000Z');
+  });
+
+  it('waits at least one day even with a zero delay', () => {
+    const sentAt = new Date('2026-10-22T03:00:00Z');
+    expect(calculateFollowUpDueDate(sentAt, 0, 'calendar_days', 10, 'Asia/Singapore').toISOString()).toBe(
+      '2026-10-23T02:00:00.000Z',
+    );
+  });
+});
+
+describe('followUpTimezone', () => {
+  it("uses the lead's country, then the target country, then UTC", () => {
+    expect(followUpTimezone('Singapore', 'MY')).toBe('Asia/Singapore');
+    expect(followUpTimezone('japan', 'SG')).toBe('Asia/Tokyo');
+    expect(followUpTimezone(null, 'MY')).toBe('Asia/Kuala_Lumpur');
+    expect(followUpTimezone('Atlantis', 'Atlantis')).toBe('UTC');
+    expect(followUpTimezone(undefined, undefined)).toBe('UTC');
   });
 });
 
@@ -71,6 +119,8 @@ describe('evaluateAutoRecrawl', () => {
     qualifiedWaitingInQueue: 1, // Only 1 qualified lead left, but we need 3 more creations to hit daily cap of 5
     followUpsScheduled: 2,
     followUpsDueToday: 0,
+    followUpsOverdue: 0,
+    followUpsSentToday: 0,
     crawlsRunToday: 1,
   };
 
@@ -111,6 +161,14 @@ describe('evaluateAutoRecrawl', () => {
     expect(decision.reason).toContain('Maximum daily crawl runs');
   });
 
+  it('drives copy and outreach automation from the crawl settings', () => {
+    const settings = { ...baseSettings, active: true, dailyWebsiteCreationLimit: 7, dailyCustomerReachLimit: 3 };
+    expect(copyAutomationFromCrawlSettings(settings)).toMatchObject({ enabled: true, dailyCap: 7, enabledAt: settings.createdAt });
+    expect(outreachAutomationFromCrawlSettings(settings)).toMatchObject({ enabled: true, dailyCap: 3, mode: 'send' });
+    expect(copyAutomationFromCrawlSettings({ ...settings, active: false }).enabled).toBe(false);
+    expect(outreachAutomationFromCrawlSettings({ ...settings, active: false }).enabled).toBe(false);
+  });
+
   it('waits when audits are still actively pending', () => {
     const decision = evaluateAutoRecrawl(baseSettings, {
       ...baseCounters,
@@ -118,6 +176,29 @@ describe('evaluateAutoRecrawl', () => {
     });
     expect(decision.shouldRecrawl).toBe(false);
     expect(decision.reason).toContain('website audits currently running');
+  });
+});
+
+describe('crawlBatchLimits', () => {
+  it('turns the batch size into searches and caps pages per search at 3', () => {
+    expect(crawlBatchLimits({ crawlBatchSize: 20, maxPagesPerSearch: 3 })).toEqual({ maxSearches: 1, maxPages: 3 });
+    expect(crawlBatchLimits({ crawlBatchSize: 21, maxPagesPerSearch: 2 })).toEqual({ maxSearches: 2, maxPages: 2 });
+    expect(crawlBatchLimits({ crawlBatchSize: 100, maxPagesPerSearch: 20 })).toEqual({ maxSearches: 5, maxPages: 3 });
+    expect(crawlBatchLimits({ crawlBatchSize: 20, maxPagesPerSearch: 3 }, 45)).toEqual({ maxSearches: 3, maxPages: 3 });
+  });
+});
+
+describe('crawlTargetError', () => {
+  it('accepts a supported country with its own search areas', () => {
+    expect(crawlTargetError('SG', [])).toBeNull();
+    expect(crawlTargetError('SG', ['Tampines'])).toBeNull();
+    expect(crawlTargetError('MY', ['Kuala Lumpur'])).toBeNull();
+  });
+
+  it('rejects unsupported countries and cities from another country', () => {
+    expect(crawlTargetError('XX', [])).toContain('Unsupported country "XX"');
+    expect(crawlTargetError('MY', ['Tampines'])).toBe('"Tampines" is not a search area in Malaysia');
+    expect(crawlTargetError('SG', ['Atlantis', ''])).toBe('"Atlantis", "" are not search areas in Singapore');
   });
 });
 
